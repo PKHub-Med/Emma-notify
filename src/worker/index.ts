@@ -118,6 +118,7 @@ async function pollEmail(): Promise<void> {
         testEmail: config.testEmail,
         productionEmailsEnabled: config.productionEmailsEnabled,
         resendApiKey: config.resendApiKey,
+        caseDigestTemplateId: config.resendCaseDigestTemplateId,
         emailFrom: config.emailFrom,
       },
       log: (message) => console.info(message),

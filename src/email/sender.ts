@@ -1,6 +1,9 @@
 import { Prisma, type PrismaClient } from "../generated/prisma/client.js";
 import { DigestStatus, DigestType } from "../generated/prisma/enums.js";
-import { renderCaseDigest } from "./render-case-digest.js";
+import {
+  mapCaseDigestTemplate,
+  TemplateMappingError,
+} from "./case-digest-template.js";
 import {
   assertTestRecipient,
   RecipientSafetyError,
@@ -23,7 +26,12 @@ export type DigestCandidate = {
   sendAttempts: number;
   sendingStartedAt: Date | null;
   nextRetryAt: Date | null;
-  items: { snapshot: unknown; changes: unknown }[];
+  detailUrl: string | null;
+  items: {
+    trackedCaseId: string;
+    lastEventAt: Date | null;
+    snapshot: unknown;
+  }[];
 };
 
 export type EmailSenderConfig = {
@@ -31,6 +39,7 @@ export type EmailSenderConfig = {
   testEmail: string | null;
   productionEmailsEnabled: boolean;
   resendApiKey: string | null;
+  caseDigestTemplateId: string | null;
   emailFrom: string | null;
 };
 
@@ -60,7 +69,7 @@ export class PrismaDigestSendStore implements DigestSendStore {
 
   async findCandidates(now: Date, limit: number): Promise<DigestCandidate[]> {
     const staleBefore = new Date(now.getTime() - STALE_SENDING_MS);
-    return this.prisma.digest.findMany({
+    const digests = await this.prisma.digest.findMany({
       where: {
         type: DigestType.CASE_DIGEST,
         sendAttempts: { lt: MAX_ATTEMPTS },
@@ -89,11 +98,20 @@ export class PrismaDigestSendStore implements DigestSendStore {
         sendingStartedAt: true,
         nextRetryAt: true,
         items: {
-          orderBy: { createdAt: "asc" },
-          select: { snapshot: true, changes: true },
+          select: {
+            trackedCaseId: true,
+            lastEventAt: true,
+            snapshot: true,
+          },
         },
       },
-    }) as Promise<DigestCandidate[]>;
+    });
+    return digests.map((digest) => ({
+      ...digest,
+      type: "CASE_DIGEST" as const,
+      status: digest.status as DigestCandidate["status"],
+      detailUrl: null,
+    }));
   }
 
   async claim(
@@ -212,6 +230,9 @@ export async function sendDigest(input: {
   }
   if (!preflightError && !input.config.emailFrom) preflightError = "EMAIL_FROM_MISSING";
   if (!preflightError && !input.config.resendApiKey) preflightError = "RESEND_API_KEY_MISSING";
+  if (!preflightError && !input.config.caseDigestTemplateId) {
+    preflightError = "RESEND_CASE_DIGEST_TEMPLATE_ID_MISSING";
+  }
 
   const claimed = await input.store.claim(input.digest, now, actualRecipientEmail);
   if (!claimed) return { outcome: "SKIPPED" };
@@ -230,22 +251,37 @@ export async function sendDigest(input: {
     return fail(input, "TEST_RECIPIENT_GUARD_FAILED", false, attempt, now);
   }
 
-  const rendered = renderCaseDigest({
-    mode: input.config.mode,
-    intendedRecipientEmail: input.digest.intendedRecipientEmail,
-    items: input.digest.items,
-  });
+  let mapped: ReturnType<typeof mapCaseDigestTemplate>;
+  try {
+    mapped = mapCaseDigestTemplate({
+      mode: input.config.mode,
+      itemsCount: input.digest.itemsCount,
+      items: input.digest.items,
+      detailUrl: input.digest.detailUrl,
+    });
+  } catch (error: unknown) {
+    const code = error instanceof TemplateMappingError
+      ? error.code
+      : "RESEND_TEMPLATE_REJECTED";
+    return fail(input, code, false, attempt, now);
+  }
+
+  input.log?.(
+    `[email] template-ready digestId=${input.digest.id} template=${input.config.caseDigestTemplateId} itemsTotal=${input.digest.itemsCount} itemsShown=${mapped.itemsShown} hasMore=${mapped.hasMore} mode=${input.config.mode}`,
+  );
   const subject = input.config.mode === "TEST"
     ? `[TEST] ${input.digest.subject}`
-    : input.digest.subject;
+    : null;
 
   try {
     const response = await input.provider.send({
       from: input.config.emailFrom as string,
       to: actualRecipientEmail as string,
-      subject,
-      html: rendered.html,
-      text: rendered.text,
+      ...(subject ? { subject } : {}),
+      template: {
+        id: input.config.caseDigestTemplateId as string,
+        variables: mapped.variables,
+      },
       idempotencyKey: idempotencyKey(input.digest.id),
     });
     if (!response.ok) {
@@ -310,5 +346,5 @@ function classifyProviderFailure(
       retryable: true,
     };
   }
-  return { code: "RESEND_REQUEST_REJECTED", retryable: false };
+  return { code: "RESEND_TEMPLATE_REJECTED", retryable: false };
 }

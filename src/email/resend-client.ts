@@ -3,9 +3,11 @@ import { Resend } from "resend";
 export type ProviderEmailRequest = {
   from: string;
   to: string;
-  subject: string;
-  html: string;
-  text: string;
+  subject?: string;
+  template: {
+    id: string;
+    variables: Record<string, string>;
+  };
   idempotencyKey: string;
 };
 
@@ -25,9 +27,8 @@ export function createResendClient(apiKey: string | null): EmailProvider {
         {
           from: request.from,
           to: request.to,
-          subject: request.subject,
-          html: request.html,
-          text: request.text,
+          ...(request.subject ? { subject: request.subject } : {}),
+          template: request.template,
         },
         { idempotencyKey: request.idempotencyKey },
       );
