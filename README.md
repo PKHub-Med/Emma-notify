@@ -88,9 +88,12 @@ npm test
 npm run prisma:validate
 npm run db:migrate:deploy
 npm run db:summary
+npm run db:inspect-case -- 19103
 ```
 
 `npm run db:summary` jest diagnostyką tylko do odczytu. Pokazuje wyłącznie agregaty spraw, odbiorców, eventów, wszystkich/OPEN/READY bufferów, najnowszy czas eventu oraz czasy heartbeat/sync workera; nie wyświetla adresów e-mail, nazw kontaktów, tokenów ani rekordów Airtable.
+
+`npm run db:inspect-case -- <businessNumber>` porównuje wszystkie przeglądy o podanym numerze (numer biznesowy nie jest unikalny) z aktualnymi powiązaniami Airtable. Raport jest tylko do odczytu i pokazuje wyłącznie identyfikatory rekordów, statusy, liczniki, przyczyny eligibility oraz flagi `hasEmail`/`hasNormalizedEmail` — bez nazw i adresów e-mail.
 
 ## Railway
 

@@ -17,6 +17,7 @@
     "dev:worker": "node --watch --loader ts-node/esm src/worker/index.ts",
     "test": "vitest run",
     "db:summary": "node dist/db/summary.js",
+    "db:inspect-case": "node dist/db/inspect-case.js",
     "db:migrate:deploy": "prisma migrate deploy",
     "prisma:validate": "prisma validate",
     "prisma:generate": "prisma generate"

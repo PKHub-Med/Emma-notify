@@ -56,13 +56,12 @@ export class AirtableClient implements AirtableRecordSource, AirtableIncremental
   async fetchRecord(
     tableId: string,
     recordId: string,
-    fieldIds: readonly string[],
+    _fieldIds: readonly string[],
   ): Promise<AirtableRecord> {
     const url = new URL(
       `https://api.airtable.com/v0/${encodeURIComponent(this.baseId)}/${encodeURIComponent(tableId)}/${encodeURIComponent(recordId)}`,
     );
     url.searchParams.set("returnFieldsByFieldId", "true");
-    for (const fieldId of fieldIds) url.searchParams.append("fields[]", fieldId);
     return this.parseRecord(await this.requestJson(url, tableId), tableId);
   }
 

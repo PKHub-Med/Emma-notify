@@ -51,6 +51,8 @@ describe("AirtableClient", () => {
     const recordUrl = String(fetchFunction.mock.calls[1]?.[0]);
     expect(listUrl).toContain("filterByFormula=");
     expect(recordUrl).toContain("tblContacts/recContact");
+    expect(recordUrl).toContain("returnFieldsByFieldId=true");
+    expect(recordUrl).not.toContain("fields%5B%5D");
     expect(fetchFunction.mock.calls[0]?.[1]).toMatchObject({ method: "GET" });
     expect(fetchFunction.mock.calls[1]?.[1]).toMatchObject({ method: "GET" });
   });

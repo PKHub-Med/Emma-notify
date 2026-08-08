@@ -76,7 +76,7 @@ class FakeAirtable implements AirtableIncrementalSource {
 class MemoryStore implements IncrementalStore {
   readonly cases = new Map<string, StoredCase>();
   readonly recipients = new Map<string, ResolvedRecipient[]>();
-  readonly events: StatusChangeCommand[] = [];
+  readonly events: Array<StatusChangeCommand & { triggersNotification: true }> = [];
   readonly fingerprints = new Set<string>();
   readonly buffers: MemoryBuffer[] = [];
   readonly checkpoints = new Map<IncrementalEntityType, Date>([
@@ -125,7 +125,7 @@ class MemoryStore implements IncrementalStore {
   async processStatusChange(command: StatusChangeCommand): Promise<StatusChangeResult> {
     if (this.fingerprints.has(command.fingerprint)) return duplicateResult();
     this.fingerprints.add(command.fingerprint);
-    this.events.push(command);
+    this.events.push({ ...command, triggersNotification: true });
     const stored = [...this.cases.values()].find(
       (item) => item.id === command.trackedCaseId,
     );
@@ -210,6 +210,96 @@ describe("incremental status sync", () => {
     source.inspections = [inspectionRecord("recInspection", "B")];
     await run(source, store, date(0));
     expect(store.events[0]?.eventType).toBe(EventType.INSPECTION_STATUS_CHANGED);
+  });
+
+  it("regression: inspection with refreshed eligible linked contact creates event, OPEN buffer and item", async () => {
+    const source = new FakeAirtable();
+    const store = new MemoryStore();
+    store.seedCase(CaseType.INSPECTION, "recInspection19103", "A");
+    source.contacts.set(
+      "recInspectionContact",
+      contactRecord("recInspectionContact", "TAK", "valid@example.com"),
+    );
+    source.inspections = [
+      inspectionRecord("recInspection19103", "B", ["recInspectionContact"]),
+    ];
+
+    await run(source, store, date(0));
+
+    expect(store.events).toHaveLength(1);
+    expect(store.events[0]?.eventType).toBe(EventType.INSPECTION_STATUS_CHANGED);
+    expect(store.events[0]?.triggersNotification).toBe(true);
+    expect(store.buffers).toHaveLength(1);
+    expect(store.buffers[0]?.status).toBe(BufferStatus.OPEN);
+    expect(store.buffers[0]?.items.size).toBe(1);
+  });
+
+  it("uses a recipient refreshed in the same incremental run", async () => {
+    const source = new FakeAirtable();
+    const store = new MemoryStore();
+    const trackedCaseId = store.seedCase(
+      CaseType.INSPECTION,
+      "recInspection19103",
+      "A",
+    );
+    store.recipients.set(trackedCaseId, [{
+      airtableContactRecordId: "recInspectionContact",
+      name: null,
+      email: null,
+      normalizedEmail: null,
+      eligible: false,
+      eligibilityReason: "MISSING_EMAIL",
+      resolutionSource: "CONTACT_LINK",
+    }]);
+    source.contacts.set(
+      "recInspectionContact",
+      contactRecord("recInspectionContact", "TAK", "new@example.com"),
+    );
+    source.inspections = [
+      inspectionRecord("recInspection19103", "B", ["recInspectionContact"]),
+    ];
+
+    await run(source, store, date(0));
+
+    expect(store.recipients.get(trackedCaseId)?.[0]?.eligible).toBe(true);
+    expect(store.buffers).toHaveLength(1);
+    expect(store.buffers[0]?.items.size).toBe(1);
+  });
+
+  it("accepts lowercase tak during same-run inspection recipient refresh", async () => {
+    const source = new FakeAirtable();
+    const store = new MemoryStore();
+    store.seedCase(CaseType.INSPECTION, "recInspection19103", "A");
+    source.contacts.set(
+      "recInspectionContact",
+      contactRecord("recInspectionContact", "tak", "valid@example.com"),
+    );
+    source.inspections = [
+      inspectionRecord("recInspection19103", "B", ["recInspectionContact"]),
+    ];
+
+    await run(source, store, date(0));
+
+    expect(store.events).toHaveLength(1);
+    expect(store.buffers).toHaveLength(1);
+  });
+
+  it("creates an inspection event but no buffer for TAK with missing email", async () => {
+    const source = new FakeAirtable();
+    const store = new MemoryStore();
+    store.seedCase(CaseType.INSPECTION, "recInspection19103", "A");
+    source.contacts.set(
+      "recInspectionContact",
+      contactRecord("recInspectionContact", "TAK", null),
+    );
+    source.inspections = [
+      inspectionRecord("recInspection19103", "B", ["recInspectionContact"]),
+    ];
+
+    await run(source, store, date(0));
+
+    expect(store.events).toHaveLength(1);
+    expect(store.buffers).toHaveLength(0);
   });
 
   it("C. ignores unchanged status including surrounding whitespace", async () => {
@@ -360,17 +450,30 @@ function serviceRecord(
   });
 }
 
-function inspectionRecord(id: string, status: string): AirtableRecord {
+function inspectionRecord(
+  id: string,
+  status: string,
+  contactIds: string[] = [],
+): AirtableRecord {
   return record(id, {
     [INSPECTION_FIELDS.currentStatus]: status,
+    [INSPECTION_FIELDS.contactLinks]: contactIds,
     [INSPECTION_FIELDS.sourceModifiedAt]: date(0).toISOString(),
   });
 }
 
 function eligibleContact(id: string, email: string): AirtableRecord {
+  return contactRecord(id, "TAK", email);
+}
+
+function contactRecord(
+  id: string,
+  contactable: string,
+  email: string | null,
+): AirtableRecord {
   return record(id, {
-    [CONTACT_FIELDS.contactable]: "TAK",
-    [CONTACT_FIELDS.email]: email,
+    [CONTACT_FIELDS.contactable]: contactable,
+    ...(email === null ? {} : { [CONTACT_FIELDS.email]: email }),
   });
 }
 
