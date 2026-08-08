@@ -1,18 +1,45 @@
 import { describe, expect, it } from "vitest";
-import { loadConfig } from "./config.js";
+import { loadApiConfig } from "./api.js";
+import { loadWorkerConfig } from "./worker.js";
 
-const requiredEnvironment: NodeJS.ProcessEnv = {
-  DATABASE_URL: "postgresql://user:password@localhost:5432/emma_notify",
-  AIRTABLE_BASE_ID: "appExample",
-  AIRTABLE_PAT: "patExample",
-};
+const databaseUrl = "postgresql://user:password@localhost:5432/emma_notify";
 
-describe("loadConfig", () => {
-  it("loads required values and applies safe defaults", () => {
-    const config = loadConfig(requiredEnvironment);
+describe("loadApiConfig", () => {
+  it("accepts API environment without Airtable variables", () => {
+    const config = loadApiConfig({ DATABASE_URL: databaseUrl });
 
     expect(config).toMatchObject({
+      databaseUrl,
       port: 3000,
+      timezone: "Europe/Warsaw",
+      emailMode: "TEST",
+      productionEmailsEnabled: false,
+      linkTtlDays: 30,
+    });
+  });
+});
+
+describe("loadWorkerConfig", () => {
+  it("rejects a missing AIRTABLE_PAT", () => {
+    expect(() =>
+      loadWorkerConfig({
+        DATABASE_URL: databaseUrl,
+        AIRTABLE_BASE_ID: "appExample",
+      }),
+    ).toThrow(/AIRTABLE_PAT/);
+  });
+
+  it("accepts the required worker environment and applies defaults", () => {
+    const config = loadWorkerConfig({
+      DATABASE_URL: databaseUrl,
+      AIRTABLE_BASE_ID: "appExample",
+      AIRTABLE_PAT: "patExample",
+    });
+
+    expect(config).toMatchObject({
+      databaseUrl,
+      airtableBaseId: "appExample",
+      airtablePat: "patExample",
       digestQuietMinutes: 1,
       timezone: "Europe/Warsaw",
       emailMode: "TEST",
@@ -21,31 +48,25 @@ describe("loadConfig", () => {
     });
   });
 
-  it("parses explicit numeric and boolean values", () => {
-    const config = loadConfig({
-      ...requiredEnvironment,
-      PORT: "8080",
-      DIGEST_QUIET_MINUTES: "5",
-      PRODUCTION_EMAILS_ENABLED: "true",
-      LINK_TTL_DAYS: "14",
-    });
+  it("never includes secret values in validation errors", () => {
+    const secretDatabaseUrl =
+      "postgresql://secret-user:secret-password@database.example/emma";
+    const secretAirtablePat = "pat-super-secret-value";
+    let errorMessage = "";
 
-    expect(config.port).toBe(8080);
-    expect(config.digestQuietMinutes).toBe(5);
-    expect(config.productionEmailsEnabled).toBe(true);
-    expect(config.linkTtlDays).toBe(14);
-  });
+    try {
+      loadWorkerConfig({
+        DATABASE_URL: secretDatabaseUrl,
+        AIRTABLE_BASE_ID: "appExample",
+        AIRTABLE_PAT: secretAirtablePat,
+        PRODUCTION_EMAILS_ENABLED: "invalid",
+      });
+    } catch (error: unknown) {
+      errorMessage = error instanceof Error ? error.message : String(error);
+    }
 
-  it("rejects missing required values", () => {
-    expect(() => loadConfig({})).toThrow("Invalid environment configuration");
-  });
-
-  it("rejects ambiguous boolean values", () => {
-    expect(() =>
-      loadConfig({
-        ...requiredEnvironment,
-        PRODUCTION_EMAILS_ENABLED: "yes",
-      }),
-    ).toThrow("Invalid environment configuration");
+    expect(errorMessage).toContain("PRODUCTION_EMAILS_ENABLED");
+    expect(errorMessage).not.toContain(secretDatabaseUrl);
+    expect(errorMessage).not.toContain(secretAirtablePat);
   });
 });

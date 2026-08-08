@@ -32,6 +32,10 @@ Skopiuj `.env.example` do `.env` i ustaw:
 | `PRODUCTION_EMAILS_ENABLED` | Flaga `true`/`false`; obecnie tylko walidowana |
 | `LINK_TTL_DAYS` | Ważność przyszłych linków w dniach; domyślnie `30` |
 
+API wymaga tylko `DATABASE_URL`; `PORT` jest opcjonalny i domyślnie wynosi `3000`. Pozostałe niesekretne ustawienia API mają wartości domyślne. API nie odczytuje zmiennych Airtable ani `DIGEST_QUIET_MINUTES`.
+
+Worker wymaga `DATABASE_URL`, `AIRTABLE_BASE_ID` i `AIRTABLE_PAT`. Pozostałe ustawienia workera mają wartości domyślne podane powyżej.
+
 `EMAIL_MODE=TEST` **nie oznacza wysyłania maili**. W tej wersji nie ma konfiguracji dostawcy poczty ani kodu wysyłającego wiadomości.
 
 ## Praca lokalna
@@ -56,9 +60,10 @@ npm run db:migrate:deploy
 
 1. Utwórz usługę PostgreSQL.
 2. Utwórz dwie usługi z tego samego repozytorium: API i Worker.
-3. Ustaw wymagane zmienne środowiskowe w obu usługach. `AIRTABLE_PAT` powinien mieć wyłącznie zakresy odczytu.
-4. Przed uruchomieniem nowej wersji wykonaj migrację jednorazowo przez Railway pre-deploy command albo osobny job: `npm run db:migrate:deploy`.
-5. Ustaw osobne komendy startowe:
+3. W API ustaw `DATABASE_URL`; nie dodawaj do tej usługi sekretów Airtable.
+4. W workerze ustaw `DATABASE_URL`, `AIRTABLE_BASE_ID` i `AIRTABLE_PAT`. Token Airtable powinien mieć wyłącznie zakresy odczytu.
+5. Przed uruchomieniem nowej wersji wykonaj migrację jednorazowo przez Railway pre-deploy command albo osobny job: `npm run db:migrate:deploy`.
+6. Ustaw osobne komendy startowe:
 
 ```text
 API: npm run start:api

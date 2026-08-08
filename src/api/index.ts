@@ -1,10 +1,10 @@
 import "dotenv/config";
 import type { Server } from "node:http";
-import { loadConfig } from "../config/config.js";
+import { loadApiConfig } from "../config/api.js";
 import { createPrismaClient } from "../db/prisma.js";
 import { createApp } from "./app.js";
 
-const config = loadConfig(process.env);
+const config = loadApiConfig(process.env);
 const prisma = createPrismaClient(config.databaseUrl);
 const app = createApp(prisma);
 

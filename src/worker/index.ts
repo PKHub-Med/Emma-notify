@@ -1,11 +1,11 @@
 import "dotenv/config";
-import { loadConfig } from "../config/config.js";
+import { loadWorkerConfig } from "../config/worker.js";
 import { createPrismaClient } from "../db/prisma.js";
 
 const HEARTBEAT_INTERVAL_MS = 30_000;
 const WORKER_ID = "main";
 
-const config = loadConfig(process.env);
+const config = loadWorkerConfig(process.env);
 const prisma = createPrismaClient(config.databaseUrl);
 let heartbeatTimer: NodeJS.Timeout | undefined;
 let shuttingDown = false;
