@@ -27,6 +27,20 @@ enum BufferStatus {
   CANCELLED
 }
 
+enum DigestType {
+  CASE_DIGEST
+  INSPECTION_REMINDER
+  VISIT
+}
+
+enum DigestStatus {
+  CREATED
+  SENDING
+  SENT
+  FAILED
+  CANCELLED
+}
+
 enum SyncEntityType {
   SERVICE_ORDER
   INSPECTION
@@ -69,6 +83,7 @@ model TrackedCase {
   recipients          CaseRecipient[]
   events              CaseEvent[]
   bufferItems         BufferItem[]
+  digestItems         DigestItem[]
 
   @@unique([caseType, airtableRecordId])
   @@index([active, lastSeenAt])
@@ -141,6 +156,45 @@ model BufferItem {
   trackedCase    TrackedCase        @relation(fields: [trackedCaseId], references: [id], onDelete: Cascade)
 
   @@unique([bufferId, trackedCaseId])
+  @@index([trackedCaseId])
+}
+
+model Digest {
+  id                       String       @id @default(cuid())
+  type                     DigestType
+  status                   DigestStatus @default(CREATED)
+  sourceBufferId           String?      @unique
+  intendedRecipientName    String?
+  intendedRecipientEmail   String
+  normalizedRecipientEmail String
+  emailMode                String
+  itemsCount               Int
+  subject                  String
+  createdAt                DateTime     @default(now())
+  updatedAt                DateTime     @updatedAt
+  sendingStartedAt         DateTime?
+  sentAt                   DateTime?
+  failedAt                 DateTime?
+  lastError                String?
+  resendEmailId            String?
+  items                    DigestItem[]
+
+  @@index([status, createdAt])
+}
+
+model DigestItem {
+  id             String      @id @default(cuid())
+  digestId       String
+  trackedCaseId  String
+  snapshot       Json
+  changes        Json
+  firstEventAt   DateTime?
+  lastEventAt    DateTime?
+  createdAt      DateTime    @default(now())
+  digest         Digest      @relation(fields: [digestId], references: [id], onDelete: Cascade)
+  trackedCase    TrackedCase @relation(fields: [trackedCaseId], references: [id], onDelete: Restrict)
+
+  @@unique([digestId, trackedCaseId])
   @@index([trackedCaseId])
 }
 

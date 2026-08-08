@@ -4,12 +4,15 @@ import { loadWorkerConfig } from "../config/worker.js";
 import { createPrismaClient } from "../db/prisma.js";
 import { runBaseline } from "./baseline.js";
 import { PrismaBaselineStore } from "./baseline-store.js";
+import { runDigestLoop } from "./digest-loop.js";
+import { PrismaDigestStore } from "./digest-store.js";
 import { runIncrementalSync } from "./incremental-sync.js";
 import { PrismaIncrementalStore } from "./incremental-store.js";
 import { runWatchdog } from "./watchdog.js";
 
 const HEARTBEAT_INTERVAL_MS = 30_000;
 const WATCHDOG_INTERVAL_MS = 15_000;
+const DIGEST_INTERVAL_MS = 15_000;
 const WORKER_ID = "main";
 
 const config = loadWorkerConfig(process.env);
@@ -20,11 +23,14 @@ const airtable = new AirtableClient({
 });
 const baselineStore = new PrismaBaselineStore(prisma);
 const incrementalStore = new PrismaIncrementalStore(prisma);
+const digestStore = new PrismaDigestStore(prisma);
 let heartbeatTimer: NodeJS.Timeout | undefined;
 let incrementalTimer: NodeJS.Timeout | undefined;
 let watchdogTimer: NodeJS.Timeout | undefined;
+let digestTimer: NodeJS.Timeout | undefined;
 let incrementalRunning = false;
 let watchdogRunning = false;
+let digestRunning = false;
 let shuttingDown = false;
 
 async function writeHeartbeat(): Promise<void> {
@@ -81,8 +87,28 @@ function startIncrementalLoops(): void {
   watchdogTimer = setInterval(() => {
     void pollWatchdog();
   }, WATCHDOG_INTERVAL_MS);
+  digestTimer = setInterval(() => {
+    void pollDigests();
+  }, DIGEST_INTERVAL_MS);
   void pollIncremental();
   void pollWatchdog();
+  void pollDigests();
+}
+
+async function pollDigests(): Promise<void> {
+  if (digestRunning || shuttingDown) return;
+  digestRunning = true;
+  try {
+    await runDigestLoop({
+      store: digestStore,
+      emailMode: config.emailMode,
+      log: (message) => console.info(message),
+    });
+  } catch {
+    console.error("[digest] loop failed; READY buffers will retry");
+  } finally {
+    digestRunning = false;
+  }
 }
 
 async function pollIncremental(): Promise<void> {
@@ -126,6 +152,7 @@ async function shutdown(signal: NodeJS.Signals): Promise<void> {
   if (heartbeatTimer) clearInterval(heartbeatTimer);
   if (incrementalTimer) clearInterval(incrementalTimer);
   if (watchdogTimer) clearInterval(watchdogTimer);
+  if (digestTimer) clearInterval(digestTimer);
   await prisma.$disconnect();
   console.info("[worker] Shutdown complete");
 }

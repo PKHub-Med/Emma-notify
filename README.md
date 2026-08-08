@@ -41,7 +41,23 @@ Po potwierdzeniu zakończonego baseline worker rozpoczyna incremental polling. D
 
 Na tym etapie monitorowana jest wyłącznie zmiana customer-facing statusu. Każda zmiana tworzy transakcyjnie `CaseEvent`, aktualizuje `TrackedCase`, korzysta z aktualnych eligible `CaseRecipient` i tworzy albo resetuje jeden aktywny `NotificationBuffer` na `normalizedEmail`. `BufferItem` pozostaje unikalny dla pary buffer–case.
 
-Każdy kolejny event ustawia `sendAfter = now + DIGEST_QUIET_MINUTES`. Nie istnieje maksymalny czas oczekiwania ani forced send. Watchdog co 15 sekund wykonuje warunkowy update PostgreSQL i ustawia `READY` wyłącznie dla bufferów nadal `OPEN`, których aktualne `sendAfter <= now`. Następnie czyści `activeRecipientKey`, dzięki czemu przyszły event może utworzyć nowy OPEN buffer. Nadal nie jest tworzony digest i nie jest wysyłany żaden e-mail.
+Każdy kolejny event ustawia `sendAfter = now + DIGEST_QUIET_MINUTES`. Nie istnieje maksymalny czas oczekiwania ani forced send. Watchdog co 15 sekund wykonuje warunkowy update PostgreSQL i ustawia `READY` wyłącznie dla bufferów nadal `OPEN`, których aktualne `sendAfter <= now`. Następnie czyści `activeRecipientKey`, dzięki czemu przyszły event może utworzyć nowy OPEN buffer. Osobny loop przetwarza `READY` buffery w digesty; żaden e-mail nie jest wysyłany.
+
+## Notification flow
+
+```text
+Airtable
+→ CaseEvent
+→ NotificationBuffer
+→ READY
+→ Digest CREATED
+```
+
+`NotificationBuffer` jest tymczasową sesją agregującą zmiany dla jednego odbiorcy. Po zakończeniu quiet period watchdog ustawia go jako `READY`, a osobny loop workera tworzy z niego dokładnie jeden `Digest` i zamyka buffer jako `CLOSED`.
+
+`Digest` jest historycznym, niezmiennym snapshotem przyszłej wiadomości. Każdy `DigestItem.snapshot` zawiera customer-facing stan sprawy z chwili generowania digestu, a `changes` zachowuje eventy, które doprowadziły do tej wiadomości. Późniejsze zmiany Airtable nie aktualizują istniejącego snapshotu.
+
+`TrackedCase` ma inne znaczenie: przechowuje aktualny stan sprawy i nadal zmienia się wraz z synchronizacją Airtable. Digest kończy ten etap ze statusem `CREATED`; żaden e-mail nie jest wysyłany.
 
 ## Wymagania
 
@@ -89,11 +105,14 @@ npm run prisma:validate
 npm run db:migrate:deploy
 npm run db:summary
 npm run db:inspect-case -- 19103
+npm run db:latest-digest
 ```
 
-`npm run db:summary` jest diagnostyką tylko do odczytu. Pokazuje wyłącznie agregaty spraw, odbiorców, eventów, wszystkich/OPEN/READY bufferów, najnowszy czas eventu oraz czasy heartbeat/sync workera; nie wyświetla adresów e-mail, nazw kontaktów, tokenów ani rekordów Airtable.
+`npm run db:summary` jest diagnostyką tylko do odczytu. Pokazuje wyłącznie agregaty spraw, odbiorców, eventów, bufferów (w tym OPEN/READY/CLOSED), digestów i DigestItem, najnowszy czas eventu oraz czasy heartbeat/sync workera; nie wyświetla adresów e-mail, nazw kontaktów, tokenów ani rekordów Airtable.
 
 `npm run db:inspect-case -- <businessNumber>` porównuje wszystkie przeglądy o podanym numerze (numer biznesowy nie jest unikalny) z aktualnymi powiązaniami Airtable. Raport jest tylko do odczytu i pokazuje wyłącznie identyfikatory rekordów, statusy, liczniki, przyczyny eligibility oraz flagi `hasEmail`/`hasNormalizedEmail` — bez nazw i adresów e-mail.
+
+`npm run db:latest-digest` pokazuje najnowszy historyczny digest i jego zmiany bez adresu e-mail, nazwy odbiorcy ani sekretów.
 
 ## Railway
 
