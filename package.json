@@ -2,17 +2,19 @@
   "name": "emma-notify",
   "version": "0.1.0",
   "private": true,
+  "type": "module",
   "description": "Notification service foundation for Emma Notify",
   "license": "UNLICENSED",
   "engines": {
     "node": ">=20.19"
   },
   "scripts": {
-    "build": "npm run prisma:generate && tsc -p tsconfig.json",
+    "clean": "node --input-type=module --eval \"import { rmSync } from 'node:fs'; rmSync('dist', { recursive: true, force: true });\"",
+    "build": "npm run clean && npm run prisma:generate && tsc -p tsconfig.json",
     "start:api": "node dist/api/index.js",
     "start:worker": "node dist/worker/index.js",
-    "dev:api": "node --watch -r ts-node/register src/api/index.ts",
-    "dev:worker": "node --watch -r ts-node/register src/worker/index.ts",
+    "dev:api": "node --watch --loader ts-node/esm src/api/index.ts",
+    "dev:worker": "node --watch --loader ts-node/esm src/worker/index.ts",
     "test": "vitest run",
     "db:migrate:deploy": "prisma migrate deploy",
     "prisma:validate": "prisma validate",
