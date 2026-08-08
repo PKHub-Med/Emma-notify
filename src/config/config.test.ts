@@ -20,6 +20,23 @@ describe("loadApiConfig", () => {
 });
 
 describe("loadWorkerConfig", () => {
+  it("parses the production switch strictly after trim and lowercase", () => {
+    const common = {
+      DATABASE_URL: databaseUrl,
+      AIRTABLE_BASE_ID: "appExample",
+      AIRTABLE_PAT: "patExample",
+    };
+    expect(loadWorkerConfig({
+      ...common,
+      PRODUCTION_EMAILS_ENABLED: "false",
+    }).productionEmailsEnabled).toBe(false);
+    expect(loadWorkerConfig({
+      ...common,
+      PRODUCTION_EMAILS_ENABLED: " TRUE ",
+    }).productionEmailsEnabled).toBe(true);
+    expect(loadWorkerConfig(common).productionEmailsEnabled).toBe(false);
+  });
+
   it("rejects a missing AIRTABLE_PAT", () => {
     expect(() =>
       loadWorkerConfig({

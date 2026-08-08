@@ -1,15 +1,19 @@
 import { z } from "zod";
 
-const booleanString = z
-  .enum(["true", "false"])
-  .transform((value) => value === "true");
+const booleanString = z.preprocess(
+  (value) => {
+    if (value === undefined) return "false";
+    return typeof value === "string" ? value.trim().toLowerCase() : value;
+  },
+  z.enum(["true", "false"]),
+).transform((value) => value === "true");
 
 export const baseEnvironmentShape = {
   DATABASE_URL: z.string().min(1),
   TIMEZONE: z.string().min(1).default("Europe/Warsaw"),
   EMAIL_MODE: z.enum(["TEST", "PRODUCTION"]).default("TEST"),
   TEST_EMAIL: z.union([z.email(), z.literal("")]).default(""),
-  PRODUCTION_EMAILS_ENABLED: booleanString.default(false),
+  PRODUCTION_EMAILS_ENABLED: booleanString,
   LINK_TTL_DAYS: z.coerce.number().int().positive().default(30),
 };
 

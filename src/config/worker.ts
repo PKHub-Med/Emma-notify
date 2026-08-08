@@ -12,6 +12,8 @@ const workerEnvironmentSchema = z.object({
   AIRTABLE_POLL_SECONDS: z.coerce.number().int().positive().default(60),
   AIRTABLE_SYNC_OVERLAP_SECONDS: z.coerce.number().int().nonnegative().default(120),
   DIGEST_QUIET_MINUTES: z.coerce.number().int().nonnegative().default(1),
+  RESEND_API_KEY: z.string().default(""),
+  EMAIL_FROM: z.string().default(""),
 });
 
 export type WorkerConfig = BaseConfig & {
@@ -20,6 +22,8 @@ export type WorkerConfig = BaseConfig & {
   airtablePollSeconds: number;
   airtableSyncOverlapSeconds: number;
   digestQuietMinutes: number;
+  resendApiKey: string | null;
+  emailFrom: string | null;
 };
 
 export function loadWorkerConfig(environment: NodeJS.ProcessEnv): WorkerConfig {
@@ -36,6 +40,8 @@ export function loadWorkerConfig(environment: NodeJS.ProcessEnv): WorkerConfig {
     airtablePollSeconds: parsed.data.AIRTABLE_POLL_SECONDS,
     airtableSyncOverlapSeconds: parsed.data.AIRTABLE_SYNC_OVERLAP_SECONDS,
     digestQuietMinutes: parsed.data.DIGEST_QUIET_MINUTES,
+    resendApiKey: parsed.data.RESEND_API_KEY.trim() || null,
+    emailFrom: parsed.data.EMAIL_FROM.trim() || null,
     timezone: parsed.data.TIMEZONE,
     emailMode: parsed.data.EMAIL_MODE,
     testEmail: parsed.data.TEST_EMAIL || null,

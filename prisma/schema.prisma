@@ -170,6 +170,8 @@ model Digest {
   emailMode                String
   itemsCount               Int
   subject                  String
+  actualRecipientEmail     String?
+  sendAttempts             Int          @default(0)
   createdAt                DateTime     @default(now())
   updatedAt                DateTime     @updatedAt
   sendingStartedAt         DateTime?
@@ -177,9 +179,11 @@ model Digest {
   failedAt                 DateTime?
   lastError                String?
   resendEmailId            String?
+  nextRetryAt              DateTime?
   items                    DigestItem[]
 
   @@index([status, createdAt])
+  @@index([type, status, nextRetryAt, createdAt])
 }
 
 model DigestItem {
