@@ -4,6 +4,10 @@ import {
   createConfigurationError,
   type BaseConfig,
 } from "./base.js";
+import {
+  accessLinkSigningSecretSchema,
+  publicBaseUrlSchema,
+} from "./access-link.js";
 
 const workerEnvironmentSchema = z.object({
   ...baseEnvironmentShape,
@@ -15,6 +19,8 @@ const workerEnvironmentSchema = z.object({
   RESEND_API_KEY: z.string().default(""),
   RESEND_CASE_DIGEST_TEMPLATE_ID: z.string().default(""),
   EMAIL_FROM: z.string().default(""),
+  ACCESS_LINK_SIGNING_SECRET: accessLinkSigningSecretSchema,
+  PUBLIC_BASE_URL: publicBaseUrlSchema,
 });
 
 export type WorkerConfig = BaseConfig & {
@@ -26,6 +32,8 @@ export type WorkerConfig = BaseConfig & {
   resendApiKey: string | null;
   resendCaseDigestTemplateId: string | null;
   emailFrom: string | null;
+  accessLinkSigningSecret: string;
+  publicBaseUrl: string;
 };
 
 export function loadWorkerConfig(environment: NodeJS.ProcessEnv): WorkerConfig {
@@ -46,6 +54,8 @@ export function loadWorkerConfig(environment: NodeJS.ProcessEnv): WorkerConfig {
     resendCaseDigestTemplateId:
       parsed.data.RESEND_CASE_DIGEST_TEMPLATE_ID.trim() || null,
     emailFrom: parsed.data.EMAIL_FROM.trim() || null,
+    accessLinkSigningSecret: parsed.data.ACCESS_LINK_SIGNING_SECRET,
+    publicBaseUrl: parsed.data.PUBLIC_BASE_URL,
     timezone: parsed.data.TIMEZONE,
     emailMode: parsed.data.EMAIL_MODE,
     testEmail: parsed.data.TEST_EMAIL || null,

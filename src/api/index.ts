@@ -1,12 +1,20 @@
 import "dotenv/config";
 import type { Server } from "node:http";
+import {
+  PrismaPublicAccessLinkStore,
+  PublicAccessLinkService,
+} from "../access-links/public-page.js";
 import { loadApiConfig } from "../config/api.js";
 import { createPrismaClient } from "../db/prisma.js";
 import { createApp } from "./app.js";
 
 const config = loadApiConfig(process.env);
 const prisma = createPrismaClient(config.databaseUrl);
-const app = createApp(prisma);
+const accessLinks = new PublicAccessLinkService(
+  new PrismaPublicAccessLinkStore(prisma),
+  config.accessLinkSigningSecret,
+);
+const app = createApp(prisma, accessLinks);
 
 let server: Server | undefined;
 let shuttingDown = false;

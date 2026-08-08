@@ -1,4 +1,8 @@
 import "dotenv/config";
+import {
+  AccessLinkService,
+  PrismaAccessLinkStore,
+} from "../access-links/service.js";
 import { AirtableClient } from "../airtable/client.js";
 import { loadWorkerConfig } from "../config/worker.js";
 import { createPrismaClient } from "../db/prisma.js";
@@ -29,6 +33,14 @@ const incrementalStore = new PrismaIncrementalStore(prisma);
 const digestStore = new PrismaDigestStore(prisma);
 const digestSendStore = new PrismaDigestSendStore(prisma);
 const emailProvider = createResendClient(config.resendApiKey);
+const accessLinks = new AccessLinkService(
+  new PrismaAccessLinkStore(prisma),
+  {
+    signingSecret: config.accessLinkSigningSecret,
+    publicBaseUrl: config.publicBaseUrl,
+    ttlDays: config.linkTtlDays,
+  },
+);
 let heartbeatTimer: NodeJS.Timeout | undefined;
 let incrementalTimer: NodeJS.Timeout | undefined;
 let watchdogTimer: NodeJS.Timeout | undefined;
@@ -113,6 +125,7 @@ async function pollEmail(): Promise<void> {
     await runEmailLoop({
       store: digestSendStore,
       provider: emailProvider,
+      accessLinks,
       config: {
         mode: config.emailMode,
         testEmail: config.testEmail,

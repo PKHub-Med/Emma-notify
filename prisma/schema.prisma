@@ -181,9 +181,25 @@ model Digest {
   resendEmailId            String?
   nextRetryAt              DateTime?
   items                    DigestItem[]
+  accessLink               AccessLink?
 
   @@index([status, createdAt])
   @@index([type, status, nextRetryAt, createdAt])
+}
+
+model AccessLink {
+  id           String    @id @default(cuid())
+  publicId     String    @unique
+  digestId     String    @unique
+  expiresAt    DateTime
+  revokedAt    DateTime?
+  createdAt    DateTime  @default(now())
+  lastOpenedAt DateTime?
+  openCount    Int       @default(0)
+  digest       Digest    @relation(fields: [digestId], references: [id], onDelete: Cascade)
+
+  @@index([expiresAt])
+  @@index([revokedAt])
 }
 
 model DigestItem {

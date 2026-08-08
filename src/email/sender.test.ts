@@ -7,6 +7,7 @@ import {
   type EmailSenderConfig,
 } from "./sender.js";
 import type { EmailProvider, ProviderEmailRequest, ProviderEmailResult } from "./resend-client.js";
+import type { DigestAccessLinkProvider } from "../access-links/service.js";
 
 const now = new Date("2026-08-08T18:00:00.000Z");
 
@@ -63,15 +64,35 @@ class MockProvider implements EmailProvider {
   }
 }
 
+class FixedAccessLinks implements DigestAccessLinkProvider {
+  calls = 0;
+
+  constructor(
+    private readonly url = "https://emma.example.org/d/signed-token",
+    private readonly shouldFail = false,
+  ) {}
+
+  async getOrCreateDigestAccessLink(): Promise<string> {
+    this.calls += 1;
+    if (this.shouldFail) throw new Error("database unavailable");
+    return this.url;
+  }
+}
+
 describe("Hosted Template sender safety", () => {
   it("sends TEST only to TEST_EMAIL with template variables and no rendered body", async () => {
     const store = new MemoryStore();
     const provider = new MockProvider();
-    await sendDigest({ store, provider, config: testConfig(), digest: digest(), now });
+    const accessLinks = new FixedAccessLinks();
+    await sendDigest({ store, provider, accessLinks, config: testConfig(), digest: digest(), now });
 
     expect(store.status).toBe("SENT");
     expect(store.actualRecipientEmail).toBe("pawelekarcz@gmail.com");
     expect(provider.requests).toHaveLength(1);
+    expect(accessLinks.calls).toBe(1);
+    expect(provider.requests[0]?.template.variables.DETAIL_URL).toBe(
+      "https://emma.example.org/d/signed-token",
+    );
     expect(provider.requests[0]).toMatchObject({
       to: "pawelekarcz@gmail.com",
       subject: "[TEST] Emma: aktualizacja",
@@ -95,6 +116,7 @@ describe("Hosted Template sender safety", () => {
     await sendDigest({
       store,
       provider,
+      accessLinks: new FixedAccessLinks(),
       config: { ...testConfig(), mode: "PRODUCTION", productionEmailsEnabled: false },
       digest: digest(),
       now,
@@ -103,15 +125,20 @@ describe("Hosted Template sender safety", () => {
     expect(store.lastError).toBe("PRODUCTION_EMAILS_BLOCKED");
   });
 
-  it("blocks a missing DETAIL_URL without calling Resend", async () => {
+  it("blocks an AccessLink creation failure without calling Resend", async () => {
     const store = new MemoryStore();
     const provider = new MockProvider();
-    const candidate = digest();
-    candidate.detailUrl = null;
-    await sendDigest({ store, provider, config: testConfig(), digest: candidate, now });
+    await sendDigest({
+      store,
+      provider,
+      accessLinks: new FixedAccessLinks("", true),
+      config: testConfig(),
+      digest: digest(),
+      now,
+    });
     expect(provider.requests).toHaveLength(0);
-    expect(store.lastError).toBe("DETAIL_URL_NOT_AVAILABLE");
-    expect(store.nextRetryAt).toBeNull();
+    expect(store.lastError).toBe("ACCESS_LINK_CREATION_FAILED");
+    expect(store.nextRetryAt).toEqual(new Date(now.getTime() + 60_000));
   });
 
   it("keeps the same idempotency key on retry", async () => {
@@ -121,12 +148,14 @@ describe("Hosted Template sender safety", () => {
       { ok: true, id: "resend-after-retry" },
     ]);
     const candidate = digest();
-    await sendDigest({ store, provider, config: testConfig(), digest: candidate, now });
+    const accessLinks = new FixedAccessLinks();
+    await sendDigest({ store, provider, accessLinks, config: testConfig(), digest: candidate, now });
     candidate.status = "FAILED";
     candidate.nextRetryAt = store.nextRetryAt;
     await sendDigest({
       store,
       provider,
+      accessLinks,
       config: testConfig(),
       digest: candidate,
       now: new Date(now.getTime() + 60_000),
@@ -143,6 +172,7 @@ describe("Hosted Template sender safety", () => {
     await sendDigest({
       store: new MemoryStore(),
       provider,
+      accessLinks: new FixedAccessLinks(),
       config: { ...testConfig(), mode: "PRODUCTION", productionEmailsEnabled: true },
       digest: digest(),
       now,
@@ -159,6 +189,7 @@ describe("Hosted Template sender safety", () => {
         ok: false,
         error: { name: "validation_error", statusCode: 422 },
       }]),
+      accessLinks: new FixedAccessLinks(),
       config: testConfig(),
       digest: digest(),
       now,
@@ -190,7 +221,6 @@ function digest(): DigestCandidate {
     sendAttempts: 0,
     sendingStartedAt: null,
     nextRetryAt: null,
-    detailUrl: "https://emma.example.org/case/access-token",
     items: [{
       trackedCaseId: "case-1",
       lastEventAt: new Date("2026-08-08T15:53:00.000Z"),

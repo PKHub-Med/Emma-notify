@@ -3,10 +3,22 @@ import { loadApiConfig } from "./api.js";
 import { loadWorkerConfig } from "./worker.js";
 
 const databaseUrl = "postgresql://user:password@localhost:5432/emma_notify";
+const accessLinkSigningSecret = "test-access-link-signing-secret-32-bytes-minimum";
+const publicBaseUrl = "https://notify.example.org/";
+const workerEnvironment = {
+  DATABASE_URL: databaseUrl,
+  AIRTABLE_BASE_ID: "appExample",
+  AIRTABLE_PAT: "patExample",
+  ACCESS_LINK_SIGNING_SECRET: accessLinkSigningSecret,
+  PUBLIC_BASE_URL: publicBaseUrl,
+};
 
 describe("loadApiConfig", () => {
   it("accepts API environment without Airtable variables", () => {
-    const config = loadApiConfig({ DATABASE_URL: databaseUrl });
+    const config = loadApiConfig({
+      DATABASE_URL: databaseUrl,
+      ACCESS_LINK_SIGNING_SECRET: accessLinkSigningSecret,
+    });
 
     expect(config).toMatchObject({
       databaseUrl,
@@ -17,15 +29,21 @@ describe("loadApiConfig", () => {
       linkTtlDays: 30,
     });
   });
+
+  it("rejects a missing or too-short AccessLink signing secret", () => {
+    expect(() => loadApiConfig({ DATABASE_URL: databaseUrl })).toThrow(
+      /ACCESS_LINK_SIGNING_SECRET/,
+    );
+    expect(() => loadApiConfig({
+      DATABASE_URL: databaseUrl,
+      ACCESS_LINK_SIGNING_SECRET: "too-short",
+    })).toThrow(/ACCESS_LINK_SIGNING_SECRET/);
+  });
 });
 
 describe("loadWorkerConfig", () => {
   it("parses the production switch strictly after trim and lowercase", () => {
-    const common = {
-      DATABASE_URL: databaseUrl,
-      AIRTABLE_BASE_ID: "appExample",
-      AIRTABLE_PAT: "patExample",
-    };
+    const common = workerEnvironment;
     expect(loadWorkerConfig({
       ...common,
       PRODUCTION_EMAILS_ENABLED: "false",
@@ -42,16 +60,14 @@ describe("loadWorkerConfig", () => {
       loadWorkerConfig({
         DATABASE_URL: databaseUrl,
         AIRTABLE_BASE_ID: "appExample",
+        ACCESS_LINK_SIGNING_SECRET: accessLinkSigningSecret,
+        PUBLIC_BASE_URL: publicBaseUrl,
       }),
     ).toThrow(/AIRTABLE_PAT/);
   });
 
   it("accepts the required worker environment and applies defaults", () => {
-    const config = loadWorkerConfig({
-      DATABASE_URL: databaseUrl,
-      AIRTABLE_BASE_ID: "appExample",
-      AIRTABLE_PAT: "patExample",
-    });
+    const config = loadWorkerConfig(workerEnvironment);
 
     expect(config).toMatchObject({
       databaseUrl,
@@ -64,6 +80,7 @@ describe("loadWorkerConfig", () => {
       emailMode: "TEST",
       productionEmailsEnabled: false,
       linkTtlDays: 30,
+      publicBaseUrl: "https://notify.example.org",
     });
   });
 
@@ -78,6 +95,8 @@ describe("loadWorkerConfig", () => {
         DATABASE_URL: secretDatabaseUrl,
         AIRTABLE_BASE_ID: "appExample",
         AIRTABLE_PAT: secretAirtablePat,
+        ACCESS_LINK_SIGNING_SECRET: accessLinkSigningSecret,
+        PUBLIC_BASE_URL: publicBaseUrl,
         PRODUCTION_EMAILS_ENABLED: "invalid",
       });
     } catch (error: unknown) {

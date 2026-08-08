@@ -1,5 +1,6 @@
 import { Prisma, type PrismaClient } from "../generated/prisma/client.js";
 import { DigestStatus, DigestType } from "../generated/prisma/enums.js";
+import type { DigestAccessLinkProvider } from "../access-links/service.js";
 import {
   mapCaseDigestTemplate,
   TemplateMappingError,
@@ -26,7 +27,6 @@ export type DigestCandidate = {
   sendAttempts: number;
   sendingStartedAt: Date | null;
   nextRetryAt: Date | null;
-  detailUrl: string | null;
   items: {
     trackedCaseId: string;
     lastEventAt: Date | null;
@@ -110,7 +110,6 @@ export class PrismaDigestSendStore implements DigestSendStore {
       ...digest,
       type: "CASE_DIGEST" as const,
       status: digest.status as DigestCandidate["status"],
-      detailUrl: null,
     }));
   }
 
@@ -189,6 +188,7 @@ export class PrismaDigestSendStore implements DigestSendStore {
 export async function runEmailLoop(input: {
   store: DigestSendStore;
   provider: EmailProvider;
+  accessLinks: DigestAccessLinkProvider;
   config: EmailSenderConfig;
   now?: Date;
   limit?: number;
@@ -208,6 +208,7 @@ export async function runEmailLoop(input: {
 export async function sendDigest(input: {
   store: DigestSendStore;
   provider: EmailProvider;
+  accessLinks: DigestAccessLinkProvider;
   config: EmailSenderConfig;
   digest: DigestCandidate;
   now?: Date;
@@ -251,13 +252,23 @@ export async function sendDigest(input: {
     return fail(input, "TEST_RECIPIENT_GUARD_FAILED", false, attempt, now);
   }
 
+  let detailUrl: string;
+  try {
+    detailUrl = await input.accessLinks.getOrCreateDigestAccessLink(
+      input.digest.id,
+      now,
+    );
+  } catch {
+    return fail(input, "ACCESS_LINK_CREATION_FAILED", true, attempt, now);
+  }
+
   let mapped: ReturnType<typeof mapCaseDigestTemplate>;
   try {
     mapped = mapCaseDigestTemplate({
       mode: input.config.mode,
       itemsCount: input.digest.itemsCount,
       items: input.digest.items,
-      detailUrl: input.digest.detailUrl,
+      detailUrl,
     });
   } catch (error: unknown) {
     const code = error instanceof TemplateMappingError
