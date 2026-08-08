@@ -30,6 +30,30 @@ describe("AirtableClient", () => {
     expect(finalUrl).toContain("fields%5B%5D=fldOne");
     expect(finalUrl).toContain("offset=next-page");
   });
+
+  it("uses GET-only requests with filterByFormula and record IDs", async () => {
+    const fetchFunction = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(response({ records: [] }))
+      .mockResolvedValueOnce(response(airtableRecord("recContact")));
+    const client = new AirtableClient({
+      baseId: "appBase",
+      personalAccessToken: "secret-token",
+      fetchFunction,
+    });
+
+    await client.fetchAllRecords("tblCases", ["fldStatus"], {
+      filterByFormula: "IS_AFTER({fldModified}, '2026-08-08T10:00:00.000Z')",
+    });
+    await client.fetchRecord("tblContacts", "recContact", ["fldEmail"]);
+
+    const listUrl = String(fetchFunction.mock.calls[0]?.[0]);
+    const recordUrl = String(fetchFunction.mock.calls[1]?.[0]);
+    expect(listUrl).toContain("filterByFormula=");
+    expect(recordUrl).toContain("tblContacts/recContact");
+    expect(fetchFunction.mock.calls[0]?.[1]).toMatchObject({ method: "GET" });
+    expect(fetchFunction.mock.calls[1]?.[1]).toMatchObject({ method: "GET" });
+  });
 });
 
 function response(body: unknown): Response {

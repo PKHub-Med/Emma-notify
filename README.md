@@ -35,6 +35,14 @@ Używane są wyłącznie Table IDs i Field IDs. Table IDs:
 | Kontakty | `tblOAizKjQYDhIzEx` |
 | Urządzenia | `tblnEZZVI2ws2dyx4` |
 
+## Incremental sync i quiet-period watchdog
+
+Po potwierdzeniu zakończonego baseline worker rozpoczyna incremental polling. Dla zleceń serwisowych i przeglądów używa osobnych `SyncState.lastSuccessfulSyncAt`, odejmuje `AIRTABLE_SYNC_OVERLAP_SECONDS` i filtruje Airtable przez `filterByFormula` na odpowiednim Field ID `Last mod Emma`. Overlap może zwrócić rekord ponownie; fingerprint SHA-256 i constraints PostgreSQL zapewniają idempotency.
+
+Na tym etapie monitorowana jest wyłącznie zmiana customer-facing statusu. Każda zmiana tworzy transakcyjnie `CaseEvent`, aktualizuje `TrackedCase`, korzysta z aktualnych eligible `CaseRecipient` i tworzy albo resetuje jeden aktywny `NotificationBuffer` na `normalizedEmail`. `BufferItem` pozostaje unikalny dla pary buffer–case.
+
+Każdy kolejny event ustawia `sendAfter = now + DIGEST_QUIET_MINUTES`. Nie istnieje maksymalny czas oczekiwania ani forced send. Watchdog co 15 sekund wykonuje warunkowy update PostgreSQL i ustawia `READY` wyłącznie dla bufferów nadal `OPEN`, których aktualne `sendAfter <= now`. Następnie czyści `activeRecipientKey`, dzięki czemu przyszły event może utworzyć nowy OPEN buffer. Nadal nie jest tworzony digest i nie jest wysyłany żaden e-mail.
+
 ## Wymagania
 
 - Node.js 20.19 lub nowszy
@@ -47,6 +55,8 @@ Skopiuj `.env.example` do `.env` i ustaw:
 | `DATABASE_URL` | Łańcuch połączenia PostgreSQL |
 | `AIRTABLE_BASE_ID` | ID bazy Airtable |
 | `AIRTABLE_PAT` | Personal Access Token Airtable, wyłącznie z uprawnieniami odczytu |
+| `AIRTABLE_POLL_SECONDS` | Odstęp incremental polling; domyślnie `60` |
+| `AIRTABLE_SYNC_OVERLAP_SECONDS` | Zakładka checkpointu chroniąca granice timestampów; domyślnie `120` |
 | `PORT` | Port API; Railway dostarcza go automatycznie |
 | `DIGEST_QUIET_MINUTES` | Czas oczekiwania bufora; domyślnie `1` |
 | `TIMEZONE` | Strefa czasowa; domyślnie `Europe/Warsaw` |
@@ -80,7 +90,7 @@ npm run db:migrate:deploy
 npm run db:summary
 ```
 
-`npm run db:summary` jest diagnostyką tylko do odczytu. Pokazuje wyłącznie agregaty spraw, odbiorców, eventów i buforów oraz czasy heartbeat/sync workera; nie wyświetla adresów e-mail, nazw kontaktów, tokenów ani rekordów Airtable.
+`npm run db:summary` jest diagnostyką tylko do odczytu. Pokazuje wyłącznie agregaty spraw, odbiorców, eventów, wszystkich/OPEN/READY bufferów, najnowszy czas eventu oraz czasy heartbeat/sync workera; nie wyświetla adresów e-mail, nazw kontaktów, tokenów ani rekordów Airtable.
 
 ## Railway
 

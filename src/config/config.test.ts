@@ -40,6 +40,8 @@ describe("loadWorkerConfig", () => {
       databaseUrl,
       airtableBaseId: "appExample",
       airtablePat: "patExample",
+      airtablePollSeconds: 60,
+      airtableSyncOverlapSeconds: 120,
       digestQuietMinutes: 1,
       timezone: "Europe/Warsaw",
       emailMode: "TEST",

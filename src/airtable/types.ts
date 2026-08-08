@@ -9,6 +9,22 @@ export type AirtablePage = {
   offset?: string;
 };
 
+export type AirtableListOptions = {
+  filterByFormula?: string;
+};
+
 export type AirtableRecordSource = {
-  fetchAllRecords(tableId: string, fieldIds: readonly string[]): Promise<AirtableRecord[]>;
+  fetchAllRecords(
+    tableId: string,
+    fieldIds: readonly string[],
+    options?: AirtableListOptions,
+  ): Promise<AirtableRecord[]>;
+};
+
+export type AirtableIncrementalSource = AirtableRecordSource & {
+  fetchRecord(
+    tableId: string,
+    recordId: string,
+    fieldIds: readonly string[],
+  ): Promise<AirtableRecord>;
 };

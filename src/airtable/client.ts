@@ -1,6 +1,8 @@
 import type {
   AirtablePage,
   AirtableRecord,
+  AirtableListOptions,
+  AirtableIncrementalSource,
   AirtableRecordSource,
 } from "./types.js";
 
@@ -18,7 +20,7 @@ export type AirtableClientOptions = {
   sleep?: (milliseconds: number) => Promise<void>;
 };
 
-export class AirtableClient implements AirtableRecordSource {
+export class AirtableClient implements AirtableRecordSource, AirtableIncrementalSource {
   private readonly baseId: string;
   private readonly personalAccessToken: string;
   private readonly fetchFunction: FetchFunction;
@@ -37,12 +39,13 @@ export class AirtableClient implements AirtableRecordSource {
   async fetchAllRecords(
     tableId: string,
     fieldIds: readonly string[],
+    options: AirtableListOptions = {},
   ): Promise<AirtableRecord[]> {
     const records: AirtableRecord[] = [];
     let offset: string | undefined;
 
     do {
-      const page = await this.fetchPage(tableId, fieldIds, offset);
+      const page = await this.fetchPage(tableId, fieldIds, options, offset);
       records.push(...page.records);
       offset = page.offset;
     } while (offset);
@@ -50,9 +53,23 @@ export class AirtableClient implements AirtableRecordSource {
     return records;
   }
 
+  async fetchRecord(
+    tableId: string,
+    recordId: string,
+    fieldIds: readonly string[],
+  ): Promise<AirtableRecord> {
+    const url = new URL(
+      `https://api.airtable.com/v0/${encodeURIComponent(this.baseId)}/${encodeURIComponent(tableId)}/${encodeURIComponent(recordId)}`,
+    );
+    url.searchParams.set("returnFieldsByFieldId", "true");
+    for (const fieldId of fieldIds) url.searchParams.append("fields[]", fieldId);
+    return this.parseRecord(await this.requestJson(url, tableId), tableId);
+  }
+
   private async fetchPage(
     tableId: string,
     fieldIds: readonly string[],
+    options: AirtableListOptions,
     offset?: string,
   ): Promise<AirtablePage> {
     const url = new URL(
@@ -61,8 +78,15 @@ export class AirtableClient implements AirtableRecordSource {
     url.searchParams.set("pageSize", "100");
     url.searchParams.set("returnFieldsByFieldId", "true");
     for (const fieldId of fieldIds) url.searchParams.append("fields[]", fieldId);
+    if (options.filterByFormula) {
+      url.searchParams.set("filterByFormula", options.filterByFormula);
+    }
     if (offset) url.searchParams.set("offset", offset);
 
+    return this.parsePage(await this.requestJson(url, tableId), tableId);
+  }
+
+  private async requestJson(url: URL, tableId: string): Promise<unknown> {
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
       let response: Response;
 
@@ -83,7 +107,7 @@ export class AirtableClient implements AirtableRecordSource {
       }
 
       if (response.ok) {
-        return this.parsePage(await response.json(), tableId);
+        return response.json();
       }
 
       if (!RETRYABLE_STATUSES.has(response.status) || attempt === MAX_ATTEMPTS) {

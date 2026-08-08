@@ -1,5 +1,5 @@
 import "dotenv/config";
-import { CaseType } from "../generated/prisma/enums.js";
+import { BufferStatus, CaseType } from "../generated/prisma/enums.js";
 import { loadBaseConfig } from "../config/base.js";
 import { createPrismaClient } from "./prisma.js";
 
@@ -15,7 +15,10 @@ async function main(): Promise<void> {
     eligibleCaseRecipients,
     caseEvents,
     notificationBuffers,
+    openBuffers,
+    readyBuffers,
     bufferItems,
+    latestEvent,
     worker,
   ] = await Promise.all([
     prisma.trackedCase.count(),
@@ -25,7 +28,13 @@ async function main(): Promise<void> {
     prisma.caseRecipient.count({ where: { eligible: true } }),
     prisma.caseEvent.count(),
     prisma.notificationBuffer.count(),
+    prisma.notificationBuffer.count({ where: { status: BufferStatus.OPEN } }),
+    prisma.notificationBuffer.count({ where: { status: BufferStatus.READY } }),
     prisma.bufferItem.count(),
+    prisma.caseEvent.findFirst({
+      orderBy: { detectedAt: "desc" },
+      select: { detectedAt: true },
+    }),
     prisma.workerState.findUnique({
       where: { id: "main" },
       select: { lastHeartbeatAt: true, lastSyncAt: true },
@@ -42,7 +51,10 @@ async function main(): Promise<void> {
         eligibleCaseRecipients,
         caseEvents,
         notificationBuffers,
+        openBuffers,
+        readyBuffers,
         bufferItems,
+        latestEventDetectedAt: latestEvent?.detectedAt ?? null,
         workerLastHeartbeatAt: worker?.lastHeartbeatAt ?? null,
         workerLastSyncAt: worker?.lastSyncAt ?? null,
       },
