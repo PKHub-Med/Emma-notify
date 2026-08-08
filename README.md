@@ -1,16 +1,39 @@
 # Emma Notify
 
-Fundament niezależnej usługi powiadomień. Projekt nie integruje się jeszcze z istniejącym systemem Emma, nie zawiera frontendu i nie wysyła wiadomości e-mail.
+Niezależna usługa przygotowująca dane spraw i odbiorców dla przyszłych powiadomień. Projekt nie zawiera frontendu i nie wysyła wiadomości e-mail.
 
 ## Architektura
 
 Jedno repozytorium dostarcza dwa niezależne procesy Railway:
 
 - **API** — Express udostępniający `GET /health`; endpoint sprawdza połączenie z PostgreSQL i zwraca HTTP 503, gdy baza jest niedostępna.
-- **Worker** — proces zapisujący stan instancji `main` w tabeli `WorkerState` i aktualizujący heartbeat co 30 sekund.
+- **Worker** — proces wykonujący jednorazowy baseline Airtable, zapisujący stan instancji `main` i aktualizujący heartbeat co 30 sekund.
 - **PostgreSQL** — wspólna baza danych zarządzana przez Prisma. Migracje nie uruchamiają się automatycznie przy starcie procesów.
 
-Airtable będzie źródłem **READ ONLY**. Obecna wersja nie wykonuje jeszcze synchronizacji ani zapytań do Airtable.
+Airtable jest źródłem bezwzględnie **READ ONLY**. Klient wykonuje wyłącznie zapytania `GET`; aplikacja nigdy nie zapisuje danych do Airtable.
+
+## Baseline Airtable
+
+Worker przy starcie sprawdza `SyncState` dla kontaktów, zleceń serwisowych i przeglądów. Jeżeli wszystkie trzy baseline mają `baselineCompletedAt`, synchronizacja jest pomijana. W przeciwnym razie worker:
+
+1. pobiera kontakty i buduje lookup w pamięci,
+2. pobiera oraz upsertuje zlecenia serwisowe,
+3. pobiera oraz upsertuje przeglądy,
+4. synchronizuje aktualne, bezpośrednio podlinkowane `CaseRecipient`,
+5. ustawia `baselineCompletedAt`, `lastSuccessfulSyncAt` i `WorkerState.lastSyncAt`.
+
+Technicznym kluczem jest zawsze Airtable Record ID. Numery zleceń, LP, numery seryjne i inwentarzowe nie są używane jako klucze. Baseline jest idempotentny i nie tworzy `CaseEvent`, `NotificationBuffer` ani `BufferItem`. Nie wysyła również powiadomień.
+
+Odbiorcą może zostać wyłącznie kontakt bezpośrednio podlinkowany na sprawie, dla którego flaga kontaktowa po `trim + uppercase` wynosi `TAK`, a e-mail jest obecny i poprawny. Nie istnieje fallback na e-mail szpitala ani inne pola kontaktowe.
+
+Używane są wyłącznie Table IDs i Field IDs. Table IDs:
+
+| Dane | Table ID |
+| --- | --- |
+| Zlecenia serwisowe | `tblJSUtmWrc1feldG` |
+| Przeglądy | `tblPiDXQXcAWKogIk` |
+| Kontakty | `tblOAizKjQYDhIzEx` |
+| Urządzenia | `tblnEZZVI2ws2dyx4` |
 
 ## Wymagania
 
@@ -54,7 +77,10 @@ npm run build
 npm test
 npm run prisma:validate
 npm run db:migrate:deploy
+npm run db:summary
 ```
+
+`npm run db:summary` jest diagnostyką tylko do odczytu. Pokazuje wyłącznie agregaty spraw, odbiorców, eventów i buforów oraz czasy heartbeat/sync workera; nie wyświetla adresów e-mail, nazw kontaktów, tokenów ani rekordów Airtable.
 
 ## Railway
 

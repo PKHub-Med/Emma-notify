@@ -22,6 +22,25 @@ export type BaseConfig = {
   linkTtlDays: number;
 };
 
+const baseEnvironmentSchema = z.object(baseEnvironmentShape);
+
+export function loadBaseConfig(environment: NodeJS.ProcessEnv): BaseConfig {
+  const parsed = baseEnvironmentSchema.safeParse(environment);
+
+  if (!parsed.success) {
+    throw createConfigurationError(parsed.error);
+  }
+
+  return {
+    databaseUrl: parsed.data.DATABASE_URL,
+    timezone: parsed.data.TIMEZONE,
+    emailMode: parsed.data.EMAIL_MODE,
+    testEmail: parsed.data.TEST_EMAIL || null,
+    productionEmailsEnabled: parsed.data.PRODUCTION_EMAILS_ENABLED,
+    linkTtlDays: parsed.data.LINK_TTL_DAYS,
+  };
+}
+
 export function createConfigurationError(error: z.ZodError): Error {
   const fields = [
     ...new Set(

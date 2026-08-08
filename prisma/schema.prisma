@@ -44,6 +44,9 @@ model TrackedCase {
   caseType            CaseType
   airtableRecordId    String
   businessNumber      String?
+  clientOrderNumber   String?
+  caseSubtype         String?
+  caseLocation        String?
   hospitalName        String?
   deviceAirtableId    String?
   deviceName          String?
@@ -56,6 +59,10 @@ model TrackedCase {
   sourceSnapshot      Json?
   sourceCreatedAt     DateTime?
   sourceModifiedAt    DateTime?
+  inspectionDueDate       DateTime?
+  inspectionDueDateRaw    String?
+  inspectionScheduledDate DateTime?
+  inspectionBookingStatus String?
   firstSeenAt         DateTime        @default(now())
   lastSeenAt          DateTime        @default(now())
   active              Boolean         @default(true)

@@ -1,12 +1,20 @@
 import "dotenv/config";
+import { AirtableClient } from "../airtable/client.js";
 import { loadWorkerConfig } from "../config/worker.js";
 import { createPrismaClient } from "../db/prisma.js";
+import { runBaseline } from "./baseline.js";
+import { PrismaBaselineStore } from "./baseline-store.js";
 
 const HEARTBEAT_INTERVAL_MS = 30_000;
 const WORKER_ID = "main";
 
 const config = loadWorkerConfig(process.env);
 const prisma = createPrismaClient(config.databaseUrl);
+const airtable = new AirtableClient({
+  baseId: config.airtableBaseId,
+  personalAccessToken: config.airtablePat,
+});
+const baselineStore = new PrismaBaselineStore(prisma);
 let heartbeatTimer: NodeJS.Timeout | undefined;
 let shuttingDown = false;
 
@@ -44,6 +52,16 @@ async function start(): Promise<void> {
       console.error("[worker] Heartbeat failed", error);
     });
   }, HEARTBEAT_INTERVAL_MS);
+
+  try {
+    await runBaseline({
+      airtable,
+      store: baselineStore,
+      log: (message) => console.info(message),
+    });
+  } catch {
+    console.error("[baseline] failed; worker will continue heartbeat");
+  }
 }
 
 async function shutdown(signal: NodeJS.Signals): Promise<void> {
