@@ -1,0 +1,38 @@
+{
+  "name": "emma-notify",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Notification service foundation for Emma Notify",
+  "license": "UNLICENSED",
+  "engines": {
+    "node": ">=20.19"
+  },
+  "scripts": {
+    "build": "npm run prisma:generate && tsc -p tsconfig.json",
+    "start:api": "node dist/api/index.js",
+    "start:worker": "node dist/worker/index.js",
+    "dev:api": "node --watch -r ts-node/register src/api/index.ts",
+    "dev:worker": "node --watch -r ts-node/register src/worker/index.ts",
+    "test": "vitest run",
+    "db:migrate:deploy": "prisma migrate deploy",
+    "prisma:validate": "prisma validate",
+    "prisma:generate": "prisma generate"
+  },
+  "dependencies": {
+    "@prisma/adapter-pg": "^7.9.0",
+    "@prisma/client": "^7.9.0",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "pg": "^8.22.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/node": "^22.20.1",
+    "@types/pg": "^8.20.0",
+    "prisma": "^7.9.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.10"
+  }
+}

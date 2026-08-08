@@ -1,0 +1,162 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum CaseType {
+  SERVICE_ORDER
+  INSPECTION
+}
+
+enum EventType {
+  CASE_CREATED
+  SERVICE_STATUS_CHANGED
+  INSPECTION_STATUS_CHANGED
+  RECIPIENT_CHANGED
+}
+
+enum BufferStatus {
+  OPEN
+  READY
+  CLOSED
+  CANCELLED
+}
+
+enum SyncEntityType {
+  SERVICE_ORDER
+  INSPECTION
+  CONTACT
+}
+
+enum SyncStatus {
+  IDLE
+  RUNNING
+  ERROR
+}
+
+model TrackedCase {
+  id                  String          @id @default(cuid())
+  caseType            CaseType
+  airtableRecordId    String
+  businessNumber      String?
+  hospitalName        String?
+  deviceAirtableId    String?
+  deviceName          String?
+  manufacturer        String?
+  model               String?
+  serialNumber        String?
+  inventoryNumber     String?
+  currentStatus       String?
+  faultDescription    String?
+  sourceSnapshot      Json?
+  sourceCreatedAt     DateTime?
+  sourceModifiedAt    DateTime?
+  firstSeenAt         DateTime        @default(now())
+  lastSeenAt          DateTime        @default(now())
+  active              Boolean         @default(true)
+  recipients          CaseRecipient[]
+  events              CaseEvent[]
+  bufferItems         BufferItem[]
+
+  @@unique([caseType, airtableRecordId])
+  @@index([active, lastSeenAt])
+  @@index([sourceModifiedAt])
+}
+
+model CaseRecipient {
+  id                       String      @id @default(cuid())
+  trackedCaseId            String
+  airtableContactRecordId  String
+  name                     String?
+  email                    String?
+  normalizedEmail          String?
+  eligible                 Boolean
+  eligibilityReason        String?
+  resolutionSource         String      @default("CONTACT_LINK")
+  firstSeenAt              DateTime    @default(now())
+  lastSeenAt               DateTime    @default(now())
+  trackedCase              TrackedCase @relation(fields: [trackedCaseId], references: [id], onDelete: Cascade)
+
+  @@unique([trackedCaseId, airtableContactRecordId])
+  @@index([normalizedEmail, eligible])
+}
+
+model CaseEvent {
+  id                    String      @id @default(cuid())
+  trackedCaseId         String
+  eventType             EventType
+  fieldName             String?
+  oldValue              Json?
+  newValue              Json?
+  triggersNotification  Boolean     @default(false)
+  visibleToCustomer     Boolean     @default(true)
+  eventFingerprint      String      @unique
+  sourceModifiedAt      DateTime?
+  detectedAt            DateTime    @default(now())
+  trackedCase            TrackedCase @relation(fields: [trackedCaseId], references: [id], onDelete: Cascade)
+
+  @@index([trackedCaseId, detectedAt])
+  @@index([triggersNotification, detectedAt])
+}
+
+model NotificationBuffer {
+  id                  String       @id @default(cuid())
+  recipientName       String?
+  recipientEmail      String
+  normalizedEmail     String
+  status              BufferStatus @default(OPEN)
+  firstTriggerAt      DateTime
+  lastTriggerAt       DateTime
+  sendAfter           DateTime
+  activeRecipientKey  String?      @unique
+  createdAt           DateTime     @default(now())
+  updatedAt           DateTime     @updatedAt
+  items               BufferItem[]
+
+  @@index([status, sendAfter])
+  @@index([normalizedEmail, createdAt])
+}
+
+model BufferItem {
+  id             String             @id @default(cuid())
+  bufferId       String
+  trackedCaseId  String
+  firstEventAt   DateTime
+  lastEventAt    DateTime
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+  buffer         NotificationBuffer @relation(fields: [bufferId], references: [id], onDelete: Cascade)
+  trackedCase    TrackedCase        @relation(fields: [trackedCaseId], references: [id], onDelete: Cascade)
+
+  @@unique([bufferId, trackedCaseId])
+  @@index([trackedCaseId])
+}
+
+model SyncState {
+  id                  String         @id @default(cuid())
+  source              String         @default("AIRTABLE")
+  entityType          SyncEntityType
+  status              SyncStatus
+  lastAttemptAt       DateTime?
+  lastSuccessfulSyncAt DateTime?
+  baselineCompletedAt DateTime?
+  lastError           String?
+  createdAt           DateTime       @default(now())
+  updatedAt           DateTime       @updatedAt
+
+  @@unique([source, entityType])
+  @@index([status, lastAttemptAt])
+}
+
+model WorkerState {
+  id               String   @id
+  version          String?
+  startedAt        DateTime
+  lastHeartbeatAt  DateTime
+  lastSyncAt       DateTime?
+  updatedAt        DateTime @updatedAt
+}
