@@ -24,6 +24,10 @@ describe("case mappers", () => {
       [SERVICE_ORDER_FIELDS.deviceLink]: ["recDevice"],
       [SERVICE_ORDER_FIELDS.contactLinks]: ["recContactA", "recContactB"],
       [SERVICE_ORDER_FIELDS.customerStatus]: "W naprawie",
+      [SERVICE_ORDER_FIELDS.emmaCustomerStatus]: "Naprawa rozpoczęta",
+      [SERVICE_ORDER_FIELDS.emmaMailTemplate]: "Naprawa-zmiana_stanu",
+      [SERVICE_ORDER_FIELDS.serviceOrderType]: "NAPRAWA",
+      [SERVICE_ORDER_FIELDS.sourceHospitalLink]: ["recHospital", "recIgnored"],
       [SERVICE_ORDER_FIELDS.faultDescription]: "Usterka",
       [SERVICE_ORDER_FIELDS.sourceModifiedAt]: "2026-08-08T10:00:00.000Z",
     }));
@@ -36,8 +40,12 @@ describe("case mappers", () => {
       hospitalName: "Hospital",
       deviceAirtableId: "recDevice",
       currentStatus: "W naprawie",
+      emmaCustomerStatus: "Naprawa rozpoczęta",
+      emmaMailTemplate: "Naprawa-zmiana_stanu",
+      serviceOrderType: "NAPRAWA",
       faultDescription: "Usterka",
       contactRecordIds: ["recContactA", "recContactB"],
+      sourceHospitalRecordId: "recHospital",
     });
     expect(mapped.sourceSnapshot).not.toHaveProperty("contactRecordIds");
   });

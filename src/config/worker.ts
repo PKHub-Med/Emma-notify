@@ -21,6 +21,7 @@ const workerEnvironmentSchema = z.object({
   EMAIL_FROM: z.string().default(""),
   ACCESS_LINK_SIGNING_SECRET: accessLinkSigningSecretSchema,
   PUBLIC_BASE_URL: publicBaseUrlSchema,
+  TIEMED_FALLBACK_EMAIL: z.union([z.email(), z.literal("")]).default(""),
 });
 
 export type WorkerConfig = BaseConfig & {
@@ -34,6 +35,7 @@ export type WorkerConfig = BaseConfig & {
   emailFrom: string | null;
   accessLinkSigningSecret: string;
   publicBaseUrl: string;
+  tiemedFallbackEmail: string | null;
 };
 
 export function loadWorkerConfig(environment: NodeJS.ProcessEnv): WorkerConfig {
@@ -56,6 +58,7 @@ export function loadWorkerConfig(environment: NodeJS.ProcessEnv): WorkerConfig {
     emailFrom: parsed.data.EMAIL_FROM.trim() || null,
     accessLinkSigningSecret: parsed.data.ACCESS_LINK_SIGNING_SECRET,
     publicBaseUrl: parsed.data.PUBLIC_BASE_URL,
+    tiemedFallbackEmail: parsed.data.TIEMED_FALLBACK_EMAIL.trim() || null,
     timezone: parsed.data.TIMEZONE,
     emailMode: parsed.data.EMAIL_MODE,
     testEmail: parsed.data.TEST_EMAIL || null,

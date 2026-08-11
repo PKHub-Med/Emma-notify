@@ -19,8 +19,12 @@ export type MappedCase = {
   businessNumber: string | null;
   clientOrderNumber: string | null;
   caseSubtype: string | null;
+  serviceOrderType: string | null;
+  emmaCustomerStatus: string | null;
+  emmaMailTemplate: string | null;
   caseLocation: string | null;
   hospitalName: string | null;
+  sourceHospitalRecordId: string | null;
   deviceAirtableId: string | null;
   deviceName: string | null;
   manufacturer: string | null;
@@ -47,6 +51,15 @@ export function mapServiceOrder(record: AirtableRecord): MappedCase {
       record.fields[SERVICE_ORDER_FIELDS.clientOrderNumber],
     ),
     caseSubtype: toOptionalString(record.fields[SERVICE_ORDER_FIELDS.caseSubtype]),
+    serviceOrderType: toOptionalString(
+      record.fields[SERVICE_ORDER_FIELDS.serviceOrderType],
+    ),
+    emmaCustomerStatus: toOptionalString(
+      record.fields[SERVICE_ORDER_FIELDS.emmaCustomerStatus],
+    ),
+    emmaMailTemplate: toOptionalString(
+      record.fields[SERVICE_ORDER_FIELDS.emmaMailTemplate],
+    ),
     caseLocation: toOptionalString(record.fields[SERVICE_ORDER_FIELDS.caseLocation]),
     hospitalName: toOptionalString(record.fields[SERVICE_ORDER_FIELDS.hospitalName]),
     deviceName: toOptionalString(record.fields[SERVICE_ORDER_FIELDS.deviceName]),
@@ -64,6 +77,9 @@ export function mapServiceOrder(record: AirtableRecord): MappedCase {
     caseType: CaseType.SERVICE_ORDER,
     airtableRecordId: record.id,
     ...values,
+    sourceHospitalRecordId: toFirstLinkedRecordId(
+      record.fields[SERVICE_ORDER_FIELDS.sourceHospitalLink],
+    ),
     deviceAirtableId: toFirstLinkedRecordId(
       record.fields[SERVICE_ORDER_FIELDS.deviceLink],
     ),
@@ -116,8 +132,12 @@ export function mapInspection(record: AirtableRecord): MappedCase {
     businessNumber: values.businessNumber,
     clientOrderNumber: values.clientOrderNumber,
     caseSubtype: null,
+    serviceOrderType: null,
+    emmaCustomerStatus: null,
+    emmaMailTemplate: null,
     caseLocation: null,
     hospitalName: values.hospitalName,
+    sourceHospitalRecordId: null,
     deviceAirtableId: toFirstLinkedRecordId(record.fields[INSPECTION_FIELDS.deviceLink]),
     deviceName: values.deviceName,
     manufacturer: values.manufacturer,

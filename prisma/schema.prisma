@@ -45,12 +45,39 @@ enum SyncEntityType {
   SERVICE_ORDER
   INSPECTION
   CONTACT
+  TASK
 }
 
 enum SyncStatus {
   IDLE
   RUNNING
   ERROR
+}
+
+enum CommunicationSourceEntityType {
+  SERVICE_ORDER
+  TASK
+}
+
+enum CommunicationScenario {
+  REPAIR_RECEIVED
+  REPAIR_COMPLETED
+  INSPECTION_DATE_PROPOSED
+  INSPECTION_DATE_CONFIRMED
+  INSPECTION_REMINDER
+  INSPECTION_COMPLETED
+}
+
+enum CommunicationRecipientType {
+  CLIENT
+  TIEMED_FALLBACK
+}
+
+enum CommunicationRecipientResolutionStatus {
+  READY
+  INVALID
+  FALLBACK
+  FAILED
 }
 
 model TrackedCase {
@@ -60,8 +87,12 @@ model TrackedCase {
   businessNumber      String?
   clientOrderNumber   String?
   caseSubtype         String?
+  serviceOrderType    String?
+  emmaCustomerStatus  String?
+  emmaMailTemplate    String?
   caseLocation        String?
   hospitalName        String?
+  sourceHospitalRecordId String?
   deviceAirtableId    String?
   deviceName          String?
   manufacturer        String?
@@ -88,6 +119,81 @@ model TrackedCase {
   @@unique([caseType, airtableRecordId])
   @@index([active, lastSeenAt])
   @@index([sourceModifiedAt])
+}
+
+model TrackedTask {
+  id                          String   @id @default(cuid())
+  airtableRecordId            String   @unique
+  taskNumber                  String?
+  day                         String?
+  activity                    String?
+  completed                   Boolean?
+  status                      String?
+  emmaCustomerStatus          String?
+  emmaMailTemplate            String?
+  sourceHospitalRecordId      String?
+  selectedContactRecordIds    Json
+  linkedInspectionRecordIds   Json
+  linkedServiceOrderRecordIds Json
+  performerRecordIds          Json
+  sourceSnapshot              Json
+  firstSeenAt                 DateTime @default(now())
+  lastSeenAt                  DateTime @default(now())
+  createdAt                   DateTime @default(now())
+  updatedAt                   DateTime @updatedAt
+
+  @@index([emmaMailTemplate])
+  @@index([lastSeenAt])
+}
+
+model CommunicationCursor {
+  id               String                        @id @default(cuid())
+  sourceEntityType CommunicationSourceEntityType
+  sourceRecordId   String
+  lastSignature    String
+  revision         Int                           @default(0)
+  firstObservedAt  DateTime                      @default(now())
+  lastObservedAt   DateTime                      @default(now())
+  createdAt        DateTime                      @default(now())
+  updatedAt        DateTime                      @updatedAt
+
+  @@unique([sourceEntityType, sourceRecordId])
+  @@index([lastObservedAt])
+}
+
+model CommunicationEvent {
+  id               String                        @id @default(cuid())
+  sourceEntityType CommunicationSourceEntityType
+  sourceRecordId   String
+  scenario         CommunicationScenario
+  fingerprint      String                        @unique
+  eventSnapshot    Json
+  detectedAt       DateTime
+  createdAt        DateTime                      @default(now())
+  processedAt      DateTime?
+  recipientsResolvedAt DateTime?
+  recipients       CommunicationEventRecipient[]
+
+  @@index([sourceEntityType, sourceRecordId, detectedAt])
+  @@index([scenario, processedAt, detectedAt])
+}
+
+model CommunicationEventRecipient {
+  id                    String                                  @id @default(cuid())
+  communicationEventId  String
+  recipientType         CommunicationRecipientType
+  sourceContactRecordId String?
+  email                 String?
+  normalizedEmail       String?
+  recipientKey          String
+  resolutionStatus      CommunicationRecipientResolutionStatus
+  resolutionReason      String?
+  createdAt             DateTime                                @default(now())
+  communicationEvent    CommunicationEvent                      @relation(fields: [communicationEventId], references: [id], onDelete: Cascade)
+
+  @@unique([communicationEventId, normalizedEmail])
+  @@unique([communicationEventId, recipientKey])
+  @@index([communicationEventId, resolutionStatus])
 }
 
 model CaseRecipient {

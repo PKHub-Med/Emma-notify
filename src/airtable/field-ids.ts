@@ -22,6 +22,7 @@ export const TASK_FIELDS = {
   selectedContactEmailLookup: "fld86wH67E8Hpl5au",
   emmaCustomerStatus: "fldiTY6M5rQLoOFvd",
   emmaMailTemplate: "fldgGORaQ08utJddW",
+  sourceHospitalLink: "fldDQYxpMRt6xaHCE",
 } as const;
 
 export const EMPLOYEE_FIELDS = {
@@ -48,6 +49,7 @@ export const SERVICE_ORDER_FIELDS = {
   businessNumber: "fldvxV5Kvva5i1BJN",
   clientOrderNumber: "fldd7gJIpGiIz8jof",
   caseSubtype: "fldZUjAkbnVhSIfrV",
+  serviceOrderType: "fldZUjAkbnVhSIfrV",
   caseLocation: "fldhUvutWPKBEPA2D",
   hospitalName: "fldmnLS1Jga5UaHG9",
   deviceName: "fldiFTzPo3PVFnqbc",
@@ -63,6 +65,7 @@ export const SERVICE_ORDER_FIELDS = {
   customerStatus: "fldN0dGXaGv40EHsk",
   emmaCustomerStatus: "fldOi8KDzJ1zwMaWJ",
   emmaMailTemplate: "fldfqDFr9bJ4DiMRe",
+  sourceHospitalLink: "fldXGnsGh3ok8WlMe",
 } as const;
 
 export const INSPECTION_FIELDS = {
@@ -90,9 +93,13 @@ export const CONTACT_FIELDS = {
   sourceModifiedAt: "fld69FjUyAHgmVTAF",
 } as const;
 
-export const SERVICE_ORDER_FIELD_IDS = Object.values(SERVICE_ORDER_FIELDS);
+export const SERVICE_ORDER_FIELD_IDS = uniqueFieldIds(SERVICE_ORDER_FIELDS);
 export const INSPECTION_FIELD_IDS = Object.values(INSPECTION_FIELDS);
 export const CONTACT_FIELD_IDS = Object.values(CONTACT_FIELDS);
 export const TASK_FIELD_IDS = Object.values(TASK_FIELDS);
 export const EMPLOYEE_FIELD_IDS = Object.values(EMPLOYEE_FIELDS);
 export const HOSPITAL_FIELD_IDS = Object.values(HOSPITAL_FIELDS);
+
+function uniqueFieldIds(fields: Record<string, string>): string[] {
+  return [...new Set(Object.values(fields))];
+}

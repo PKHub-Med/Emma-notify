@@ -32,10 +32,16 @@ import type {
   IncrementalEntityType,
   IncrementalStore,
 } from "./incremental-store.js";
+import {
+  buildServiceOrderObservation,
+  observeCommunication,
+  type CommunicationEventStore,
+} from "./communication-event.js";
 
 export type IncrementalSyncOptions = {
   overlapSeconds: number;
   quietMinutes: number;
+  legacyNotificationsEnabled: boolean;
 };
 
 export type IncrementalSyncStats = {
@@ -48,6 +54,7 @@ export type IncrementalSyncStats = {
   buffersCreated: number;
   buffersReset: number;
   bufferItemsCreated: number;
+  communicationEventsCreated: number;
   durationMs: number;
 };
 
@@ -88,6 +95,7 @@ export async function runIncrementalSync(dependencies: {
   airtable: AirtableIncrementalSource;
   store: IncrementalStore;
   options: IncrementalSyncOptions;
+  communicationStore?: CommunicationEventStore;
   now?: () => Date;
   log?: (message: string) => void;
 }): Promise<IncrementalSyncStats> {
@@ -95,6 +103,9 @@ export async function runIncrementalSync(dependencies: {
   const startedAt = now();
   const stats = emptyStats();
   const contactCache = new Map<string, Contact>();
+  const serviceCommunicationEnabled = dependencies.communicationStore
+    ? await dependencies.communicationStore.isBaselineCompleted("SERVICE_ORDER")
+    : false;
 
   for (const definition of ENTITY_DEFINITIONS) {
     await syncEntity(
@@ -106,6 +117,9 @@ export async function runIncrementalSync(dependencies: {
       now,
       contactCache,
       stats,
+      dependencies.communicationStore,
+      serviceCommunicationEnabled,
+      dependencies.log,
     );
   }
 
@@ -129,6 +143,9 @@ async function syncEntity(
   now: () => Date,
   contactCache: Map<string, Contact>,
   stats: IncrementalSyncStats,
+  communicationStore: CommunicationEventStore | undefined,
+  serviceCommunicationEnabled: boolean,
+  log: ((message: string) => void) | undefined,
 ): Promise<void> {
   const checkpoint = await store.getCheckpoint(definition.entityType);
   if (!checkpoint) {
@@ -159,9 +176,13 @@ async function syncEntity(
         airtable,
         store,
         options.quietMinutes,
+        options.legacyNotificationsEnabled,
         now(),
         contactCache,
         stats,
+        communicationStore,
+        serviceCommunicationEnabled,
+        log,
       );
     }
 
@@ -178,9 +199,13 @@ async function processRecord(
   airtable: AirtableIncrementalSource,
   store: IncrementalStore,
   quietMinutes: number,
+  legacyNotificationsEnabled: boolean,
   detectedAt: Date,
   contactCache: Map<string, Contact>,
   stats: IncrementalSyncStats,
+  communicationStore: CommunicationEventStore | undefined,
+  serviceCommunicationEnabled: boolean,
+  log: ((message: string) => void) | undefined,
 ): Promise<void> {
   const mappedCase = definition.map(record);
   const recipients = await resolveCurrentRecipients(
@@ -190,9 +215,23 @@ async function processRecord(
   );
   const storedCase = await store.findCase(mappedCase);
 
-  if (!storedCase) {
+  if (!storedCase || !legacyNotificationsEnabled) {
     const trackedCaseId = await store.upsertCaseWithoutEvent(mappedCase, detectedAt);
     await store.syncRecipients(trackedCaseId, recipients, detectedAt);
+    if (
+      !legacyNotificationsEnabled &&
+      definition.entityType === SyncEntityType.SERVICE_ORDER &&
+      communicationStore
+    ) {
+      const result = await observeCommunication({
+        store: communicationStore,
+        observation: buildServiceOrderObservation(mappedCase, detectedAt),
+        allowEvent: serviceCommunicationEnabled,
+        detectedAt,
+        ...(log ? { log } : {}),
+      });
+      if (result.outcome === "CREATED") stats.communicationEventsCreated += 1;
+    }
     return;
   }
 
@@ -265,6 +304,7 @@ function emptyStats(): IncrementalSyncStats {
     buffersCreated: 0,
     buffersReset: 0,
     bufferItemsCreated: 0,
+    communicationEventsCreated: 0,
     durationMs: 0,
   };
 }

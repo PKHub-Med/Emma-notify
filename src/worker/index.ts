@@ -1,25 +1,20 @@
 import "dotenv/config";
-import {
-  AccessLinkService,
-  PrismaAccessLinkStore,
-} from "../access-links/service.js";
 import { AirtableClient } from "../airtable/client.js";
 import { loadWorkerConfig } from "../config/worker.js";
 import { createPrismaClient } from "../db/prisma.js";
-import { createResendClient } from "../email/resend-client.js";
-import { PrismaDigestSendStore, runEmailLoop } from "../email/sender.js";
 import { runBaseline } from "./baseline.js";
 import { PrismaBaselineStore } from "./baseline-store.js";
-import { runDigestLoop } from "./digest-loop.js";
-import { PrismaDigestStore } from "./digest-store.js";
 import { runIncrementalSync } from "./incremental-sync.js";
 import { PrismaIncrementalStore } from "./incremental-store.js";
-import { runWatchdog } from "./watchdog.js";
+import { PrismaCommunicationEventStore } from "./communication-event.js";
+import { runServiceCommunicationBaseline } from "./service-communication-baseline.js";
+import { PrismaTaskSyncStore, runTaskSync } from "./task-sync.js";
+import {
+  PrismaRecipientResolutionStore,
+  resolvePendingCommunicationRecipients,
+} from "./recipient-resolution.js";
 
 const HEARTBEAT_INTERVAL_MS = 30_000;
-const WATCHDOG_INTERVAL_MS = 15_000;
-const DIGEST_INTERVAL_MS = 15_000;
-const EMAIL_INTERVAL_MS = 15_000;
 const WORKER_ID = "main";
 
 const config = loadWorkerConfig(process.env);
@@ -30,26 +25,16 @@ const airtable = new AirtableClient({
 });
 const baselineStore = new PrismaBaselineStore(prisma);
 const incrementalStore = new PrismaIncrementalStore(prisma);
-const digestStore = new PrismaDigestStore(prisma);
-const digestSendStore = new PrismaDigestSendStore(prisma);
-const emailProvider = createResendClient(config.resendApiKey);
-const accessLinks = new AccessLinkService(
-  new PrismaAccessLinkStore(prisma),
-  {
-    signingSecret: config.accessLinkSigningSecret,
-    publicBaseUrl: config.publicBaseUrl,
-    ttlDays: config.linkTtlDays,
-  },
-);
+const taskSyncStore = new PrismaTaskSyncStore(prisma);
+const communicationStore = new PrismaCommunicationEventStore(prisma);
+const recipientResolutionStore = new PrismaRecipientResolutionStore(prisma);
 let heartbeatTimer: NodeJS.Timeout | undefined;
 let incrementalTimer: NodeJS.Timeout | undefined;
-let watchdogTimer: NodeJS.Timeout | undefined;
-let digestTimer: NodeJS.Timeout | undefined;
-let emailTimer: NodeJS.Timeout | undefined;
+let taskTimer: NodeJS.Timeout | undefined;
+let recipientResolutionTimer: NodeJS.Timeout | undefined;
 let incrementalRunning = false;
-let watchdogRunning = false;
-let digestRunning = false;
-let emailRunning = false;
+let taskRunning = false;
+let recipientResolutionRunning = false;
 let shuttingDown = false;
 
 async function writeHeartbeat(): Promise<void> {
@@ -93,69 +78,64 @@ async function start(): Promise<void> {
       store: baselineStore,
       log: (message) => console.info(message),
     });
-    startIncrementalLoops();
+    await runServiceCommunicationBaseline({
+      airtable,
+      caseStore: incrementalStore,
+      communicationStore,
+      log: (message) => console.info(message),
+    });
+    startPollingLoops();
   } catch {
     console.error("[baseline] failed; worker will continue heartbeat");
   }
 }
 
-function startIncrementalLoops(): void {
+function startPollingLoops(): void {
   incrementalTimer = setInterval(() => {
     void pollIncremental();
   }, config.airtablePollSeconds * 1_000);
-  watchdogTimer = setInterval(() => {
-    void pollWatchdog();
-  }, WATCHDOG_INTERVAL_MS);
-  digestTimer = setInterval(() => {
-    void pollDigests();
-  }, DIGEST_INTERVAL_MS);
-  emailTimer = setInterval(() => {
-    void pollEmail();
-  }, EMAIL_INTERVAL_MS);
+  taskTimer = setInterval(() => {
+    void pollTasks();
+  }, config.airtablePollSeconds * 1_000);
+  recipientResolutionTimer = setInterval(() => {
+    void pollRecipientResolution();
+  }, config.airtablePollSeconds * 1_000);
   void pollIncremental();
-  void pollWatchdog();
-  void pollDigests();
-  void pollEmail();
+  void pollTasks();
+  void pollRecipientResolution();
 }
 
-async function pollEmail(): Promise<void> {
-  if (emailRunning || shuttingDown) return;
-  emailRunning = true;
+async function pollRecipientResolution(): Promise<void> {
+  if (recipientResolutionRunning || shuttingDown) return;
+  recipientResolutionRunning = true;
   try {
-    await runEmailLoop({
-      store: digestSendStore,
-      provider: emailProvider,
-      accessLinks,
-      config: {
-        mode: config.emailMode,
-        testEmail: config.testEmail,
-        productionEmailsEnabled: config.productionEmailsEnabled,
-        resendApiKey: config.resendApiKey,
-        caseDigestTemplateId: config.resendCaseDigestTemplateId,
-        emailFrom: config.emailFrom,
-      },
+    await resolvePendingCommunicationRecipients({
+      airtable,
+      store: recipientResolutionStore,
+      tiemedFallbackEmail: config.tiemedFallbackEmail,
       log: (message) => console.info(message),
     });
   } catch {
-    console.error("[email] loop failed; eligible digests will retry");
+    console.error("COMMUNICATION_RECIPIENT_RESOLUTION_FAILED eventId=BATCH reason=INTERNAL_ERROR");
   } finally {
-    emailRunning = false;
+    recipientResolutionRunning = false;
   }
 }
 
-async function pollDigests(): Promise<void> {
-  if (digestRunning || shuttingDown) return;
-  digestRunning = true;
+async function pollTasks(): Promise<void> {
+  if (taskRunning || shuttingDown) return;
+  taskRunning = true;
   try {
-    await runDigestLoop({
-      store: digestStore,
-      emailMode: config.emailMode,
+    await runTaskSync({
+      airtable,
+      store: taskSyncStore,
+      communicationStore,
       log: (message) => console.info(message),
     });
   } catch {
-    console.error("[digest] loop failed; READY buffers will retry");
+    console.error("[task-sync] failed; next poll will retry");
   } finally {
-    digestRunning = false;
+    taskRunning = false;
   }
 }
 
@@ -166,9 +146,11 @@ async function pollIncremental(): Promise<void> {
     await runIncrementalSync({
       airtable,
       store: incrementalStore,
+      communicationStore,
       options: {
         overlapSeconds: config.airtableSyncOverlapSeconds,
         quietMinutes: config.digestQuietMinutes,
+        legacyNotificationsEnabled: false,
       },
       log: (message) => console.info(message),
     });
@@ -179,19 +161,6 @@ async function pollIncremental(): Promise<void> {
   }
 }
 
-async function pollWatchdog(): Promise<void> {
-  if (watchdogRunning || shuttingDown) return;
-  watchdogRunning = true;
-  try {
-    await runWatchdog(incrementalStore, new Date(), (message) =>
-      console.info(message));
-  } catch {
-    console.error("[watchdog] failed; next check will retry");
-  } finally {
-    watchdogRunning = false;
-  }
-}
-
 async function shutdown(signal: NodeJS.Signals): Promise<void> {
   if (shuttingDown) return;
   shuttingDown = true;
@@ -199,9 +168,8 @@ async function shutdown(signal: NodeJS.Signals): Promise<void> {
 
   if (heartbeatTimer) clearInterval(heartbeatTimer);
   if (incrementalTimer) clearInterval(incrementalTimer);
-  if (watchdogTimer) clearInterval(watchdogTimer);
-  if (digestTimer) clearInterval(digestTimer);
-  if (emailTimer) clearInterval(emailTimer);
+  if (taskTimer) clearInterval(taskTimer);
+  if (recipientResolutionTimer) clearInterval(recipientResolutionTimer);
   await prisma.$disconnect();
   console.info("[worker] Shutdown complete");
 }

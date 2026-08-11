@@ -1,20 +1,23 @@
 import { TASK_FIELDS } from "./field-ids.js";
 import type { AirtableRecord } from "./types.js";
-import { toLinkedRecordIds, toOptionalString } from "./values.js";
+import {
+  toFirstLinkedRecordId,
+  toLinkedRecordIds,
+  toOptionalString,
+} from "./values.js";
 
 export type MappedTask = {
   airtableRecordId: string;
-  sequenceNumber: string | null;
+  taskNumber: string | null;
   day: string | null;
   activity: string | null;
-  assigneeRecordIds: string[];
+  performerRecordIds: string[];
   completed: boolean | null;
   status: string | null;
-  serviceOrderRecordIds: string[];
-  inspectionRecordIds: string[];
-  contactRecordIds: string[];
+  linkedServiceOrderRecordIds: string[];
+  linkedInspectionRecordIds: string[];
   selectedContactRecordIds: string[];
-  selectedContactEmailLookup: string | null;
+  sourceHospitalRecordId: string | null;
   emmaCustomerStatus: string | null;
   emmaMailTemplate: string | null;
 };
@@ -22,29 +25,28 @@ export type MappedTask = {
 /**
  * Maps the read-only Airtable task contract without affecting notification
  * routing. In particular, recipients remain linked contact record IDs; the
- * email lookup field is informational and is not treated as canonical.
+ * email lookup field is deliberately not read or treated as canonical.
  */
 export function mapTask(record: AirtableRecord): MappedTask {
   return {
     airtableRecordId: record.id,
-    sequenceNumber: toOptionalString(record.fields[TASK_FIELDS.sequenceNumber]),
+    taskNumber: toOptionalString(record.fields[TASK_FIELDS.sequenceNumber]),
     day: toOptionalString(record.fields[TASK_FIELDS.day]),
     activity: toOptionalString(record.fields[TASK_FIELDS.activity]),
-    assigneeRecordIds: toLinkedRecordIds(record.fields[TASK_FIELDS.assigneeLinks]),
+    performerRecordIds: toLinkedRecordIds(record.fields[TASK_FIELDS.assigneeLinks]),
     completed: toOptionalBoolean(record.fields[TASK_FIELDS.completed]),
     status: toOptionalString(record.fields[TASK_FIELDS.status]),
-    serviceOrderRecordIds: toLinkedRecordIds(
+    linkedServiceOrderRecordIds: toLinkedRecordIds(
       record.fields[TASK_FIELDS.serviceOrderLinks],
     ),
-    inspectionRecordIds: toLinkedRecordIds(
+    linkedInspectionRecordIds: toLinkedRecordIds(
       record.fields[TASK_FIELDS.inspectionLinks],
     ),
-    contactRecordIds: toLinkedRecordIds(record.fields[TASK_FIELDS.contactLinks]),
     selectedContactRecordIds: toLinkedRecordIds(
       record.fields[TASK_FIELDS.selectedContactLinks],
     ),
-    selectedContactEmailLookup: toOptionalString(
-      record.fields[TASK_FIELDS.selectedContactEmailLookup],
+    sourceHospitalRecordId: toFirstLinkedRecordId(
+      record.fields[TASK_FIELDS.sourceHospitalLink],
     ),
     emmaCustomerStatus: toOptionalString(
       record.fields[TASK_FIELDS.emmaCustomerStatus],

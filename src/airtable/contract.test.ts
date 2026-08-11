@@ -35,6 +35,7 @@ describe("central Airtable contract", () => {
       selectedContactEmailLookup: "fld86wH67E8Hpl5au",
       emmaCustomerStatus: "fldiTY6M5rQLoOFvd",
       emmaMailTemplate: "fldgGORaQ08utJddW",
+      sourceHospitalLink: "fldDQYxpMRt6xaHCE",
     });
   });
 
@@ -52,6 +53,7 @@ describe("central Airtable contract", () => {
     expect(SERVICE_ORDER_FIELDS.customerStatus).toBe("fldN0dGXaGv40EHsk");
     expect(SERVICE_ORDER_FIELDS.emmaCustomerStatus).toBe("fldOi8KDzJ1zwMaWJ");
     expect(SERVICE_ORDER_FIELDS.emmaMailTemplate).toBe("fldfqDFr9bJ4DiMRe");
+    expect(SERVICE_ORDER_FIELDS.sourceHospitalLink).toBe("fldXGnsGh3ok8WlMe");
   });
 
   it("contains the confirmed hospital Field IDs", () => {

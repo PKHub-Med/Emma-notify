@@ -3,6 +3,7 @@ import {
   BufferStatus,
   CaseType,
   DigestStatus,
+  CommunicationRecipientResolutionStatus,
 } from "../generated/prisma/enums.js";
 import { loadBaseConfig } from "../config/base.js";
 import { createPrismaClient } from "./prisma.js";
@@ -29,6 +30,16 @@ async function main(): Promise<void> {
     sentDigests,
     failedDigests,
     digestItems,
+    communicationCursors,
+    communicationEvents,
+    unprocessedCommunicationEvents,
+    latestCommunicationEvent,
+    communicationEventRecipients,
+    readyCommunicationRecipients,
+    fallbackCommunicationRecipients,
+    failedCommunicationRecipients,
+    recipientResolvedEvents,
+    recipientUnresolvedEvents,
     latestEvent,
     worker,
   ] = await Promise.all([
@@ -49,6 +60,30 @@ async function main(): Promise<void> {
     prisma.digest.count({ where: { status: DigestStatus.SENT } }),
     prisma.digest.count({ where: { status: DigestStatus.FAILED } }),
     prisma.digestItem.count(),
+    prisma.communicationCursor.count(),
+    prisma.communicationEvent.count(),
+    prisma.communicationEvent.count({ where: { processedAt: null } }),
+    prisma.communicationEvent.findFirst({
+      orderBy: { detectedAt: "desc" },
+      select: {
+        scenario: true,
+        sourceEntityType: true,
+        sourceRecordId: true,
+        detectedAt: true,
+      },
+    }),
+    prisma.communicationEventRecipient.count(),
+    prisma.communicationEventRecipient.count({
+      where: { resolutionStatus: CommunicationRecipientResolutionStatus.READY },
+    }),
+    prisma.communicationEventRecipient.count({
+      where: { resolutionStatus: CommunicationRecipientResolutionStatus.FALLBACK },
+    }),
+    prisma.communicationEventRecipient.count({
+      where: { resolutionStatus: CommunicationRecipientResolutionStatus.FAILED },
+    }),
+    prisma.communicationEvent.count({ where: { recipientsResolvedAt: { not: null } } }),
+    prisma.communicationEvent.count({ where: { recipientsResolvedAt: null } }),
     prisma.caseEvent.findFirst({
       orderBy: { detectedAt: "desc" },
       select: { detectedAt: true },
@@ -79,6 +114,16 @@ async function main(): Promise<void> {
         sentDigests,
         failedDigests,
         digestItems,
+        communicationCursors,
+        communicationEvents,
+        unprocessedCommunicationEvents,
+        latestCommunicationEvent,
+        communicationEventRecipients,
+        readyCommunicationRecipients,
+        fallbackCommunicationRecipients,
+        failedCommunicationRecipients,
+        recipientResolvedEvents,
+        recipientUnresolvedEvents,
         latestEventDetectedAt: latestEvent?.detectedAt ?? null,
         workerLastHeartbeatAt: worker?.lastHeartbeatAt ?? null,
         workerLastSyncAt: worker?.lastSyncAt ?? null,

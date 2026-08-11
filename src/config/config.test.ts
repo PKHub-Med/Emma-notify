@@ -81,7 +81,15 @@ describe("loadWorkerConfig", () => {
       productionEmailsEnabled: false,
       linkTtlDays: 30,
       publicBaseUrl: "https://notify.example.org",
+      tiemedFallbackEmail: null,
     });
+  });
+
+  it("accepts an optional Tiemed fallback email", () => {
+    expect(loadWorkerConfig({
+      ...workerEnvironment,
+      TIEMED_FALLBACK_EMAIL: "fallback@example.test",
+    }).tiemedFallbackEmail).toBe("fallback@example.test");
   });
 
   it("never includes secret values in validation errors", () => {

@@ -28,6 +28,11 @@ import type {
   StoredCase,
 } from "./incremental-store.js";
 import { runWatchdog } from "./watchdog.js";
+import type {
+  CommunicationEventStore,
+  CommunicationObservation,
+  CommunicationObservationResult,
+} from "./communication-event.js";
 
 const CHECKPOINT = new Date("2026-08-08T09:00:00.000Z");
 
@@ -195,7 +200,83 @@ class MemoryStore implements IncrementalStore {
   async setWorkerLastSync(_at: Date): Promise<void> {}
 }
 
+class RecordingCommunicationStore implements CommunicationEventStore {
+  readonly observations: CommunicationObservation[] = [];
+
+  async isBaselineCompleted(): Promise<boolean> {
+    return true;
+  }
+
+  async markBaselineCompleted(): Promise<void> {}
+
+  async observe(
+    observation: CommunicationObservation,
+    _allowEvent: boolean,
+    _detectedAt: Date,
+  ): Promise<CommunicationObservationResult> {
+    this.observations.push(observation);
+    return { outcome: "CREATED", revision: 0, fingerprint: "fingerprint" };
+  }
+}
+
 describe("incremental status sync", () => {
+  it("does not create an event or buffer when legacy notifications are disabled", async () => {
+    const fixture = serviceFixture("A", "B", [
+      eligibleContact("recContact", "one@example.com"),
+    ]);
+
+    const stats = await runIncrementalSync({
+      airtable: fixture.source,
+      store: fixture.store,
+      options: {
+        overlapSeconds: 120,
+        quietMinutes: 1,
+        legacyNotificationsEnabled: false,
+      },
+      now: () => date(0),
+    });
+
+    expect(fixture.store.events).toHaveLength(0);
+    expect(fixture.store.buffers).toHaveLength(0);
+    expect(stats).toMatchObject({ eventsCreated: 0, buffersCreated: 0 });
+    expect(fixture.store.cases.get(caseKey(CaseType.SERVICE_ORDER, "recService")))
+      .toMatchObject({ currentStatus: "B" });
+  });
+
+  it("creates only a CommunicationEvent candidate for a supported EMMA pair", async () => {
+    const source = new FakeAirtable();
+    const store = new MemoryStore();
+    const communicationStore = new RecordingCommunicationStore();
+    source.serviceOrders = [serviceRecord(
+      "recService",
+      "Legacy changed",
+      [],
+      date(0),
+      {
+        [SERVICE_ORDER_FIELDS.emmaCustomerStatus]: "Diagnostyka",
+        [SERVICE_ORDER_FIELDS.emmaMailTemplate]: "Naprawa-zmiana_stanu",
+      },
+    )];
+
+    const stats = await runIncrementalSync({
+      airtable: source,
+      store,
+      communicationStore,
+      options: {
+        overlapSeconds: 120,
+        quietMinutes: 1,
+        legacyNotificationsEnabled: false,
+      },
+      now: () => date(0),
+    });
+
+    expect(communicationStore.observations).toHaveLength(1);
+    expect(communicationStore.observations[0]?.scenario).toBe("REPAIR_RECEIVED");
+    expect(stats.communicationEventsCreated).toBe(1);
+    expect(store.events).toHaveLength(0);
+    expect(store.buffers).toHaveLength(0);
+  });
+
   it("A. creates SERVICE_STATUS_CHANGED for service status A to B", async () => {
     const fixture = serviceFixture("A", "B");
     await fixture.run();
@@ -432,7 +513,11 @@ function run(source: FakeAirtable, store: MemoryStore, now: Date) {
   return runIncrementalSync({
     airtable: source,
     store,
-    options: { overlapSeconds: 120, quietMinutes: 1 },
+    options: {
+      overlapSeconds: 120,
+      quietMinutes: 1,
+      legacyNotificationsEnabled: true,
+    },
     now: () => now,
   });
 }
@@ -442,11 +527,13 @@ function serviceRecord(
   status: string,
   contactIds: string[] = [],
   modifiedAt = date(0),
+  extraFields: Record<string, unknown> = {},
 ): AirtableRecord {
   return record(id, {
     [SERVICE_ORDER_FIELDS.customerStatus]: status,
     [SERVICE_ORDER_FIELDS.contactLinks]: contactIds,
     [SERVICE_ORDER_FIELDS.sourceModifiedAt]: modifiedAt.toISOString(),
+    ...extraFields,
   });
 }
 

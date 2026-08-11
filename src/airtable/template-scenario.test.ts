@@ -1,40 +1,82 @@
 import { describe, expect, it } from "vitest";
 import {
-  EMMA_MAIL_SCENARIOS,
-  mapEmmaMailTemplate,
+  COMMUNICATION_SCENARIOS,
+  EMMA_COMMUNICATION_CONTRACT,
+  resolveCommunicationScenario,
 } from "./template-scenario.js";
 
-describe("EMMA mail template mapping", () => {
+describe("communication scenario resolver", () => {
   it.each([
-    ["Naprawa-zmiana_stanu", EMMA_MAIL_SCENARIOS.REPAIR_STATUS_CHANGE],
     [
-      "Przegląd-informacja_o_nadchodzącej_wizycie",
-      EMMA_MAIL_SCENARIOS.INSPECTION_DATE_PROPOSED,
+      "SERVICE_ORDER",
+      EMMA_COMMUNICATION_CONTRACT.repair.receivedState,
+      EMMA_COMMUNICATION_CONTRACT.repair.template,
+      COMMUNICATION_SCENARIOS.REPAIR_RECEIVED,
     ],
     [
-      "Przegląd-informacja_o_umówionej_wizycie",
-      EMMA_MAIL_SCENARIOS.INSPECTION_DATE_CONFIRMED,
+      "SERVICE_ORDER",
+      EMMA_COMMUNICATION_CONTRACT.repair.completedState,
+      EMMA_COMMUNICATION_CONTRACT.repair.template,
+      COMMUNICATION_SCENARIOS.REPAIR_COMPLETED,
     ],
     [
-      "Przegląd-przypomnienie_o_wizycie",
-      EMMA_MAIL_SCENARIOS.INSPECTION_REMINDER,
+      "TASK",
+      EMMA_COMMUNICATION_CONTRACT.inspection.dateProposed.state,
+      EMMA_COMMUNICATION_CONTRACT.inspection.dateProposed.template,
+      COMMUNICATION_SCENARIOS.INSPECTION_DATE_PROPOSED,
     ],
     [
-      "Przegląd-podsumowanie_wizyty",
-      EMMA_MAIL_SCENARIOS.INSPECTION_COMPLETED,
+      "TASK",
+      EMMA_COMMUNICATION_CONTRACT.inspection.dateConfirmed.state,
+      EMMA_COMMUNICATION_CONTRACT.inspection.dateConfirmed.template,
+      COMMUNICATION_SCENARIOS.INSPECTION_DATE_CONFIRMED,
     ],
-  ])("maps %s to %s", (template, scenario) => {
-    expect(mapEmmaMailTemplate(template)).toBe(scenario);
+    [
+      "TASK",
+      EMMA_COMMUNICATION_CONTRACT.inspection.reminder.state,
+      EMMA_COMMUNICATION_CONTRACT.inspection.reminder.template,
+      COMMUNICATION_SCENARIOS.INSPECTION_REMINDER,
+    ],
+    [
+      "TASK",
+      EMMA_COMMUNICATION_CONTRACT.inspection.completed.state,
+      EMMA_COMMUNICATION_CONTRACT.inspection.completed.template,
+      COMMUNICATION_SCENARIOS.INSPECTION_COMPLETED,
+    ],
+  ] as const)("resolves %s / %s", (sourceEntityType, state, template, expected) => {
+    expect(resolveCommunicationScenario({
+      sourceEntityType,
+      emmaCustomerStatus: state,
+      emmaMailTemplate: template,
+    })).toBe(expected);
   });
 
-  it.each(["", "Nieznany-template", null, undefined])(
-    "returns no mapping for unsupported value %s",
-    (template) => {
-      expect(mapEmmaMailTemplate(template)).toBeNull();
+  it("returns null for an unknown non-empty pair", () => {
+    expect(resolveCommunicationScenario({
+      sourceEntityType: "TASK",
+      emmaCustomerStatus: "Nieznany stan",
+      emmaMailTemplate: "Nieznany-template",
+    })).toBeNull();
+  });
+
+  it.each(["", "   ", null, undefined])(
+    "returns null for blank template %s",
+    (emmaMailTemplate) => {
+      expect(resolveCommunicationScenario({
+        sourceEntityType: "TASK",
+        emmaCustomerStatus: "Ustalono termin wizyty",
+        emmaMailTemplate,
+      })).toBeNull();
     },
   );
 
-  it("does not fall back to a default scenario", () => {
-    expect(mapEmmaMailTemplate("Naprawa-inny_template")).toBeNull();
+  it("does not resolve an inspection pair for a service order", () => {
+    expect(resolveCommunicationScenario({
+      sourceEntityType: "SERVICE_ORDER",
+      emmaCustomerStatus:
+        EMMA_COMMUNICATION_CONTRACT.inspection.dateConfirmed.state,
+      emmaMailTemplate:
+        EMMA_COMMUNICATION_CONTRACT.inspection.dateConfirmed.template,
+    })).toBeNull();
   });
 });
