@@ -3,6 +3,7 @@ import {
   AIRTABLE_TABLE_IDS,
   EMPLOYEE_FIELDS,
   HOSPITAL_FIELDS,
+  SERVICE_ORDER_FIELDS,
   TASK_FIELDS,
 } from "./field-ids.js";
 
@@ -44,6 +45,13 @@ describe("central Airtable contract", () => {
       businessPhone: "fldhdaEbQTNF4QFiU",
       photo: "fldwS6s82oI4xHMFW",
     });
+  });
+
+  it("keeps the legacy service status and exposes the confirmed EMMA fields", () => {
+    expect(SERVICE_ORDER_FIELDS.caseSubtype).toBe("fldZUjAkbnVhSIfrV");
+    expect(SERVICE_ORDER_FIELDS.customerStatus).toBe("fldN0dGXaGv40EHsk");
+    expect(SERVICE_ORDER_FIELDS.emmaCustomerStatus).toBe("fldOi8KDzJ1zwMaWJ");
+    expect(SERVICE_ORDER_FIELDS.emmaMailTemplate).toBe("fldfqDFr9bJ4DiMRe");
   });
 
   it("contains the confirmed hospital Field IDs", () => {

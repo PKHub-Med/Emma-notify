@@ -59,12 +59,11 @@ export const SERVICE_ORDER_FIELDS = {
   faultDescription: "fldLup2XatqzfVk0T",
   contactLinks: "fldv7yrcmRzlfnoqQ",
   sourceModifiedAt: "fldNWAcmc0wkX2M9M",
+  // Legacy "Stan dla klienta" used by the current production worker.
   customerStatus: "fldN0dGXaGv40EHsk",
+  emmaCustomerStatus: "fldOi8KDzJ1zwMaWJ",
+  emmaMailTemplate: "fldfqDFr9bJ4DiMRe",
 } as const;
-
-// SERVICE_ORDER_FIELDS.customerStatus is the existing customer-facing status.
-// TODO: Add the service-order "EMMA: mail template" Field ID when Airtable
-// provides a confirmed ID. Do not infer it from the task table or field names.
 
 export const INSPECTION_FIELDS = {
   businessNumber: "fldKnHp3xigYDqo5U",
