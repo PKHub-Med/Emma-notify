@@ -13,8 +13,30 @@ import {
   PrismaRecipientResolutionStore,
   resolvePendingCommunicationRecipients,
 } from "./recipient-resolution.js";
+import {
+  PrismaCommunicationDeliveryStore,
+  runCommunicationDeliveryPlanner,
+} from "./communication-delivery.js";
+import { createResendClient } from "../email/resend-client.js";
+import {
+  PortalAccessGrantService,
+  PrismaPortalAccessGrantStore,
+} from "../portal-access/service.js";
+import {
+  PrismaCommunicationTemplateDataSource,
+} from "./communication-template-data.js";
+import {
+  PrismaCommunicationEmailSendStore,
+  runCommunicationEmailSender,
+} from "./communication-email-sender.js";
+import {
+  CommunicationUnsubscribeGrantService,
+  PrismaUnsubscribeGrantStore,
+} from "../communication-unsubscribe/service.js";
 
 const HEARTBEAT_INTERVAL_MS = 30_000;
+const DELIVERY_PLANNER_INTERVAL_MS = 15_000;
+const COMMUNICATION_EMAIL_INTERVAL_MS = 15_000;
 const WORKER_ID = "main";
 
 const config = loadWorkerConfig(process.env);
@@ -28,13 +50,40 @@ const incrementalStore = new PrismaIncrementalStore(prisma);
 const taskSyncStore = new PrismaTaskSyncStore(prisma);
 const communicationStore = new PrismaCommunicationEventStore(prisma);
 const recipientResolutionStore = new PrismaRecipientResolutionStore(prisma);
+const communicationDeliveryStore = new PrismaCommunicationDeliveryStore(prisma);
+const communicationEmailStore = new PrismaCommunicationEmailSendStore(prisma);
+const communicationTemplateDataSource = new PrismaCommunicationTemplateDataSource(
+  prisma,
+  airtable,
+);
+const portalAccessGrants = new PortalAccessGrantService(
+  new PrismaPortalAccessGrantStore(prisma),
+  {
+    signingSecret: config.accessLinkSigningSecret,
+    publicBaseUrl: config.publicBaseUrl,
+    ttlDays: config.linkTtlDays,
+  },
+);
+const communicationUnsubscribeGrants = new CommunicationUnsubscribeGrantService(
+  new PrismaUnsubscribeGrantStore(prisma),
+  {
+    signingSecret: config.accessLinkSigningSecret,
+    publicBaseUrl: config.publicBaseUrl,
+    ttlDays: config.linkTtlDays,
+  },
+);
+const communicationEmailProvider = createResendClient(config.resendApiKey);
 let heartbeatTimer: NodeJS.Timeout | undefined;
 let incrementalTimer: NodeJS.Timeout | undefined;
 let taskTimer: NodeJS.Timeout | undefined;
 let recipientResolutionTimer: NodeJS.Timeout | undefined;
+let deliveryPlannerTimer: NodeJS.Timeout | undefined;
+let communicationEmailTimer: NodeJS.Timeout | undefined;
 let incrementalRunning = false;
 let taskRunning = false;
 let recipientResolutionRunning = false;
+let deliveryPlannerRunning = false;
+let communicationEmailRunning = false;
 let shuttingDown = false;
 
 async function writeHeartbeat(): Promise<void> {
@@ -100,9 +149,62 @@ function startPollingLoops(): void {
   recipientResolutionTimer = setInterval(() => {
     void pollRecipientResolution();
   }, config.airtablePollSeconds * 1_000);
+  deliveryPlannerTimer = setInterval(() => {
+    void pollDeliveryPlanner();
+  }, DELIVERY_PLANNER_INTERVAL_MS);
+  communicationEmailTimer = setInterval(() => {
+    void pollCommunicationEmail();
+  }, COMMUNICATION_EMAIL_INTERVAL_MS);
   void pollIncremental();
   void pollTasks();
   void pollRecipientResolution();
+  void pollDeliveryPlanner();
+  void pollCommunicationEmail();
+}
+
+async function pollCommunicationEmail(): Promise<void> {
+  if (communicationEmailRunning || shuttingDown) return;
+  communicationEmailRunning = true;
+  try {
+    await runCommunicationEmailSender({
+      store: communicationEmailStore,
+      provider: communicationEmailProvider,
+      grants: portalAccessGrants,
+      unsubscribeGrants: communicationUnsubscribeGrants,
+      dataSource: communicationTemplateDataSource,
+      config: {
+        communicationEmailsEnabled: config.communicationEmailsEnabled,
+        communicationSendNotBefore: config.communicationSendNotBefore,
+        mode: config.emailMode,
+        testEmail: config.testEmail,
+        productionEmailsEnabled: config.productionEmailsEnabled,
+        resendApiKey: config.resendApiKey,
+        replyTo: config.emailReplyTo,
+        timeZone: config.communicationTimezone,
+      },
+      log: (message) => console.info(message),
+    });
+  } catch {
+    console.error("[communication-email] sender failed; next poll will retry");
+  } finally {
+    communicationEmailRunning = false;
+  }
+}
+
+async function pollDeliveryPlanner(): Promise<void> {
+  if (deliveryPlannerRunning || shuttingDown) return;
+  deliveryPlannerRunning = true;
+  try {
+    await runCommunicationDeliveryPlanner({
+      store: communicationDeliveryStore,
+      timeZone: config.communicationTimezone,
+      log: (message) => console.info(message),
+    });
+  } catch {
+    console.error("[communication-delivery] planner failed; next poll will retry");
+  } finally {
+    deliveryPlannerRunning = false;
+  }
 }
 
 async function pollRecipientResolution(): Promise<void> {
@@ -170,6 +272,8 @@ async function shutdown(signal: NodeJS.Signals): Promise<void> {
   if (incrementalTimer) clearInterval(incrementalTimer);
   if (taskTimer) clearInterval(taskTimer);
   if (recipientResolutionTimer) clearInterval(recipientResolutionTimer);
+  if (deliveryPlannerTimer) clearInterval(deliveryPlannerTimer);
+  if (communicationEmailTimer) clearInterval(communicationEmailTimer);
   await prisma.$disconnect();
   console.info("[worker] Shutdown complete");
 }

@@ -1,8 +1,9 @@
 import { Resend } from "resend";
 
 export type ProviderEmailRequest = {
-  from: string;
+  from?: string;
   to: string;
+  replyTo?: string;
   subject?: string;
   template: {
     id: string;
@@ -25,8 +26,9 @@ export function createResendClient(apiKey: string | null): EmailProvider {
     async send(request) {
       const response = await resend.emails.send(
         {
-          from: request.from,
           to: request.to,
+          ...(request.from ? { from: request.from } : {}),
+          ...(request.replyTo ? { replyTo: request.replyTo } : {}),
           ...(request.subject ? { subject: request.subject } : {}),
           template: request.template,
         },

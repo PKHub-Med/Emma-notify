@@ -7,6 +7,14 @@ import {
 import { loadApiConfig } from "../config/api.js";
 import { createPrismaClient } from "../db/prisma.js";
 import { createApp } from "./app.js";
+import {
+  PrismaPublicPortalAccessStore,
+  PublicPortalAccessService,
+} from "../portal-access/public.js";
+import {
+  PrismaPublicUnsubscribeStore,
+  PublicUnsubscribeService,
+} from "../communication-unsubscribe/public.js";
 
 const config = loadApiConfig(process.env);
 const prisma = createPrismaClient(config.databaseUrl);
@@ -14,7 +22,15 @@ const accessLinks = new PublicAccessLinkService(
   new PrismaPublicAccessLinkStore(prisma),
   config.accessLinkSigningSecret,
 );
-const app = createApp(prisma, accessLinks);
+const portalAccess = new PublicPortalAccessService(
+  new PrismaPublicPortalAccessStore(prisma),
+  config.accessLinkSigningSecret,
+);
+const unsubscribe = new PublicUnsubscribeService(
+  new PrismaPublicUnsubscribeStore(prisma),
+  config.accessLinkSigningSecret,
+);
+const app = createApp(prisma, accessLinks, portalAccess, unsubscribe);
 
 let server: Server | undefined;
 let shuttingDown = false;

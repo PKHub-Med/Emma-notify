@@ -33,7 +33,7 @@ export type CommunicationEventRecipientInput = {
 };
 
 export interface RecipientResolutionStore {
-  findUnresolved(limit: number): Promise<RecipientResolutionEvent[]>;
+  findUnresolved(now: Date, limit: number): Promise<RecipientResolutionEvent[]>;
   markResolved(
     eventId: string,
     recipients: readonly CommunicationEventRecipientInput[],
@@ -44,15 +44,24 @@ export interface RecipientResolutionStore {
     recipientType: CommunicationRecipientType,
     sourceContactRecordId: string | null,
     reason: string,
+    failedAt: Date,
   ): Promise<void>;
+  isOptedOut(sourceHospitalRecordId: string, normalizedEmail: string): Promise<boolean>;
 }
 
 export class PrismaRecipientResolutionStore implements RecipientResolutionStore {
   constructor(private readonly prisma: PrismaClient) {}
 
-  async findUnresolved(limit: number): Promise<RecipientResolutionEvent[]> {
+  async findUnresolved(now: Date, limit: number): Promise<RecipientResolutionEvent[]> {
     return this.prisma.communicationEvent.findMany({
-      where: { recipientsResolvedAt: null, processedAt: null },
+      where: {
+        recipientsResolvedAt: null,
+        processedAt: null,
+        OR: [
+          { nextRecipientResolutionAt: null },
+          { nextRecipientResolutionAt: { lte: now } },
+        ],
+      },
       orderBy: { detectedAt: "asc" },
       take: limit,
       select: {
@@ -89,7 +98,7 @@ export class PrismaRecipientResolutionStore implements RecipientResolutionStore 
       }
       await transaction.communicationEvent.update({
         where: { id: eventId },
-        data: { recipientsResolvedAt: at },
+        data: { recipientsResolvedAt: at, nextRecipientResolutionAt: null },
       });
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
   }
@@ -99,8 +108,15 @@ export class PrismaRecipientResolutionStore implements RecipientResolutionStore 
     recipientType: CommunicationRecipientType,
     sourceContactRecordId: string | null,
     reason: string,
+    failedAt: Date,
   ): Promise<void> {
     await this.prisma.$transaction(async (transaction) => {
+      const event = await transaction.communicationEvent.findUniqueOrThrow({
+        where: { id: eventId },
+        select: { recipientResolutionAttemptCount: true },
+      });
+      const attemptCount = event.recipientResolutionAttemptCount + 1;
+      const backoffSeconds = recipientResolutionBackoffSeconds(attemptCount);
       await transaction.communicationEventRecipient.deleteMany({
         where: { communicationEventId: eventId },
       });
@@ -116,7 +132,23 @@ export class PrismaRecipientResolutionStore implements RecipientResolutionStore 
           resolutionReason: reason,
         },
       });
+      await transaction.communicationEvent.update({
+        where: { id: eventId },
+        data: {
+          recipientResolutionAttemptCount: attemptCount,
+          nextRecipientResolutionAt: new Date(
+            failedAt.getTime() + backoffSeconds * 1_000,
+          ),
+        },
+      });
     });
+  }
+
+  async isOptedOut(sourceHospitalRecordId: string, normalizedEmail: string): Promise<boolean> {
+    return Boolean(await this.prisma.communicationOptOut.findUnique({
+      where: { sourceHospitalRecordId_normalizedEmail: { sourceHospitalRecordId, normalizedEmail } },
+      select: { id: true },
+    }));
   }
 }
 
@@ -127,7 +159,10 @@ export async function resolvePendingCommunicationRecipients(input: {
   now?: () => Date;
   log?: (message: string) => void;
 }): Promise<number> {
-  const events = await input.store.findUnresolved(RESOLUTION_LIMIT);
+  const events = await input.store.findUnresolved(
+    (input.now ?? (() => new Date()))(),
+    RESOLUTION_LIMIT,
+  );
   for (const event of events) {
     await resolveCommunicationEventRecipients({ ...input, event });
   }
@@ -144,6 +179,8 @@ export async function resolveCommunicationEventRecipients(input: {
 }): Promise<void> {
   const contactRecordIds = contactIdsFromSnapshot(input.event);
   const recipients: CommunicationEventRecipientInput[] = [];
+  const sourceHospitalRecordId = snapshotString(input.event.eventSnapshot, "sourceHospitalRecordId");
+  let validClientEmailCount = 0;
 
   for (const contactRecordId of contactRecordIds) {
     let contactRecord;
@@ -159,6 +196,7 @@ export async function resolveCommunicationEventRecipients(input: {
         CommunicationRecipientType.CLIENT,
         contactRecordId,
         "AIRTABLE_CONTACT_READ_FAILED",
+        (input.now ?? (() => new Date()))(),
       );
       input.log?.(
         `COMMUNICATION_RECIPIENT_RESOLUTION_FAILED eventId=${input.event.id} reason=AIRTABLE_CONTACT_READ_FAILED`,
@@ -180,8 +218,20 @@ export async function resolveCommunicationEventRecipients(input: {
       continue;
     }
     if (recipients.some((recipient) =>
-      recipient.resolutionStatus === CommunicationRecipientResolutionStatus.READY &&
       recipient.normalizedEmail === resolved.normalizedEmail)) continue;
+    validClientEmailCount += 1;
+    if (sourceHospitalRecordId && await input.store.isOptedOut(sourceHospitalRecordId, resolved.normalizedEmail)) {
+      recipients.push({
+        recipientType: CommunicationRecipientType.CLIENT,
+        sourceContactRecordId: contactRecordId,
+        email: resolved.email,
+        normalizedEmail: resolved.normalizedEmail,
+        recipientKey: `OPTED_OUT:${resolved.normalizedEmail}`,
+        resolutionStatus: CommunicationRecipientResolutionStatus.INVALID,
+        resolutionReason: "OPTED_OUT",
+      });
+      continue;
+    }
     recipients.push({
       recipientType: CommunicationRecipientType.CLIENT,
       sourceContactRecordId: contactRecordId,
@@ -196,13 +246,14 @@ export async function resolveCommunicationEventRecipients(input: {
   const readyCount = recipients.filter((recipient) =>
     recipient.resolutionStatus === CommunicationRecipientResolutionStatus.READY).length;
   let fallback = false;
-  if (readyCount === 0) {
+  if (readyCount === 0 && validClientEmailCount === 0) {
     if (!input.tiemedFallbackEmail) {
       await input.store.markFailed(
         input.event.id,
         CommunicationRecipientType.TIEMED_FALLBACK,
         null,
         "FALLBACK_MISSING",
+        (input.now ?? (() => new Date()))(),
       );
       input.log?.(
         `COMMUNICATION_RECIPIENT_FALLBACK_MISSING eventId=${input.event.id} scenario=${input.event.scenario}`,
@@ -234,6 +285,12 @@ export async function resolveCommunicationEventRecipients(input: {
   );
 }
 
+function snapshotString(snapshot: unknown, key: string): string | null {
+  if (!isObject(snapshot)) return null;
+  const value = snapshot[key];
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
 function contactIdsFromSnapshot(event: RecipientResolutionEvent): string[] {
   if (!isObject(event.eventSnapshot)) return [];
   const field = event.sourceEntityType === CommunicationSourceEntityType.TASK
@@ -247,4 +304,8 @@ function contactIdsFromSnapshot(event: RecipientResolutionEvent): string[] {
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+export function recipientResolutionBackoffSeconds(attemptCount: number): number {
+  return Math.min(15 * 2 ** Math.max(0, attemptCount - 1), 15 * 60);
 }

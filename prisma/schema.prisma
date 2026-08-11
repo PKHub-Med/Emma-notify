@@ -80,6 +80,28 @@ enum CommunicationRecipientResolutionStatus {
   FAILED
 }
 
+enum CommunicationDeliveryStatus {
+  SCHEDULED
+  READY
+  SENDING
+  SENT
+  FAILED
+  CANCELLED
+}
+
+enum CommunicationDeliveryScheduleReason {
+  EVENT_DRIVEN
+  REMINDER_0600
+}
+
+enum CommunicationDeliveryCancelReason {
+  REMINDER_EXPIRED
+  SOURCE_STATE_CHANGED
+  INVALID_REMINDER_DATE
+  PRE_ACTIVATION
+  RECIPIENT_OPTED_OUT
+}
+
 model TrackedCase {
   id                  String          @id @default(cuid())
   caseType            CaseType
@@ -172,10 +194,14 @@ model CommunicationEvent {
   createdAt        DateTime                      @default(now())
   processedAt      DateTime?
   recipientsResolvedAt DateTime?
+  recipientResolutionAttemptCount Int @default(0)
+  nextRecipientResolutionAt DateTime?
   recipients       CommunicationEventRecipient[]
+  deliveries       CommunicationDelivery[]
 
   @@index([sourceEntityType, sourceRecordId, detectedAt])
   @@index([scenario, processedAt, detectedAt])
+  @@index([processedAt, recipientsResolvedAt, nextRecipientResolutionAt])
 }
 
 model CommunicationEventRecipient {
@@ -190,10 +216,90 @@ model CommunicationEventRecipient {
   resolutionReason      String?
   createdAt             DateTime                                @default(now())
   communicationEvent    CommunicationEvent                      @relation(fields: [communicationEventId], references: [id], onDelete: Cascade)
+  delivery              CommunicationDelivery?
 
   @@unique([communicationEventId, normalizedEmail])
   @@unique([communicationEventId, recipientKey])
   @@index([communicationEventId, resolutionStatus])
+}
+
+model CommunicationDelivery {
+  id                            String                              @id @default(cuid())
+  communicationEventId          String
+  communicationEventRecipientId String                              @unique
+  scenario                      CommunicationScenario
+  status                        CommunicationDeliveryStatus
+  scheduledFor                  DateTime
+  readyAt                       DateTime?
+  deliveryKey                   String                              @unique
+  scheduleReason                CommunicationDeliveryScheduleReason
+  cancelReason                  CommunicationDeliveryCancelReason?
+  attemptCount                  Int                                 @default(0)
+  nextRetryAt                   DateTime?
+  createdAt                     DateTime                            @default(now())
+  updatedAt                     DateTime                            @updatedAt
+  sentAt                        DateTime?
+  failedAt                      DateTime?
+  resendMessageId               String?
+  sendingStartedAt              DateTime?
+  preparedAt                    DateTime?
+  sendSnapshot                  Json?
+  emailMode                     String?
+  actualRecipientEmail          String?
+  lastError                     String?
+  communicationEvent            CommunicationEvent                  @relation(fields: [communicationEventId], references: [id], onDelete: Cascade)
+  communicationEventRecipient   CommunicationEventRecipient         @relation(fields: [communicationEventRecipientId], references: [id], onDelete: Cascade)
+  portalAccessGrant             PortalAccessGrant?
+  unsubscribeGrant             CommunicationUnsubscribeGrant?
+
+  @@unique([communicationEventId, communicationEventRecipientId])
+  @@index([status, scheduledFor])
+  @@index([scenario, status, scheduledFor])
+}
+
+model CommunicationUnsubscribeGrant {
+  id                      String                @id @default(cuid())
+  publicId                String                @unique
+  communicationDeliveryId String                @unique
+  sourceHospitalRecordId  String
+  normalizedEmail         String?
+  canOptOut               Boolean
+  expiresAt               DateTime
+  createdAt               DateTime              @default(now())
+  updatedAt               DateTime              @updatedAt
+  communicationDelivery   CommunicationDelivery @relation(fields: [communicationDeliveryId], references: [id], onDelete: Cascade)
+
+  @@index([sourceHospitalRecordId, normalizedEmail])
+  @@index([expiresAt])
+}
+
+model CommunicationOptOut {
+  id                      String   @id @default(cuid())
+  sourceHospitalRecordId  String
+  normalizedEmail         String
+  createdAt               DateTime @default(now())
+
+  @@unique([sourceHospitalRecordId, normalizedEmail])
+  @@index([normalizedEmail])
+}
+
+model PortalAccessGrant {
+  id                      String                @id @default(cuid())
+  publicId                String                @unique
+  communicationDeliveryId String                @unique
+  sourceHospitalRecordId  String
+  entryContext            Json
+  expiresAt               DateTime
+  revokedAt               DateTime?
+  lastOpenedAt            DateTime?
+  openCount               Int                   @default(0)
+  createdAt               DateTime              @default(now())
+  updatedAt               DateTime              @updatedAt
+  communicationDelivery   CommunicationDelivery @relation(fields: [communicationDeliveryId], references: [id], onDelete: Cascade)
+
+  @@index([sourceHospitalRecordId])
+  @@index([expiresAt])
+  @@index([revokedAt])
 }
 
 model CaseRecipient {

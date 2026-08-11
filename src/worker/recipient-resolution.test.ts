@@ -8,7 +8,9 @@ import {
 import { CONTACT_FIELDS } from "../airtable/field-ids.js";
 import type { AirtableIncrementalSource, AirtableRecord } from "../airtable/types.js";
 import {
+  recipientResolutionBackoffSeconds,
   resolveCommunicationEventRecipients,
+  resolvePendingCommunicationRecipients,
   type CommunicationEventRecipientInput,
   type RecipientResolutionEvent,
   type RecipientResolutionStore,
@@ -100,6 +102,20 @@ describe("SERVICE_ORDER recipient resolution", () => {
 });
 
 describe("fallback and failures", () => {
+  it("does not create CLIENT or fallback when every valid client opted out", async () => {
+    const store = new MemoryStore();
+    store.optedOut.add("recHospital:a@x.pl");
+    await resolveCommunicationEventRecipients({
+      event: taskEvent(["recA"], { sourceHospitalRecordId: "recHospital" }),
+      airtable: airtableSource({ recA: contact("recA", "a@x.pl") }),
+      store,
+      tiemedFallbackEmail: fallbackEmail,
+    });
+    expect(ready(store)).toHaveLength(0);
+    expect(fallback(store)).toHaveLength(0);
+    expect(invalid(store)).toMatchObject([{ resolutionReason: "OPTED_OUT" }]);
+  });
+
   it("never adds fallback when at least one CLIENT is ready", async () => {
     const result = await resolveTask(["recA"], { recA: contact("recA", "a@x.pl") });
     expect(fallback(result.store)).toHaveLength(0);
@@ -166,11 +182,51 @@ describe("recipient resolution idempotency and safety", () => {
   });
 });
 
+describe("recipient resolution retry", () => {
+  it("backs off after Airtable failure and resolves when the retry succeeds", async () => {
+    const store = new RetryStore();
+    let calls = 0;
+    const airtable = {
+      fetchAllRecords: vi.fn(async () => []),
+      fetchRecord: vi.fn(async () => {
+        calls += 1;
+        if (calls === 1) throw new Error("temporary failure");
+        return contact("recA", "recovered@example.pl");
+      }),
+    } satisfies AirtableIncrementalSource;
+    let clock = new Date("2026-08-13T10:00:00Z");
+    const run = () => resolvePendingCommunicationRecipients({
+      airtable, store, tiemedFallbackEmail: fallbackEmail, now: () => clock,
+    });
+
+    await run();
+    expect(store.resolvedAt).toBeNull();
+    expect(store.nextAt?.toISOString()).toBe("2026-08-13T10:00:15.000Z");
+    clock = new Date("2026-08-13T10:00:14Z");
+    expect(await run()).toBe(0);
+    expect(calls).toBe(1);
+    clock = new Date("2026-08-13T10:00:15Z");
+    expect(await run()).toBe(1);
+    expect(store.resolvedAt).toEqual(clock);
+    expect(store.recipients[0]?.resolutionStatus).toBe(
+      CommunicationRecipientResolutionStatus.READY,
+    );
+  });
+
+  it("uses exponential backoff capped at 15 minutes", () => {
+    expect(recipientResolutionBackoffSeconds(1)).toBe(15);
+    expect(recipientResolutionBackoffSeconds(2)).toBe(30);
+    expect(recipientResolutionBackoffSeconds(100)).toBe(900);
+  });
+});
+
 class MemoryStore implements RecipientResolutionStore {
   recipients: CommunicationEventRecipientInput[] = [];
   resolvedAt: Date | null = null;
   failedReason: string | null = null;
   processedAtWrites = 0;
+  optedOut = new Set<string>();
+  async isOptedOut(hospital: string, email: string) { return this.optedOut.has(`${hospital}:${email}`); }
   async findUnresolved(): Promise<RecipientResolutionEvent[]> { return []; }
   async markResolved(_eventId: string, recipients: readonly CommunicationEventRecipientInput[], at: Date) {
     if (this.resolvedAt) return;
@@ -182,6 +238,7 @@ class MemoryStore implements RecipientResolutionStore {
     recipientType: CommunicationRecipientType,
     sourceContactRecordId: string | null,
     reason: string,
+    _failedAt: Date,
   ) {
     this.recipients = [{
       recipientType, sourceContactRecordId, email: null, normalizedEmail: null,
@@ -189,6 +246,30 @@ class MemoryStore implements RecipientResolutionStore {
       resolutionReason: reason,
     }];
     this.failedReason = reason;
+  }
+}
+
+class RetryStore extends MemoryStore {
+  nextAt: Date | null = null;
+  attempts = 0;
+
+  override async findUnresolved(now: Date): Promise<RecipientResolutionEvent[]> {
+    if (this.resolvedAt || (this.nextAt && this.nextAt.getTime() > now.getTime())) return [];
+    return [taskEvent(["recA"])];
+  }
+
+  override async markFailed(
+    eventId: string,
+    recipientType: CommunicationRecipientType,
+    sourceContactRecordId: string | null,
+    reason: string,
+    failedAt: Date,
+  ) {
+    await super.markFailed(eventId, recipientType, sourceContactRecordId, reason, failedAt);
+    this.attempts += 1;
+    this.nextAt = new Date(
+      failedAt.getTime() + recipientResolutionBackoffSeconds(this.attempts) * 1_000,
+    );
   }
 }
 

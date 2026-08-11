@@ -4,6 +4,7 @@ import {
   CaseType,
   DigestStatus,
   CommunicationRecipientResolutionStatus,
+  CommunicationDeliveryStatus,
 } from "../generated/prisma/enums.js";
 import { loadBaseConfig } from "../config/base.js";
 import { createPrismaClient } from "./prisma.js";
@@ -40,6 +41,16 @@ async function main(): Promise<void> {
     failedCommunicationRecipients,
     recipientResolvedEvents,
     recipientUnresolvedEvents,
+    communicationDeliveries,
+    readyCommunicationDeliveries,
+    scheduledCommunicationDeliveries,
+    cancelledCommunicationDeliveries,
+    sendingCommunicationDeliveries,
+    sentCommunicationDeliveries,
+    failedCommunicationDeliveries,
+    portalAccessGrants,
+    activePortalAccessGrants,
+    revokedPortalAccessGrants,
     latestEvent,
     worker,
   ] = await Promise.all([
@@ -84,6 +95,30 @@ async function main(): Promise<void> {
     }),
     prisma.communicationEvent.count({ where: { recipientsResolvedAt: { not: null } } }),
     prisma.communicationEvent.count({ where: { recipientsResolvedAt: null } }),
+    prisma.communicationDelivery.count(),
+    prisma.communicationDelivery.count({
+      where: { status: CommunicationDeliveryStatus.READY },
+    }),
+    prisma.communicationDelivery.count({
+      where: { status: CommunicationDeliveryStatus.SCHEDULED },
+    }),
+    prisma.communicationDelivery.count({
+      where: { status: CommunicationDeliveryStatus.CANCELLED },
+    }),
+    prisma.communicationDelivery.count({
+      where: { status: CommunicationDeliveryStatus.SENDING },
+    }),
+    prisma.communicationDelivery.count({
+      where: { status: CommunicationDeliveryStatus.SENT },
+    }),
+    prisma.communicationDelivery.count({
+      where: { status: CommunicationDeliveryStatus.FAILED },
+    }),
+    prisma.portalAccessGrant.count(),
+    prisma.portalAccessGrant.count({
+      where: { revokedAt: null, expiresAt: { gt: new Date() } },
+    }),
+    prisma.portalAccessGrant.count({ where: { revokedAt: { not: null } } }),
     prisma.caseEvent.findFirst({
       orderBy: { detectedAt: "desc" },
       select: { detectedAt: true },
@@ -124,6 +159,16 @@ async function main(): Promise<void> {
         failedCommunicationRecipients,
         recipientResolvedEvents,
         recipientUnresolvedEvents,
+        communicationDeliveries,
+        readyCommunicationDeliveries,
+        scheduledCommunicationDeliveries,
+        cancelledCommunicationDeliveries,
+        sendingCommunicationDeliveries,
+        sentCommunicationDeliveries,
+        failedCommunicationDeliveries,
+        portalAccessGrants,
+        activePortalAccessGrants,
+        revokedPortalAccessGrants,
         latestEventDetectedAt: latestEvent?.detectedAt ?? null,
         workerLastHeartbeatAt: worker?.lastHeartbeatAt ?? null,
         workerLastSyncAt: worker?.lastSyncAt ?? null,

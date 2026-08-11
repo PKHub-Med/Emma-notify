@@ -82,7 +82,40 @@ describe("loadWorkerConfig", () => {
       linkTtlDays: 30,
       publicBaseUrl: "https://notify.example.org",
       tiemedFallbackEmail: null,
+      communicationTimezone: "Europe/Warsaw",
+      communicationEmailsEnabled: false,
+      communicationSendNotBefore: null,
+      emailReplyTo: "serwis@tiemed.pl",
     });
+  });
+
+  it("parses communication activation safely without crashing on an invalid timestamp", () => {
+    expect(loadWorkerConfig({
+      ...workerEnvironment,
+      COMMUNICATION_EMAILS_ENABLED: "true",
+      COMMUNICATION_SEND_NOT_BEFORE: "2026-08-15T10:00:00.000Z",
+    }).communicationSendNotBefore?.toISOString()).toBe("2026-08-15T10:00:00.000Z");
+    expect(loadWorkerConfig({
+      ...workerEnvironment,
+      COMMUNICATION_EMAILS_ENABLED: "true",
+      COMMUNICATION_SEND_NOT_BEFORE: "invalid",
+    }).communicationSendNotBefore).toBeNull();
+  });
+
+  it("uses configurable Reply-To with the Tiemed default", () => {
+    expect(loadWorkerConfig(workerEnvironment).emailReplyTo).toBe("serwis@tiemed.pl");
+    expect(loadWorkerConfig({ ...workerEnvironment, EMAIL_REPLY_TO: "reply@example.test" }).emailReplyTo).toBe("reply@example.test");
+  });
+
+  it("accepts an IANA communication timezone and rejects an invalid one", () => {
+    expect(loadWorkerConfig({
+      ...workerEnvironment,
+      COMMUNICATION_TIMEZONE: "Europe/London",
+    }).communicationTimezone).toBe("Europe/London");
+    expect(() => loadWorkerConfig({
+      ...workerEnvironment,
+      COMMUNICATION_TIMEZONE: "UTC+2",
+    })).toThrow(/COMMUNICATION_TIMEZONE/);
   });
 
   it("accepts an optional Tiemed fallback email", () => {

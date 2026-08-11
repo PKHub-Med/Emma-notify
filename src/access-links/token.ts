@@ -18,11 +18,11 @@ export function signAccessLink(
   payload: SignedAccessLinkPayload,
   signingSecret: string,
 ): string {
-  assertSigningSecret(signingSecret);
-  const signature = createHmac("sha256", signingSecret)
-    .update(canonicalPayload(payload), "utf8")
-    .digest("base64url");
-  return `${payload.publicId}.${signature}`;
+  return signHmacBearerToken(
+    payload.publicId,
+    canonicalPayload(payload),
+    signingSecret,
+  );
 }
 
 export function verifyAccessLinkToken(
@@ -30,13 +30,44 @@ export function verifyAccessLinkToken(
   payload: SignedAccessLinkPayload,
   signingSecret: string,
 ): boolean {
+  return verifyHmacBearerToken(
+    token,
+    payload.publicId,
+    canonicalPayload(payload),
+    signingSecret,
+  );
+}
+
+export function signHmacBearerToken(
+  publicId: string,
+  canonicalPayload: string,
+  signingSecret: string,
+): string {
+  assertSigningSecret(signingSecret);
+  const signature = createHmac("sha256", signingSecret)
+    .update(canonicalPayload, "utf8")
+    .digest("base64url");
+  return `${publicId}.${signature}`;
+}
+
+export function verifyHmacBearerToken(
+  token: string,
+  expectedPublicId: string,
+  canonicalPayload: string,
+  signingSecret: string,
+): boolean {
   assertSigningSecret(signingSecret);
   const parsed = parseAccessLinkToken(token);
-  if (!parsed || parsed.publicId !== payload.publicId) return false;
-  const expected = signAccessLink(payload, signingSecret).split(".")[1];
+  if (!parsed || parsed.publicId !== expectedPublicId) return false;
+  const expectedToken = signHmacBearerToken(
+    expectedPublicId,
+    canonicalPayload,
+    signingSecret,
+  );
+  const expected = parseAccessLinkToken(expectedToken);
   if (!expected) return false;
   const actualBuffer = Buffer.from(parsed.signature, "base64url");
-  const expectedBuffer = Buffer.from(expected, "base64url");
+  const expectedBuffer = Buffer.from(expected.signature, "base64url");
   return actualBuffer.length === expectedBuffer.length &&
     timingSafeEqual(actualBuffer, expectedBuffer);
 }

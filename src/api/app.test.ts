@@ -9,6 +9,18 @@ import {
 } from "../access-links/public-page.js";
 import { signAccessLink } from "../access-links/token.js";
 import { createApp } from "./app.js";
+import {
+  PublicPortalAccessService,
+  type PublicPortalAccessGrant,
+  type PublicPortalAccessStore,
+} from "../portal-access/public.js";
+import { signPortalGrantToken } from "../portal-access/token.js";
+import { CommunicationScenario } from "../generated/prisma/enums.js";
+import {
+  PublicUnsubscribeService,
+  type PublicUnsubscribeStore,
+} from "../communication-unsubscribe/public.js";
+import { signUnsubscribeToken, type UnsubscribeTokenPayload } from "../communication-unsubscribe/token.js";
 
 const secret = "test-access-link-signing-secret-with-at-least-32-bytes";
 let server: Server | null = null;
@@ -46,6 +58,54 @@ describe("public API", () => {
     );
     expect(html).toContain('<meta name="robots" content="noindex,nofollow,noarchive">');
   });
+
+  it("serves a valid /p/:token with public-route security headers", async () => {
+    const grant = portalRecord();
+    const { baseUrl } = await startApp(new MemoryStore(null), grant);
+    const response = await fetch(`${baseUrl}/p/${signPortalGrantToken(grant, secret)}`);
+    expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(response.headers.get("x-robots-tag")).toBe(
+      "noindex, nofollow, noarchive",
+    );
+    expect(response.headers.get("referrer-policy")).toBe("no-referrer");
+    expect(response.headers.get("content-security-policy")).toContain(
+      "default-src 'none'",
+    );
+  });
+
+  it("redirects expired portal tokens to /link-expired", async () => {
+    const grant = portalRecord({ expiresAt: new Date(Date.now() - 1) });
+    const { baseUrl } = await startApp(new MemoryStore(null), grant);
+    const response = await fetch(
+      `${baseUrl}/p/${signPortalGrantToken(grant, secret)}`,
+      { redirect: "manual" },
+    );
+    expect(response.status).toBe(302);
+    expect(response.headers.get("location")).toBe("/link-expired");
+    const expiredPage = await fetch(`${baseUrl}/link-expired`);
+    expect(expiredPage.status).toBe(200);
+    expect(await expiredPage.text()).toContain("Ten link wygasł");
+  });
+
+  it("returns 404 for an invalid portal token", async () => {
+    const { baseUrl } = await startApp(new MemoryStore(null), portalRecord());
+    const response = await fetch(`${baseUrl}/p/invalid`);
+    expect(response.status).toBe(404);
+  });
+
+  it("GET unsubscribe only displays confirmation and POST records opt-out", async () => {
+    const record = unsubscribeRecord();
+    const unsubscribeStore = new MemoryUnsubscribeStore(record);
+    const { baseUrl } = await startApp(new MemoryStore(null), null, unsubscribeStore);
+    const token = signUnsubscribeToken(record, secret);
+    const get = await fetch(`${baseUrl}/u/${token}`);
+    expect(get.status).toBe(200);
+    expect(unsubscribeStore.optOuts).toHaveLength(0);
+    const post = await fetch(`${baseUrl}/u/${token}`, { method: "POST" });
+    expect(post.status).toBe(200);
+    expect(unsubscribeStore.optOuts).toEqual([["recHospital", "client@example.com"]]);
+  });
 });
 
 class MemoryStore implements PublicAccessLinkStore {
@@ -58,15 +118,66 @@ class MemoryStore implements PublicAccessLinkStore {
   async recordValidOpen(): Promise<boolean> { return true; }
 }
 
-async function startApp(store: PublicAccessLinkStore): Promise<{ baseUrl: string }> {
+class MemoryPortalStore implements PublicPortalAccessStore {
+  constructor(private readonly record: PublicPortalAccessGrant | null) {}
+  async findByPublicId(publicId: string) {
+    return this.record?.publicId === publicId ? this.record : null;
+  }
+  async recordValidOpen(): Promise<boolean> { return true; }
+}
+
+class MemoryUnsubscribeStore implements PublicUnsubscribeStore {
+  optOuts: Array<[string, string]> = [];
+  constructor(private readonly record: UnsubscribeTokenPayload | null) {}
+  async findByPublicId(id: string) { return this.record?.publicId === id ? this.record : null; }
+  async optOut(hospital: string, email: string) { this.optOuts.push([hospital, email]); }
+}
+
+async function startApp(
+  store: PublicAccessLinkStore,
+  portalGrant: PublicPortalAccessGrant | null = null,
+  unsubscribeStore: PublicUnsubscribeStore = new MemoryUnsubscribeStore(null),
+): Promise<{ baseUrl: string }> {
   const prisma = {
     $queryRaw: async () => [{ ok: 1 }],
   } as unknown as PrismaClient;
-  const app = createApp(prisma, new PublicAccessLinkService(store, secret));
+  const app = createApp(
+    prisma,
+    new PublicAccessLinkService(store, secret),
+    new PublicPortalAccessService(new MemoryPortalStore(portalGrant), secret),
+    new PublicUnsubscribeService(unsubscribeStore, secret),
+  );
   server = app.listen(0, "127.0.0.1");
   await new Promise<void>((resolve) => server?.once("listening", resolve));
   const address = server.address() as AddressInfo;
   return { baseUrl: `http://127.0.0.1:${address.port}` };
+}
+
+function unsubscribeRecord(): UnsubscribeTokenPayload {
+  return {
+    publicId: "unsubscribepublicid00001", communicationDeliveryId: "deliveryId",
+    sourceHospitalRecordId: "recHospital", normalizedEmail: "client@example.com",
+    canOptOut: true, expiresAt: new Date(Date.now() + 60_000),
+  };
+}
+
+function portalRecord(
+  overrides: Partial<PublicPortalAccessGrant> = {},
+): PublicPortalAccessGrant {
+  return {
+    id: "portalGrantId",
+    publicId: "portalpublicid0000000001",
+    communicationDeliveryId: "deliveryId",
+    sourceHospitalRecordId: "recHospital",
+    entryContext: {
+      type: "SERVICE_ORDER",
+      sourceRecordId: "recService",
+      scenario: CommunicationScenario.REPAIR_RECEIVED,
+    },
+    expiresAt: new Date(Date.now() + 60_000),
+    revokedAt: null,
+    ...overrides,
+  };
 }
 
 function accessRecord(): PublicAccessLinkRecord {
