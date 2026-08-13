@@ -17,14 +17,14 @@ import {
   type CommunicationEventStore,
 } from "./communication-event.js";
 
-export type TaskSyncMode = "BASELINE" | "INCREMENTAL" | "RECONCILE";
+export type TaskSyncMode = "BASELINE" | "INCREMENTAL" | "RECONCILE" | "REMINDER_ELIGIBILITY";
 export type TaskUpsertOutcome = "FIRST_SEEN" | "UNCHANGED" | "CHANGED";
 
 export interface TaskSyncStore {
   markRunning(at: Date): Promise<void>;
   getCheckpoint(): Promise<{ baselineCompletedAt: Date | null; lastSuccessfulSyncAt: Date | null } | null>;
   upsertTask(task: MappedTask, seenAt: Date): Promise<TaskUpsertOutcome>;
-  markSuccessful(at: Date, ensureBaseline: boolean): Promise<void>;
+  markSuccessful(at: Date, ensureBaseline: boolean, advanceCursor: boolean): Promise<void>;
   markFailed(at: Date): Promise<void>;
 }
 
@@ -75,13 +75,13 @@ export class PrismaTaskSyncStore implements TaskSyncStore {
     });
   }
 
-  async markSuccessful(at: Date, ensureBaseline: boolean): Promise<void> {
+  async markSuccessful(at: Date, ensureBaseline: boolean, advanceCursor: boolean): Promise<void> {
     const current = await this.getCheckpoint();
     await this.prisma.syncState.update({
       where: { source_entityType: { source: "AIRTABLE", entityType: SyncEntityType.TASK } },
       data: {
         status: SyncStatus.IDLE,
-        lastSuccessfulSyncAt: at,
+        ...(advanceCursor ? { lastSuccessfulSyncAt: at } : {}),
         ...(ensureBaseline && !current?.baselineCompletedAt ? { baselineCompletedAt: at } : {}),
         lastError: null,
       },
@@ -101,7 +101,8 @@ export async function runTaskSync(dependencies: {
   store: TaskSyncStore;
   communicationStore: CommunicationEventStore;
   overlapSeconds?: number;
-  requestedMode?: "AUTO" | "RECONCILE";
+  requestedMode?: "AUTO" | "RECONCILE" | "REMINDER_ELIGIBILITY";
+  timeZone?: string;
   now?: () => Date;
   log?: (message: string) => void;
 }): Promise<TaskSyncStats> {
@@ -113,15 +114,22 @@ export async function runTaskSync(dependencies: {
   try {
     const checkpoint = await dependencies.store.getCheckpoint();
     const communicationBaseline = await dependencies.communicationStore.isBaselineCompleted("TASK");
-    const mode: TaskSyncMode = dependencies.requestedMode === "RECONCILE"
-      ? "RECONCILE"
-      : communicationBaseline ? "INCREMENTAL" : "BASELINE";
+    const mode: TaskSyncMode = dependencies.requestedMode === "REMINDER_ELIGIBILITY"
+      ? "REMINDER_ELIGIBILITY"
+      : dependencies.requestedMode === "RECONCILE"
+        ? "RECONCILE"
+        : communicationBaseline ? "INCREMENTAL" : "BASELINE";
     const listOptions = mode === "INCREMENTAL"
       ? { filterByFormula: buildTaskIncrementalFormula(
           new Date((checkpoint?.lastSuccessfulSyncAt ?? startedAt).getTime() -
             (dependencies.overlapSeconds ?? 120) * 1_000),
         ) }
-      : undefined;
+      : mode === "REMINDER_ELIGIBILITY"
+        ? { filterByFormula: buildReminderEligibilityFormula(
+            startedAt,
+            dependencies.timeZone ?? "Europe/Warsaw",
+          ) }
+        : undefined;
     const records = await dependencies.airtable.fetchAllRecords(
       AIRTABLE_TABLE_IDS.tasks,
       TASK_FIELD_IDS,
@@ -150,10 +158,14 @@ export async function runTaskSync(dependencies: {
     }
 
     const completedAt = now();
-    if (!communicationBaseline) {
+    if (!communicationBaseline && mode === "BASELINE") {
       await dependencies.communicationStore.markBaselineCompleted("TASK", completedAt);
     }
-    await dependencies.store.markSuccessful(completedAt, true);
+    await dependencies.store.markSuccessful(
+      completedAt,
+      mode === "BASELINE",
+      mode !== "REMINDER_ELIGIBILITY",
+    );
     const metricsAfter = requestMetrics(dependencies.airtable);
     stats.pagesFetched = metricsAfter.pagesFetched - metricsBefore.pagesFetched;
     stats.requestsMade = metricsAfter.requestsMade - metricsBefore.requestsMade;
@@ -187,6 +199,14 @@ export function buildTaskPollingFormula(): string {
   return buildTaskIncrementalFormula(new Date(0));
 }
 
+export function buildReminderEligibilityFormula(
+  now: Date,
+  timeZone = "Europe/Warsaw",
+): string {
+  const tomorrow = addDaysToZonedDate(dateInTimeZone(now, timeZone), 1);
+  return `AND(DATETIME_FORMAT(SET_TIMEZONE({${TASK_FIELDS.day}}, '${timeZone}'), 'YYYY-MM-DD') = '${tomorrow}', {${TASK_FIELDS.emmaMailTemplate}} = 'Przegląd-przypomnienie_o_wizycie', {${TASK_FIELDS.emmaCustomerStatus}} = 'Przypomnienie o wizycie')`;
+}
+
 export function buildTaskSnapshot(task: MappedTask) {
   const { airtableRecordId: _airtableRecordId, ...snapshot } = task;
   return snapshot;
@@ -215,4 +235,19 @@ function taskData(task: MappedTask, snapshot: ReturnType<typeof buildTaskSnapsho
     performerRecordIds: task.performerRecordIds as Prisma.InputJsonArray,
     sourceSnapshot: snapshot as Prisma.InputJsonObject, lastSeenAt: seenAt,
   };
+}
+
+function dateInTimeZone(value: Date, timeZone: string): string {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone, year: "numeric", month: "2-digit", day: "2-digit",
+  }).formatToParts(value);
+  const part = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((item) => item.type === type)?.value ?? "";
+  return `${part("year")}-${part("month")}-${part("day")}`;
+}
+
+function addDaysToZonedDate(date: string, days: number): string {
+  const value = new Date(`${date}T12:00:00Z`);
+  value.setUTCDate(value.getUTCDate() + days);
+  return value.toISOString().slice(0, 10);
 }

@@ -1,5 +1,5 @@
 import type { AddressInfo } from "node:net";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Server } from "node:http";
 import type { PrismaClient } from "../generated/prisma/client.js";
 import {
@@ -21,7 +21,11 @@ import {
   type PublicUnsubscribeStore,
 } from "../communication-unsubscribe/public.js";
 import { signUnsubscribeToken, type UnsubscribeTokenPayload } from "../communication-unsubscribe/token.js";
-import type { HospitalPortalViewModel } from "../portal-access/view-model.js";
+import {
+  decodePortalCaseCursor,
+  encodePortalCaseCursor,
+  type HospitalPortalViewModel,
+} from "../portal-access/view-model.js";
 import type { PortalAuthorizationContext } from "../portal-access/public.js";
 
 const secret = "test-access-link-signing-secret-with-at-least-32-bytes";
@@ -145,6 +149,77 @@ describe("public API", () => {
     expect(scopes).toEqual(["hospital-A", "hospital-A", "hospital-A"]);
   });
 
+  it("passes the returned cursor with the same filter and search to page two", async () => {
+    const grant = portalRecord({ sourceHospitalRecordId: "hospital-A" });
+    const cursor = encodePortalCaseCursor({
+      sortKey: 1_723_546_800_123n, type: "REPAIR", sourceRecordId: "repair-29",
+    });
+    const requests: Array<{ filter?: string; query?: string; cursor?: string }> = [];
+    const { baseUrl } = await startApp(
+      new MemoryStore(null), grant, new MemoryUnsubscribeStore(null),
+      async () => emptyPortalView(),
+      {
+        listCases: async (_authorization, options) => {
+          requests.push(options);
+          return { items: [], nextCursor: options.cursor ? null : cursor };
+        },
+      },
+    );
+    const token = signPortalGrantToken(grant, secret);
+    const first = await fetch(`${baseUrl}/p/${token}/data/cases?filter=REPAIR&q=pompa`);
+    expect((await first.json()).nextCursor).toBe(cursor);
+    const secondUrl = new URL(`${baseUrl}/p/${token}/data/cases`);
+    secondUrl.searchParams.set("filter", "REPAIR");
+    secondUrl.searchParams.set("q", "pompa");
+    secondUrl.searchParams.set("cursor", cursor);
+    expect((await fetch(secondUrl)).status).toBe(200);
+    expect(requests).toEqual([
+      { filter: "REPAIR", query: "pompa", cursor: undefined, limit: undefined },
+      { filter: "REPAIR", query: "pompa", cursor, limit: undefined },
+    ]);
+  });
+
+  it("returns controlled 400 and a safe log for an invalid cursor", async () => {
+    const grant = portalRecord();
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const { baseUrl } = await startApp(
+      new MemoryStore(null), grant, new MemoryUnsubscribeStore(null),
+      async () => emptyPortalView(),
+      { listCases: async (_authorization, options) => {
+        decodePortalCaseCursor(options.cursor ?? null);
+        return { items: [], nextCursor: null };
+      } },
+    );
+    const token = signPortalGrantToken(grant, secret);
+    const response = await fetch(`${baseUrl}/p/${token}/data/cases?filter=REPAIR&cursor=secret-cursor`);
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: "INVALID_CURSOR" });
+    expect(log).toHaveBeenCalledWith(
+      "PORTAL_DATA_REQUEST_FAILED endpoint=cases filter=REPAIR hasCursor=true status=400 errorCode=INVALID_CURSOR",
+    );
+    expect(log.mock.calls.flat().join(" ")).not.toContain(token);
+    expect(log.mock.calls.flat().join(" ")).not.toContain("secret-cursor");
+    log.mockRestore();
+  });
+
+  it("returns 500 with a safe error code for an unexpected data query failure", async () => {
+    const grant = portalRecord();
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const { baseUrl } = await startApp(
+      new MemoryStore(null), grant, new MemoryUnsubscribeStore(null),
+      async () => emptyPortalView(),
+      { listCases: async () => { throw new Error("Prisma raw query failed"); } },
+    );
+    const token = signPortalGrantToken(grant, secret);
+    const response = await fetch(`${baseUrl}/p/${token}/data/cases?cursor=opaque`);
+    expect(response.status).toBe(500);
+    expect(await response.json()).toEqual({ error: "INTERNAL_ERROR" });
+    expect(log).toHaveBeenCalledWith(
+      "PORTAL_DATA_REQUEST_FAILED endpoint=cases filter=ALL hasCursor=true status=500 errorCode=INTERNAL_ERROR",
+    );
+    log.mockRestore();
+  });
+
   it("GET unsubscribe only displays confirmation and POST records opt-out", async () => {
     const record = unsubscribeRecord();
     const unsubscribeStore = new MemoryUnsubscribeStore(record);
@@ -191,7 +266,10 @@ async function startApp(
   buildPortal: (authorization: PortalAuthorizationContext) => Promise<HospitalPortalViewModel> =
     async () => emptyPortalView(),
   dataViews: {
-    listCases?: (authorization: PortalAuthorizationContext) => Promise<{ items: []; nextCursor: null }>;
+    listCases?: (
+      authorization: PortalAuthorizationContext,
+      options: { filter?: string; query?: string; cursor?: string; limit?: number },
+    ) => Promise<{ items: []; nextCursor: string | null }>;
     getCase?: (authorization: PortalAuthorizationContext) => Promise<null>;
     getDevice?: (authorization: PortalAuthorizationContext) => Promise<null>;
   } = {},

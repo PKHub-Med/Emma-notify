@@ -2,7 +2,10 @@ import { describe, expect, it } from "vitest";
 import { CommunicationScenario } from "../generated/prisma/enums.js";
 import { renderHospitalPortal } from "./portal-page.js";
 import {
+  decodePortalCaseCursor,
+  encodePortalCaseCursor,
   HospitalPortalViewModelService,
+  InvalidPortalCursorError,
   type HospitalPortalStore,
   type PortalCaseFilter,
   type PortalCaseListItem,
@@ -23,6 +26,15 @@ describe("paginated hospital portal", () => {
     expect(html.length).toBeLessThan(200_000);
   });
 
+  it("renders load-more logic that reuses the exact cursor and keeps the existing error UX", async () => {
+    const view = await new HospitalPortalViewModelService(memoryStore(31, 0), "Tiemed", 30).build(auth());
+    const html = renderHospitalPortal(view, "nonce", new Date(), "/p/token");
+    expect(html).toContain("const cursor=reset?null:state.cursor");
+    expect(html).toContain("api('cases',{filter:state.filter,q:state.query,cursor})");
+    expect(html).toContain("state.more.hidden=page.nextCursor===null");
+    expect(html).toContain("Nie udało się pobrać danych. Spróbuj ponownie.");
+  });
+
   it("returns consecutive cursor pages without duplicates", async () => {
     const service = new HospitalPortalViewModelService(memoryStore(75, 0), "Tiemed", 30);
     const first = await service.listCases(auth(), { filter: "REPAIR" });
@@ -30,6 +42,59 @@ describe("paginated hospital portal", () => {
     expect(first.items).toHaveLength(30);
     expect(second.items).toHaveLength(30);
     expect(new Set([...first.items, ...second.items].map((item) => item.sourceRecordId)).size).toBe(60);
+  });
+
+  it("paginates 65 cases as 30, 30 and 5, then ends", async () => {
+    const service = new HospitalPortalViewModelService(memoryStore(65, 0), "Tiemed", 30);
+    const first = await service.listCases(auth(), { filter: "REPAIR" });
+    const second = await service.listCases(auth(), { filter: "REPAIR", cursor: first.nextCursor! });
+    const third = await service.listCases(auth(), { filter: "REPAIR", cursor: second.nextCursor! });
+    expect([first.items.length, second.items.length, third.items.length]).toEqual([30, 30, 5]);
+    expect(third.nextCursor).toBeNull();
+    expect(new Set([...first.items, ...second.items, ...third.items].map((item) => item.sourceRecordId)).size).toBe(65);
+  });
+
+  it("uses stable tie-breakers for equal and missing sort dates", async () => {
+    for (const lastChangedAt of [new Date("2026-08-13T10:00:00Z"), null]) {
+      const service = new HospitalPortalViewModelService(memoryStore(65, 0, { lastChangedAt }), "Tiemed", 30);
+      const pages = [];
+      let cursor: string | undefined;
+      do {
+        const page = await service.listCases(auth(), { filter: "REPAIR", cursor });
+        pages.push(...page.items);
+        cursor = page.nextCursor ?? undefined;
+      } while (cursor);
+      expect(pages).toHaveLength(65);
+      expect(new Set(pages.map((item) => item.sourceRecordId)).size).toBe(65);
+    }
+  });
+
+  it("round-trips a URL-safe cursor through a query string", () => {
+    const expected = { sortKey: 1_723_546_800_123n, type: "INSPECTION" as const, sourceRecordId: "rec+/= zażółć" };
+    const encoded = encodePortalCaseCursor(expected);
+    expect(encoded).toMatch(/^[A-Za-z0-9_-]+$/);
+    const url = new URL("https://portal.test/data/cases");
+    url.searchParams.set("cursor", encoded);
+    expect(decodePortalCaseCursor(url.searchParams.get("cursor"))).toEqual(expected);
+  });
+
+  it("preserves repair, inspection and search result sets between pages", async () => {
+    const service = new HospitalPortalViewModelService(memoryStore(65, 65, { deviceName: "Wspólna fraza" }), "Tiemed", 30);
+    for (const filter of ["REPAIR", "INSPECTION"] as const) {
+      const first = await service.listCases(auth(), { filter });
+      const second = await service.listCases(auth(), { filter, cursor: first.nextCursor! });
+      expect([...first.items, ...second.items].every((item) => item.type === filter)).toBe(true);
+    }
+    const first = await service.listCases(auth(), { query: "Wspólna fraza" });
+    const second = await service.listCases(auth(), { query: "Wspólna fraza", cursor: first.nextCursor! });
+    expect(first.items).toHaveLength(30);
+    expect(second.items).toHaveLength(30);
+  });
+
+  it("rejects an invalid cursor instead of restarting or throwing an uncontrolled error", () => {
+    const service = new HospitalPortalViewModelService(memoryStore(65, 0), "Tiemed", 30);
+    expect(() => service.listCases(auth(), { cursor: "not+url/safe=" }))
+      .toThrow(InvalidPortalCursorError);
   });
 
   it("clamps a hostile requested limit to 100", async () => {
@@ -61,6 +126,14 @@ describe("paginated hospital portal", () => {
     expect(await service.getCase(authorization, "hospital-B-secret")).toBeNull();
     expect(await service.getDevice(authorization, "device-B")).toBeNull();
     expect(store.seenScopes.every((scope) => scope === "hospital-A")).toBe(true);
+  });
+
+  it("does not let a hospital A cursor expose hospital B", async () => {
+    const service = new HospitalPortalViewModelService(memoryStore(65, 0), "Tiemed", 30);
+    const first = await service.listCases(auth(), { filter: "REPAIR" });
+    const hospitalB = { ...auth(), sourceHospitalRecordId: "hospital-B" };
+    const next = await service.listCases(hospitalB, { filter: "REPAIR", cursor: first.nextCursor! });
+    expect(next.items).toEqual([]);
   });
 
   it("keeps mixed open and closed inspections as independent sibling records", async () => {
@@ -103,7 +176,7 @@ function memoryStore(
 ): HospitalPortalStore & { seenScopes: string[] } {
   const repairs = Array.from({ length: repairCount }, (_, index) => caseItem("REPAIR", index, overrides));
   const inspections = Array.from({ length: inspectionCount }, (_, index) => caseItem("INSPECTION", index, overrides));
-  const all = [...repairs, ...inspections];
+  const all = [...repairs, ...inspections].sort(compareCases);
   const seenScopes: string[] = [];
   const check = (scope: string) => { seenScopes.push(scope); return scope === "hospital-A"; };
   return {
@@ -118,10 +191,16 @@ function memoryStore(
       let result = filterCases(all, options.filter);
       if (options.deviceId) result = result.filter((item) => item.deviceId === options.deviceId);
       if (options.query) result = result.filter((item) => JSON.stringify(item).toLowerCase().includes(options.query!.toLowerCase()));
-      const start = options.cursor ? Number(Buffer.from(options.cursor, "base64url").toString("utf8")) : 0;
+      const decoded = decodePortalCaseCursor(options.cursor);
+      const start = decoded
+        ? result.findIndex((item) => item.type === decoded.type &&
+            item.sourceRecordId === decoded.sourceRecordId && sortKey(item) === decoded.sortKey) + 1
+        : 0;
       const items = result.slice(start, start + options.limit);
-      const next = start + items.length < result.length
-        ? Buffer.from(String(start + items.length)).toString("base64url") : null;
+      const last = items.at(-1);
+      const next = start + items.length < result.length && last
+        ? encodePortalCaseCursor({ type: last.type, sourceRecordId: last.sourceRecordId, sortKey: sortKey(last) })
+        : null;
       return { items, nextCursor: next };
     },
     async findScopedCase(scope, id) { return check(scope) ? all.find((item) => item.sourceRecordId === id) ?? null : null; },
@@ -137,6 +216,17 @@ function memoryStore(
       return device ? { ...device, cases: { items: all.filter((item) => item.deviceId === id).slice(0, limit), nextCursor: null } } : null;
     },
   };
+}
+
+function sortKey(item: PortalCaseListItem): bigint {
+  return BigInt(item.lastChangedAt?.getTime() ?? 0);
+}
+
+function compareCases(left: PortalCaseListItem, right: PortalCaseListItem): number {
+  const time = Number(sortKey(right) - sortKey(left));
+  if (time !== 0) return time;
+  const type = right.type.localeCompare(left.type);
+  return type !== 0 ? type : right.sourceRecordId.localeCompare(left.sourceRecordId);
 }
 
 function filterCases(items: PortalCaseListItem[], filter: PortalCaseFilter) {

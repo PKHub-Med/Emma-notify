@@ -99,10 +99,10 @@ export type StoredPortalCase = {
   events: StoredEvent[];
 };
 
-type PageKey = {
+export type PortalCaseCursorKey = {
   type: "REPAIR" | "INSPECTION";
   sourceRecordId: string;
-  sortAt: Date;
+  sortKey: bigint;
 };
 
 type SummaryCountRow = {
@@ -111,7 +111,15 @@ type SummaryCountRow = {
   requiresAction: bigint;
 };
 
-type DeviceKey = { sourceRecordId: string; sortAt: Date };
+export type PortalDeviceCursorKey = { sourceRecordId: string; sortKey: bigint };
+
+type PageKey = PortalCaseCursorKey;
+type DeviceKey = PortalDeviceCursorKey;
+
+export class InvalidPortalCursorError extends Error {
+  readonly code = "INVALID_CURSOR";
+  constructor() { super("INVALID_PORTAL_CURSOR"); }
+}
 
 export interface HospitalPortalStore {
   findHospital(scope: string): Promise<StoredHospital | null>;
@@ -200,21 +208,21 @@ export class PrismaHospitalPortalStore implements HospitalPortalStore {
     limit: number;
     deviceId?: string;
   }): Promise<PortalPage<PortalCaseListItem>> {
-    const cursor = decodeCursor(options.cursor);
+    const cursor = decodePortalCaseCursor(options.cursor);
     const filterSql = caseFilterSql(options.filter);
     const searchSql = searchFilterSql(options.query);
     const deviceSql = options.deviceId
       ? Prisma.sql`AND "deviceId" = ${options.deviceId}`
       : Prisma.empty;
     const cursorSql = cursor
-      ? Prisma.sql`AND ("sortAt", type, "sourceRecordId") < (${cursor.sortAt}, ${cursor.type}, ${cursor.sourceRecordId})`
+      ? Prisma.sql`AND ("sortKey", type, "sourceRecordId") < (${cursor.sortKey}, ${cursor.type}, ${cursor.sourceRecordId})`
       : Prisma.empty;
     const keys = await this.prisma.$queryRaw<PageKey[]>(Prisma.sql`
       WITH scoped AS (${scopedCasesSql(scope)})
-      SELECT type, "sourceRecordId", "sortAt"
+      SELECT type, "sourceRecordId", "sortKey"
       FROM scoped
       WHERE 1=1 ${filterSql} ${searchSql} ${deviceSql} ${cursorSql}
-      ORDER BY "sortAt" DESC, type DESC, "sourceRecordId" DESC
+      ORDER BY "sortKey" DESC, type DESC, "sourceRecordId" DESC
       LIMIT ${options.limit + 1}
     `);
     const hasMore = keys.length > options.limit;
@@ -223,14 +231,14 @@ export class PrismaHospitalPortalStore implements HospitalPortalStore {
     const last = selected.at(-1);
     return {
       items,
-      nextCursor: hasMore && last ? encodeCursor(last) : null,
+      nextCursor: hasMore && last ? encodePortalCaseCursor(last) : null,
     };
   }
 
   async findScopedCase(scope: string, sourceRecordId: string): Promise<PortalCaseListItem | null> {
     const keys = await this.prisma.$queryRaw<PageKey[]>(Prisma.sql`
       WITH scoped AS (${scopedCasesSql(scope)})
-      SELECT type, "sourceRecordId", "sortAt" FROM scoped
+      SELECT type, "sourceRecordId", "sortKey" FROM scoped
       WHERE "sourceRecordId" = ${sourceRecordId}
       LIMIT 1
     `);
@@ -259,21 +267,21 @@ export class PrismaHospitalPortalStore implements HospitalPortalStore {
     cursor: string | null;
     limit: number;
   }): Promise<PortalPage<PortalDevice>> {
-    const cursor = decodeDeviceCursor(options.cursor);
+    const cursor = decodePortalDeviceCursor(options.cursor);
     const searchSql = deviceSearchFilterSql(options.query);
     const cursorSql = cursor
-      ? Prisma.sql`AND ("sortAt", "deviceId") < (${cursor.sortAt}, ${cursor.sourceRecordId})`
+      ? Prisma.sql`AND ("sortKey", "deviceId") < (${cursor.sortKey}, ${cursor.sourceRecordId})`
       : Prisma.empty;
     const keys = await this.prisma.$queryRaw<DeviceKey[]>(Prisma.sql`
       WITH scoped AS (${scopedCasesSql(scope)}), devices AS (
-        SELECT DISTINCT ON ("deviceId") "deviceId" AS "sourceRecordId", "sortAt",
+        SELECT DISTINCT ON ("deviceId") "deviceId" AS "sourceRecordId", "sortKey",
           "deviceName", manufacturer, model, "serialNumber", "inventoryNumber", status, "validUntil"
         FROM scoped WHERE "deviceId" IS NOT NULL
-        ORDER BY "deviceId", "sortAt" DESC
+        ORDER BY "deviceId", "sortKey" DESC
       )
-      SELECT "sourceRecordId", "sortAt" FROM devices
+      SELECT "sourceRecordId", "sortKey" FROM devices
       WHERE 1=1 ${searchSql} ${cursorSql}
-      ORDER BY "sortAt" DESC, "sourceRecordId" DESC
+      ORDER BY "sortKey" DESC, "sourceRecordId" DESC
       LIMIT ${options.limit + 1}
     `);
     const hasMore = keys.length > options.limit;
@@ -282,7 +290,7 @@ export class PrismaHospitalPortalStore implements HospitalPortalStore {
     const last = selected.at(-1);
     return {
       items: items.filter((item): item is PortalDevice => item !== null),
-      nextCursor: hasMore && last ? encodeDeviceCursor(last) : null,
+      nextCursor: hasMore && last ? encodePortalDeviceCursor(last) : null,
     };
   }
 
@@ -307,7 +315,7 @@ export class PrismaHospitalPortalStore implements HospitalPortalStore {
       SELECT "deviceId" AS "sourceRecordId", "deviceName", manufacturer, model,
         "serialNumber", "inventoryNumber", status, "validUntil"
       FROM scoped WHERE "deviceId" = ${sourceRecordId}
-      ORDER BY "sortAt" DESC LIMIT 1
+      ORDER BY "sortKey" DESC LIMIT 1
     `);
     const row = keys[0];
     return row ? {
@@ -397,10 +405,12 @@ export class HospitalPortalViewModelService {
   listCases(authorization: PortalAuthorizationContext, options: {
     filter?: string; query?: string; cursor?: string; limit?: number;
   }): Promise<PortalPage<PortalCaseListItem>> {
+    const cursor = options.cursor || null;
+    if (cursor) decodePortalCaseCursor(cursor);
     return this.store.pageCases(authorization.sourceHospitalRecordId, {
       filter: parseFilter(options.filter),
       query: normalizeSearch(options.query),
-      cursor: options.cursor || null,
+      cursor,
       limit: clampLimit(options.limit, this.pageSize),
     });
   }
@@ -412,8 +422,10 @@ export class HospitalPortalViewModelService {
   listDevices(authorization: PortalAuthorizationContext, options: {
     query?: string; cursor?: string; limit?: number;
   }): Promise<PortalPage<PortalDevice>> {
+    const cursor = options.cursor || null;
+    if (cursor) decodePortalDeviceCursor(cursor);
     return this.store.pageDevices(authorization.sourceHospitalRecordId, {
-      query: normalizeSearch(options.query), cursor: options.cursor || null,
+      query: normalizeSearch(options.query), cursor,
       limit: clampLimit(options.limit, this.pageSize),
     });
   }
@@ -429,9 +441,9 @@ function scopedCasesSql(scope: string): Prisma.Sql {
       c."deviceAirtableId" AS "deviceId", c."deviceName", c.manufacturer, c.model,
       c."serialNumber", c."inventoryNumber",
       COALESCE(c."emmaCustomerStatus", c."currentStatus", 'Brak informacji') AS status,
-      COALESCE((SELECT MAX(e."detectedAt") FROM "CaseEvent" e
+      FLOOR(EXTRACT(EPOCH FROM COALESCE((SELECT MAX(e."detectedAt") FROM "CaseEvent" e
         WHERE e."trackedCaseId" = c.id AND e."visibleToCustomer" = true),
-        c."sourceModifiedAt", c."sourceCreatedAt", TO_TIMESTAMP(0)) AS "sortAt",
+        c."sourceModifiedAt", c."sourceCreatedAt", TIMESTAMP '1970-01-01 00:00:00')) * 1000)::bigint AS "sortKey",
       NULL::timestamp AS "validUntil", c."businessNumber", c."clientOrderNumber"
     FROM "TrackedCase" c
     WHERE c."caseType" = 'SERVICE_ORDER' AND c.active = true
@@ -444,9 +456,9 @@ function scopedCasesSql(scope: string): Prisma.Sql {
         WHERE t."sourceHospitalRecordId" = ${scope}
           AND t."linkedInspectionRecordIds" ? c."airtableRecordId"
         ORDER BY t."updatedAt" DESC LIMIT 1), c."currentStatus", 'Brak informacji') AS status,
-      COALESCE((SELECT MAX(e."detectedAt") FROM "CaseEvent" e
+      FLOOR(EXTRACT(EPOCH FROM COALESCE((SELECT MAX(e."detectedAt") FROM "CaseEvent" e
         WHERE e."trackedCaseId" = c.id AND e."visibleToCustomer" = true),
-        c."sourceModifiedAt", c."sourceCreatedAt", TO_TIMESTAMP(0)) AS "sortAt",
+        c."sourceModifiedAt", c."sourceCreatedAt", TIMESTAMP '1970-01-01 00:00:00')) * 1000)::bigint AS "sortKey",
       c."inspectionDueDate" AS "validUntil", c."businessNumber", c."clientOrderNumber"
     FROM "TrackedCase" c
     WHERE c."caseType" = 'INSPECTION' AND c.active = true
@@ -519,32 +531,57 @@ function clampLimit(value: number | undefined, fallback: number): number {
   return Math.max(1, Math.min(100, Number.isFinite(value) ? Math.trunc(value!) : fallback));
 }
 
-function encodeCursor(key: PageKey): string {
-  return Buffer.from(JSON.stringify({ s: key.sortAt.toISOString(), t: key.type, i: key.sourceRecordId })).toString("base64url");
+export function encodePortalCaseCursor(key: PortalCaseCursorKey): string {
+  return Buffer.from(JSON.stringify({
+    v: 1, k: key.sortKey.toString(), t: key.type, i: key.sourceRecordId,
+  })).toString("base64url");
 }
 
-function decodeCursor(value: string | null): { sortAt: Date; type: string; sourceRecordId: string } | null {
+export function decodePortalCaseCursor(
+  value: string | null,
+): { sortKey: bigint; type: "REPAIR" | "INSPECTION"; sourceRecordId: string } | null {
   if (!value) return null;
+  if (!isBase64Url(value)) throw new InvalidPortalCursorError();
   try {
     const parsed = JSON.parse(Buffer.from(value, "base64url").toString("utf8")) as Record<string, unknown>;
-    const sortAt = new Date(String(parsed.s));
-    return !Number.isNaN(sortAt.getTime()) && typeof parsed.t === "string" && typeof parsed.i === "string"
-      ? { sortAt, type: parsed.t, sourceRecordId: parsed.i } : null;
-  } catch { return null; }
+    if (parsed.v !== 1 || (parsed.t !== "REPAIR" && parsed.t !== "INSPECTION") ||
+      typeof parsed.i !== "string" || parsed.i.length === 0 ||
+      typeof parsed.k !== "string" || !/^-?\d+$/.test(parsed.k)) {
+      throw new InvalidPortalCursorError();
+    }
+    return { sortKey: BigInt(parsed.k), type: parsed.t, sourceRecordId: parsed.i };
+  } catch (error: unknown) {
+    if (error instanceof InvalidPortalCursorError) throw error;
+    throw new InvalidPortalCursorError();
+  }
 }
 
-function encodeDeviceCursor(key: DeviceKey): string {
-  return Buffer.from(JSON.stringify({ s: key.sortAt.toISOString(), i: key.sourceRecordId })).toString("base64url");
+export function encodePortalDeviceCursor(key: PortalDeviceCursorKey): string {
+  return Buffer.from(JSON.stringify({
+    v: 1, k: key.sortKey.toString(), i: key.sourceRecordId,
+  })).toString("base64url");
 }
 
-function decodeDeviceCursor(value: string | null): { sortAt: Date; sourceRecordId: string } | null {
+export function decodePortalDeviceCursor(
+  value: string | null,
+): { sortKey: bigint; sourceRecordId: string } | null {
   if (!value) return null;
+  if (!isBase64Url(value)) throw new InvalidPortalCursorError();
   try {
     const parsed = JSON.parse(Buffer.from(value, "base64url").toString("utf8")) as Record<string, unknown>;
-    const sortAt = new Date(String(parsed.s));
-    return !Number.isNaN(sortAt.getTime()) && typeof parsed.i === "string"
-      ? { sortAt, sourceRecordId: parsed.i } : null;
-  } catch { return null; }
+    if (parsed.v !== 1 || typeof parsed.i !== "string" || parsed.i.length === 0 ||
+      typeof parsed.k !== "string" || !/^-?\d+$/.test(parsed.k)) {
+      throw new InvalidPortalCursorError();
+    }
+    return { sortKey: BigInt(parsed.k), sourceRecordId: parsed.i };
+  } catch (error: unknown) {
+    if (error instanceof InvalidPortalCursorError) throw error;
+    throw new InvalidPortalCursorError();
+  }
+}
+
+function isBase64Url(value: string): boolean {
+  return value.length <= 512 && /^[A-Za-z0-9_-]+$/.test(value);
 }
 
 function changeDescription(oldValue: unknown, newValue: unknown): string | null {

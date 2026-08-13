@@ -14,6 +14,7 @@ import {
 import { portalPageHeaders, renderHospitalPortal } from "../portal-access/portal-page.js";
 import {
   HospitalPortalViewModelService,
+  InvalidPortalCursorError,
   PrismaHospitalPortalStore,
 } from "../portal-access/view-model.js";
 import {
@@ -93,49 +94,67 @@ export function createApp(
 
   app.get("/p/:token/data/cases", async (request, response) => {
     response.set(PORTAL_DATA_HEADERS);
-    const authorization = await authorizePortalData(portalAccess, request.params.token ?? "");
-    if (!authorization) { response.status(404).json({ error: "NOT_FOUND" }); return; }
     const filter = stringQuery(request.query.filter);
-    const query = stringQuery(request.query.q);
-    const cursor = stringQuery(request.query.cursor);
-    const limit = numberQuery(request.query.limit);
-    const page = await portalViews.listCases(authorization, {
-      ...(filter ? { filter } : {}), ...(query ? { query } : {}),
-      ...(cursor ? { cursor } : {}), ...(limit ? { limit } : {}),
-    });
-    response.status(200).json(page);
+    const hasCursor = request.query.cursor !== undefined;
+    try {
+      const authorization = await authorizePortalData(portalAccess, request.params.token ?? "");
+      if (!authorization) { response.status(404).json({ error: "NOT_FOUND" }); return; }
+      const cursor = cursorQuery(request.query.cursor);
+      const query = stringQuery(request.query.q);
+      const limit = numberQuery(request.query.limit);
+      const page = await portalViews.listCases(authorization, {
+        ...(filter ? { filter } : {}), ...(query ? { query } : {}),
+        ...(cursor ? { cursor } : {}), ...(limit ? { limit } : {}),
+      });
+      response.status(200).json(page);
+    } catch (error: unknown) {
+      sendPortalDataError(response, error, "cases", filter, hasCursor);
+    }
   });
 
   app.get("/p/:token/data/cases/:caseId", async (request, response) => {
     response.set(PORTAL_DATA_HEADERS);
-    const authorization = await authorizePortalData(portalAccess, request.params.token ?? "");
-    if (!authorization) { response.status(404).json({ error: "NOT_FOUND" }); return; }
-    const item = await portalViews.getCase(authorization, request.params.caseId ?? "");
-    if (!item) { response.status(404).json({ error: "NOT_FOUND" }); return; }
-    response.status(200).json(item);
+    try {
+      const authorization = await authorizePortalData(portalAccess, request.params.token ?? "");
+      if (!authorization) { response.status(404).json({ error: "NOT_FOUND" }); return; }
+      const item = await portalViews.getCase(authorization, request.params.caseId ?? "");
+      if (!item) { response.status(404).json({ error: "NOT_FOUND" }); return; }
+      response.status(200).json(item);
+    } catch (error: unknown) {
+      sendPortalDataError(response, error, "case-detail", undefined, false);
+    }
   });
 
   app.get("/p/:token/data/devices", async (request, response) => {
     response.set(PORTAL_DATA_HEADERS);
-    const authorization = await authorizePortalData(portalAccess, request.params.token ?? "");
-    if (!authorization) { response.status(404).json({ error: "NOT_FOUND" }); return; }
-    const query = stringQuery(request.query.q);
-    const cursor = stringQuery(request.query.cursor);
-    const limit = numberQuery(request.query.limit);
-    const page = await portalViews.listDevices(authorization, {
-      ...(query ? { query } : {}), ...(cursor ? { cursor } : {}),
-      ...(limit ? { limit } : {}),
-    });
-    response.status(200).json(page);
+    const hasCursor = request.query.cursor !== undefined;
+    try {
+      const authorization = await authorizePortalData(portalAccess, request.params.token ?? "");
+      if (!authorization) { response.status(404).json({ error: "NOT_FOUND" }); return; }
+      const cursor = cursorQuery(request.query.cursor);
+      const query = stringQuery(request.query.q);
+      const limit = numberQuery(request.query.limit);
+      const page = await portalViews.listDevices(authorization, {
+        ...(query ? { query } : {}), ...(cursor ? { cursor } : {}),
+        ...(limit ? { limit } : {}),
+      });
+      response.status(200).json(page);
+    } catch (error: unknown) {
+      sendPortalDataError(response, error, "devices", undefined, hasCursor);
+    }
   });
 
   app.get("/p/:token/data/devices/:deviceId", async (request, response) => {
     response.set(PORTAL_DATA_HEADERS);
-    const authorization = await authorizePortalData(portalAccess, request.params.token ?? "");
-    if (!authorization) { response.status(404).json({ error: "NOT_FOUND" }); return; }
-    const item = await portalViews.getDevice(authorization, request.params.deviceId ?? "");
-    if (!item) { response.status(404).json({ error: "NOT_FOUND" }); return; }
-    response.status(200).json(item);
+    try {
+      const authorization = await authorizePortalData(portalAccess, request.params.token ?? "");
+      if (!authorization) { response.status(404).json({ error: "NOT_FOUND" }); return; }
+      const item = await portalViews.getDevice(authorization, request.params.deviceId ?? "");
+      if (!item) { response.status(404).json({ error: "NOT_FOUND" }); return; }
+      response.status(200).json(item);
+    } catch (error: unknown) {
+      sendPortalDataError(response, error, "device-detail", undefined, false);
+    }
   });
 
   app.get("/p/:token/data/documents", async (request, response) => {
@@ -189,4 +208,29 @@ function stringQuery(value: unknown): string | undefined {
 function numberQuery(value: unknown): number | undefined {
   if (typeof value !== "string" || !/^\d+$/.test(value)) return undefined;
   return Number(value);
+}
+
+function cursorQuery(value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value === "string" && value.length > 0) return value;
+  throw new InvalidPortalCursorError();
+}
+
+function sendPortalDataError(
+  response: import("express").Response,
+  error: unknown,
+  endpoint: string,
+  filter: string | undefined,
+  hasCursor: boolean,
+): void {
+  const invalidCursor = error instanceof InvalidPortalCursorError;
+  const status = invalidCursor ? 400 : 500;
+  const errorCode = invalidCursor ? error.code : "INTERNAL_ERROR";
+  const safeFilter = ["ALL", "ACTION", "REPAIR", "INSPECTION"].includes(
+    filter?.toUpperCase() ?? "",
+  ) ? filter!.toUpperCase() : "ALL";
+  console.error(
+    `PORTAL_DATA_REQUEST_FAILED endpoint=${endpoint} filter=${safeFilter} hasCursor=${hasCursor} status=${status} errorCode=${errorCode}`,
+  );
+  response.status(status).json({ error: errorCode });
 }

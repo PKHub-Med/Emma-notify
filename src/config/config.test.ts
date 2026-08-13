@@ -75,6 +75,8 @@ describe("loadWorkerConfig", () => {
       airtablePat: "patExample",
       airtablePollSeconds: 60,
       airtableSyncOverlapSeconds: 120,
+      airtableTaskPollSeconds: 180,
+      airtableReminderCheckSeconds: 900,
       digestQuietMinutes: 1,
       timezone: "Europe/Warsaw",
       emailMode: "TEST",
@@ -87,6 +89,18 @@ describe("loadWorkerConfig", () => {
       communicationSendNotBefore: null,
       emailReplyTo: "serwis@tiemed.pl",
     });
+  });
+
+  it("keeps service-order, task and reminder polling frequencies independent", () => {
+    const config = loadWorkerConfig({
+      ...workerEnvironment,
+      AIRTABLE_POLL_SECONDS: "45",
+      AIRTABLE_TASK_POLL_SECONDS: "180",
+      AIRTABLE_REMINDER_CHECK_SECONDS: "900",
+    });
+    expect(config.airtablePollSeconds).toBe(45);
+    expect(config.airtableTaskPollSeconds).toBe(180);
+    expect(config.airtableReminderCheckSeconds).toBe(900);
   });
 
   it("parses communication activation safely without crashing on an invalid timestamp", () => {

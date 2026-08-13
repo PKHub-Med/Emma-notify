@@ -16,6 +16,7 @@ import {
 import {
   buildTaskPollingFormula,
   buildTaskIncrementalFormula,
+  buildReminderEligibilityFormula,
   TASK_EDITABLE_FIELD_IDS,
   buildTaskSnapshot,
   runTaskSync,
@@ -34,6 +35,15 @@ class FakeAirtable implements AirtableIncrementalSource {
     options?: AirtableListOptions,
   ): Promise<AirtableRecord[]> {
     this.lastOptions = options;
+    if (options?.filterByFormula?.includes("Przegląd-przypomnienie_o_wizycie")) {
+      const tomorrow = options.filterByFormula.match(/= '(\d{4}-\d{2}-\d{2})'/)?.[1];
+      return this.currentRecords.filter((record) =>
+        record.fields[TASK_FIELDS.day] === tomorrow &&
+        record.fields[TASK_FIELDS.emmaMailTemplate] ===
+          "Przegląd-przypomnienie_o_wizycie" &&
+        record.fields[TASK_FIELDS.emmaCustomerStatus] === "Przypomnienie o wizycie"
+      );
+    }
     return this.currentRecords;
   }
 
@@ -74,10 +84,16 @@ class MemoryTaskStore implements TaskSyncStore {
     ) ? "UNCHANGED" : "CHANGED";
   }
 
-  async markSuccessful(at: Date, ensureBaseline: boolean): Promise<void> {
+  async markSuccessful(
+    at: Date,
+    ensureBaseline: boolean,
+    advanceCursor: boolean,
+  ): Promise<void> {
     this.checkpoint = {
       baselineCompletedAt: this.checkpoint?.baselineCompletedAt ?? (ensureBaseline ? at : null),
-      lastSuccessfulSyncAt: at,
+      lastSuccessfulSyncAt: advanceCursor
+        ? at
+        : this.checkpoint?.lastSuccessfulSyncAt ?? null,
     };
   }
   async markFailed(_at: Date): Promise<void> {}
@@ -268,6 +284,89 @@ describe("task polling and communication events", () => {
     });
     expect(stats.mode).toBe("RECONCILE");
     expect(fixture.source.lastOptions).toBeUndefined();
+  });
+
+  it("builds a narrow reminder eligibility formula for tomorrow in Warsaw", () => {
+    const formula = buildReminderEligibilityFormula(
+      new Date("2026-08-13T22:30:00.000Z"),
+      "Europe/Warsaw",
+    );
+    expect(formula).toBe(
+      `AND(DATETIME_FORMAT(SET_TIMEZONE({${TASK_FIELDS.day}}, 'Europe/Warsaw'), 'YYYY-MM-DD') = '2026-08-15', {${TASK_FIELDS.emmaMailTemplate}} = 'Przegląd-przypomnienie_o_wizycie', {${TASK_FIELDS.emmaCustomerStatus}} = 'Przypomnienie o wizycie')`,
+    );
+    expect(formula).not.toContain("2026-08-14'");
+    expect(formula).not.toContain("2026-08-16");
+  });
+
+  it("finds tomorrow reminder tasks without advancing the incremental cursor", async () => {
+    const fixture = taskFixture();
+    fixture.communication.baselineCompleted = true;
+    fixture.store.checkpoint = {
+      baselineCompletedAt: new Date("2026-08-01T00:00:00Z"),
+      lastSuccessfulSyncAt: new Date("2026-08-13T04:00:00Z"),
+    };
+    fixture.source.setCurrent(taskRecord({
+      [TASK_FIELDS.day]: "2026-08-15",
+      [TASK_FIELDS.emmaCustomerStatus]: "Przypomnienie o wizycie",
+      [TASK_FIELDS.emmaMailTemplate]: "Przegląd-przypomnienie_o_wizycie",
+    }));
+    const stats = await runTaskSync({
+      airtable: fixture.source,
+      store: fixture.store,
+      communicationStore: fixture.communication,
+      requestedMode: "REMINDER_ELIGIBILITY",
+      timeZone: "Europe/Warsaw",
+      now: () => new Date("2026-08-14T04:30:00Z"),
+    });
+    expect(stats).toMatchObject({ mode: "REMINDER_ELIGIBILITY", recordsFetched: 1 });
+    expect(fixture.source.lastOptions?.filterByFormula).toContain("'2026-08-15'");
+    expect(fixture.store.checkpoint.lastSuccessfulSyncAt?.toISOString()).toBe(
+      "2026-08-13T04:00:00.000Z",
+    );
+    expect(fixture.communication.events[0]?.observation.scenario).toBe("INSPECTION_REMINDER");
+  });
+
+  it("does not fetch today, day-after-tomorrow or wrong-template tasks", async () => {
+    const fixture = taskFixture();
+    fixture.communication.baselineCompleted = true;
+    fixture.source.setCurrent(
+      taskRecord({ [TASK_FIELDS.day]: "2026-08-14" }),
+      { ...taskRecord({ [TASK_FIELDS.day]: "2026-08-16" }), id: "recDayAfter" },
+      { ...taskRecord({
+        [TASK_FIELDS.day]: "2026-08-15",
+        [TASK_FIELDS.emmaCustomerStatus]: "Przypomnienie o wizycie",
+        [TASK_FIELDS.emmaMailTemplate]: "Inny szablon",
+      }), id: "recWrongTemplate" },
+    );
+    const stats = await runTaskSync({
+      airtable: fixture.source,
+      store: fixture.store,
+      communicationStore: fixture.communication,
+      requestedMode: "REMINDER_ELIGIBILITY",
+      now: () => new Date("2026-08-14T04:30:00Z"),
+    });
+    expect(stats.recordsFetched).toBe(0);
+    expect(fixture.communication.events).toHaveLength(0);
+  });
+
+  it("keeps one event across 100 reminder eligibility polls", async () => {
+    const fixture = taskFixture();
+    fixture.communication.baselineCompleted = true;
+    fixture.source.setCurrent(taskRecord({
+      [TASK_FIELDS.day]: "2026-08-15",
+      [TASK_FIELDS.emmaCustomerStatus]: "Przypomnienie o wizycie",
+      [TASK_FIELDS.emmaMailTemplate]: "Przegląd-przypomnienie_o_wizycie",
+    }));
+    for (let poll = 0; poll < 100; poll += 1) {
+      await runTaskSync({
+        airtable: fixture.source,
+        store: fixture.store,
+        communicationStore: fixture.communication,
+        requestedMode: "REMINDER_ELIGIBILITY",
+        now: () => new Date("2026-08-14T04:30:00Z"),
+      });
+    }
+    expect(fixture.communication.events).toHaveLength(1);
   });
 
   it("marks a failed synchronization without creating an event", async () => {

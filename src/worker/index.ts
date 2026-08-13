@@ -80,6 +80,7 @@ let heartbeatTimer: NodeJS.Timeout | undefined;
 let incrementalTimer: NodeJS.Timeout | undefined;
 let taskTimer: NodeJS.Timeout | undefined;
 let taskReconcileTimer: NodeJS.Timeout | undefined;
+let reminderEligibilityTimer: NodeJS.Timeout | undefined;
 let hospitalTimer: NodeJS.Timeout | undefined;
 let recipientResolutionTimer: NodeJS.Timeout | undefined;
 let deliveryPlannerTimer: NodeJS.Timeout | undefined;
@@ -156,10 +157,13 @@ function startPollingLoops(): void {
   }, config.airtablePollSeconds * 1_000);
   taskTimer = setInterval(() => {
     void pollTasks();
-  }, config.airtablePollSeconds * 1_000);
+  }, config.airtableTaskPollSeconds * 1_000);
   taskReconcileTimer = setInterval(() => {
     void pollTasks("RECONCILE");
   }, config.airtableTaskReconcileSeconds * 1_000);
+  reminderEligibilityTimer = setInterval(() => {
+    void pollTasks("REMINDER_ELIGIBILITY");
+  }, config.airtableReminderCheckSeconds * 1_000);
   hospitalTimer = setInterval(() => {
     void pollHospitals();
   }, config.airtableHospitalPollSeconds * 1_000);
@@ -173,7 +177,7 @@ function startPollingLoops(): void {
     void pollCommunicationEmail();
   }, COMMUNICATION_EMAIL_INTERVAL_MS);
   void pollIncremental();
-  void pollTasks();
+  void pollTasks().then(() => pollTasks("REMINDER_ELIGIBILITY"));
   void pollHospitals();
   void pollRecipientResolution();
   void pollDeliveryPlanner();
@@ -258,7 +262,9 @@ async function pollRecipientResolution(): Promise<void> {
   }
 }
 
-async function pollTasks(requestedMode: "AUTO" | "RECONCILE" = "AUTO"): Promise<void> {
+async function pollTasks(
+  requestedMode: "AUTO" | "RECONCILE" | "REMINDER_ELIGIBILITY" = "AUTO",
+): Promise<void> {
   if (taskRunning || shuttingDown) return;
   taskRunning = true;
   try {
@@ -268,6 +274,7 @@ async function pollTasks(requestedMode: "AUTO" | "RECONCILE" = "AUTO"): Promise<
       communicationStore,
       overlapSeconds: config.airtableSyncOverlapSeconds,
       requestedMode,
+      timeZone: config.communicationTimezone,
       log: (message) => console.info(message),
     });
   } catch {
@@ -308,6 +315,7 @@ async function shutdown(signal: NodeJS.Signals): Promise<void> {
   if (incrementalTimer) clearInterval(incrementalTimer);
   if (taskTimer) clearInterval(taskTimer);
   if (taskReconcileTimer) clearInterval(taskReconcileTimer);
+  if (reminderEligibilityTimer) clearInterval(reminderEligibilityTimer);
   if (hospitalTimer) clearInterval(hospitalTimer);
   if (recipientResolutionTimer) clearInterval(recipientResolutionTimer);
   if (deliveryPlannerTimer) clearInterval(deliveryPlannerTimer);
