@@ -1,4 +1,5 @@
 import express, { type Express } from "express";
+import { randomBytes } from "node:crypto";
 import {
   notFoundPage,
   PUBLIC_PAGE_HEADERS,
@@ -7,10 +8,14 @@ import {
 import type { PrismaClient } from "../generated/prisma/client.js";
 import {
   linkExpiredPage,
-  portalEntryPage,
   portalNotFoundPage,
   type PublicPortalAccessService,
 } from "../portal-access/public.js";
+import { portalPageHeaders, renderHospitalPortal } from "../portal-access/portal-page.js";
+import {
+  HospitalPortalViewModelService,
+  PrismaHospitalPortalStore,
+} from "../portal-access/view-model.js";
 import {
   unsubscribeDonePage,
   unsubscribePage,
@@ -22,8 +27,16 @@ export function createApp(
   accessLinks: PublicAccessLinkService,
   portalAccess: PublicPortalAccessService,
   unsubscribe: PublicUnsubscribeService,
+  options: {
+    portalViews?: Pick<HospitalPortalViewModelService, "build">;
+    serviceName?: string;
+  } = {},
 ): Express {
   const app = express();
+  const portalViews = options.portalViews ?? new HospitalPortalViewModelService(
+    new PrismaHospitalPortalStore(prisma),
+    options.serviceName,
+  );
 
   app.get("/health", async (_request, response) => {
     try {
@@ -52,19 +65,24 @@ export function createApp(
   });
 
   app.get("/p/:token", async (request, response) => {
-    response.set(PUBLIC_PAGE_HEADERS);
     try {
       const result = await portalAccess.open(request.params.token ?? "");
       if (result.outcome === "NOT_FOUND") {
+        response.set(PUBLIC_PAGE_HEADERS);
         response.status(404).type("html").send(portalNotFoundPage());
         return;
       }
       if (result.outcome === "INACTIVE") {
+        response.set(PUBLIC_PAGE_HEADERS);
         response.redirect(302, "/link-expired");
         return;
       }
-      response.status(200).type("html").send(portalEntryPage());
+      const view = await portalViews.build(result.authorization);
+      const nonce = randomBytes(18).toString("base64url");
+      response.set(portalPageHeaders(nonce));
+      response.status(200).type("html").send(renderHospitalPortal(view, nonce));
     } catch {
+      response.set(PUBLIC_PAGE_HEADERS);
       response.status(500).type("html").send(portalNotFoundPage());
     }
   });

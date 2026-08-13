@@ -88,6 +88,7 @@ export function loadWorkerConfig(environment: NodeJS.ProcessEnv): WorkerConfig {
     testEmail: parsed.data.TEST_EMAIL || null,
     productionEmailsEnabled: parsed.data.PRODUCTION_EMAILS_ENABLED,
     linkTtlDays: parsed.data.LINK_TTL_DAYS,
+    serviceName: parsed.data.SERVICE_NAME,
   };
 }
 

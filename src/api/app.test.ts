@@ -21,6 +21,8 @@ import {
   type PublicUnsubscribeStore,
 } from "../communication-unsubscribe/public.js";
 import { signUnsubscribeToken, type UnsubscribeTokenPayload } from "../communication-unsubscribe/token.js";
+import type { HospitalPortalViewModel } from "../portal-access/view-model.js";
+import type { PortalAuthorizationContext } from "../portal-access/public.js";
 
 const secret = "test-access-link-signing-secret-with-at-least-32-bytes";
 let server: Server | null = null;
@@ -94,6 +96,25 @@ describe("public API", () => {
     expect(response.status).toBe(404);
   });
 
+  it("does not let query parameters change portal hospital scope", async () => {
+    const grant = portalRecord({ sourceHospitalRecordId: "hospital-A" });
+    let authorization: PortalAuthorizationContext | null = null;
+    const { baseUrl } = await startApp(
+      new MemoryStore(null),
+      grant,
+      new MemoryUnsubscribeStore(null),
+      async (value) => {
+        authorization = value;
+        return emptyPortalView();
+      },
+    );
+    const response = await fetch(
+      `${baseUrl}/p/${signPortalGrantToken(grant, secret)}?hospitalId=hospital-B`,
+    );
+    expect(response.status).toBe(200);
+    expect(authorization?.sourceHospitalRecordId).toBe("hospital-A");
+  });
+
   it("GET unsubscribe only displays confirmation and POST records opt-out", async () => {
     const record = unsubscribeRecord();
     const unsubscribeStore = new MemoryUnsubscribeStore(record);
@@ -137,6 +158,8 @@ async function startApp(
   store: PublicAccessLinkStore,
   portalGrant: PublicPortalAccessGrant | null = null,
   unsubscribeStore: PublicUnsubscribeStore = new MemoryUnsubscribeStore(null),
+  buildPortal: (authorization: PortalAuthorizationContext) => Promise<HospitalPortalViewModel> =
+    async () => emptyPortalView(),
 ): Promise<{ baseUrl: string }> {
   const prisma = {
     $queryRaw: async () => [{ ok: 1 }],
@@ -146,11 +169,22 @@ async function startApp(
     new PublicAccessLinkService(store, secret),
     new PublicPortalAccessService(new MemoryPortalStore(portalGrant), secret),
     new PublicUnsubscribeService(unsubscribeStore, secret),
+    { portalViews: { build: buildPortal } },
   );
   server = app.listen(0, "127.0.0.1");
   await new Promise<void>((resolve) => server?.once("listening", resolve));
   const address = server.address() as AddressInfo;
   return { baseUrl: `http://127.0.0.1:${address.port}` };
+}
+
+function emptyPortalView(): HospitalPortalViewModel {
+  return {
+    hospital: { shortName: "Szpital", name: "Szpital", address: null },
+    serviceProviderName: "Tiemed",
+    summary: { requiresAction: 0, repairs: 0, inspections: 0 },
+    cases: [], repairs: [], inspections: [], devices: [], documents: [],
+    focusedCaseId: null,
+  };
 }
 
 function unsubscribeRecord(): UnsubscribeTokenPayload {

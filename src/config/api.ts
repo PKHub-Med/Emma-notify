@@ -33,5 +33,6 @@ export function loadApiConfig(environment: NodeJS.ProcessEnv): ApiConfig {
     testEmail: parsed.data.TEST_EMAIL || null,
     productionEmailsEnabled: parsed.data.PRODUCTION_EMAILS_ENABLED,
     linkTtlDays: parsed.data.LINK_TTL_DAYS,
+    serviceName: parsed.data.SERVICE_NAME,
   };
 }

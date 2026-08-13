@@ -33,6 +33,7 @@ import {
   CommunicationUnsubscribeGrantService,
   PrismaUnsubscribeGrantStore,
 } from "../communication-unsubscribe/service.js";
+import { PrismaHospitalSyncStore, runHospitalSync } from "./hospital-sync.js";
 
 const HEARTBEAT_INTERVAL_MS = 30_000;
 const DELIVERY_PLANNER_INTERVAL_MS = 15_000;
@@ -48,6 +49,7 @@ const airtable = new AirtableClient({
 const baselineStore = new PrismaBaselineStore(prisma);
 const incrementalStore = new PrismaIncrementalStore(prisma);
 const taskSyncStore = new PrismaTaskSyncStore(prisma);
+const hospitalSyncStore = new PrismaHospitalSyncStore(prisma);
 const communicationStore = new PrismaCommunicationEventStore(prisma);
 const recipientResolutionStore = new PrismaRecipientResolutionStore(prisma);
 const communicationDeliveryStore = new PrismaCommunicationDeliveryStore(prisma);
@@ -76,11 +78,13 @@ const communicationEmailProvider = createResendClient(config.resendApiKey);
 let heartbeatTimer: NodeJS.Timeout | undefined;
 let incrementalTimer: NodeJS.Timeout | undefined;
 let taskTimer: NodeJS.Timeout | undefined;
+let hospitalTimer: NodeJS.Timeout | undefined;
 let recipientResolutionTimer: NodeJS.Timeout | undefined;
 let deliveryPlannerTimer: NodeJS.Timeout | undefined;
 let communicationEmailTimer: NodeJS.Timeout | undefined;
 let incrementalRunning = false;
 let taskRunning = false;
+let hospitalRunning = false;
 let recipientResolutionRunning = false;
 let deliveryPlannerRunning = false;
 let communicationEmailRunning = false;
@@ -146,6 +150,9 @@ function startPollingLoops(): void {
   taskTimer = setInterval(() => {
     void pollTasks();
   }, config.airtablePollSeconds * 1_000);
+  hospitalTimer = setInterval(() => {
+    void pollHospitals();
+  }, config.airtablePollSeconds * 1_000);
   recipientResolutionTimer = setInterval(() => {
     void pollRecipientResolution();
   }, config.airtablePollSeconds * 1_000);
@@ -157,9 +164,23 @@ function startPollingLoops(): void {
   }, COMMUNICATION_EMAIL_INTERVAL_MS);
   void pollIncremental();
   void pollTasks();
+  void pollHospitals();
   void pollRecipientResolution();
   void pollDeliveryPlanner();
   void pollCommunicationEmail();
+}
+
+async function pollHospitals(): Promise<void> {
+  if (hospitalRunning || shuttingDown) return;
+  hospitalRunning = true;
+  try {
+    const count = await runHospitalSync({ airtable, store: hospitalSyncStore });
+    console.info(`[hospital-sync] completed hospitalsFetched=${count}`);
+  } catch {
+    console.error("[hospital-sync] failed; next poll will retry");
+  } finally {
+    hospitalRunning = false;
+  }
 }
 
 async function pollCommunicationEmail(): Promise<void> {
@@ -271,6 +292,7 @@ async function shutdown(signal: NodeJS.Signals): Promise<void> {
   if (heartbeatTimer) clearInterval(heartbeatTimer);
   if (incrementalTimer) clearInterval(incrementalTimer);
   if (taskTimer) clearInterval(taskTimer);
+  if (hospitalTimer) clearInterval(hospitalTimer);
   if (recipientResolutionTimer) clearInterval(recipientResolutionTimer);
   if (deliveryPlannerTimer) clearInterval(deliveryPlannerTimer);
   if (communicationEmailTimer) clearInterval(communicationEmailTimer);

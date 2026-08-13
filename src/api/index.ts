@@ -15,6 +15,10 @@ import {
   PrismaPublicUnsubscribeStore,
   PublicUnsubscribeService,
 } from "../communication-unsubscribe/public.js";
+import {
+  HospitalPortalViewModelService,
+  PrismaHospitalPortalStore,
+} from "../portal-access/view-model.js";
 
 const config = loadApiConfig(process.env);
 const prisma = createPrismaClient(config.databaseUrl);
@@ -30,7 +34,13 @@ const unsubscribe = new PublicUnsubscribeService(
   new PrismaPublicUnsubscribeStore(prisma),
   config.accessLinkSigningSecret,
 );
-const app = createApp(prisma, accessLinks, portalAccess, unsubscribe);
+const app = createApp(prisma, accessLinks, portalAccess, unsubscribe, {
+  portalViews: new HospitalPortalViewModelService(
+    new PrismaHospitalPortalStore(prisma),
+    config.serviceName,
+  ),
+  serviceName: config.serviceName,
+});
 
 let server: Server | undefined;
 let shuttingDown = false;

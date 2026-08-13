@@ -15,6 +15,7 @@ export const baseEnvironmentShape = {
   TEST_EMAIL: z.union([z.email(), z.literal("")]).default(""),
   PRODUCTION_EMAILS_ENABLED: booleanString,
   LINK_TTL_DAYS: z.coerce.number().int().positive().default(30),
+  SERVICE_NAME: z.string().trim().min(1).default("Tiemed"),
 };
 
 export type BaseConfig = {
@@ -24,6 +25,7 @@ export type BaseConfig = {
   testEmail: string | null;
   productionEmailsEnabled: boolean;
   linkTtlDays: number;
+  serviceName: string;
 };
 
 const baseEnvironmentSchema = z.object(baseEnvironmentShape);
@@ -42,6 +44,7 @@ export function loadBaseConfig(environment: NodeJS.ProcessEnv): BaseConfig {
     testEmail: parsed.data.TEST_EMAIL || null,
     productionEmailsEnabled: parsed.data.PRODUCTION_EMAILS_ENABLED,
     linkTtlDays: parsed.data.LINK_TTL_DAYS,
+    serviceName: parsed.data.SERVICE_NAME,
   };
 }
 

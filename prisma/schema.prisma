@@ -46,6 +46,7 @@ enum SyncEntityType {
   INSPECTION
   CONTACT
   TASK
+  HOSPITAL
 }
 
 enum SyncStatus {
@@ -141,6 +142,7 @@ model TrackedCase {
   @@unique([caseType, airtableRecordId])
   @@index([active, lastSeenAt])
   @@index([sourceModifiedAt])
+  @@index([sourceHospitalRecordId, caseType, active])
 }
 
 model TrackedTask {
@@ -166,6 +168,19 @@ model TrackedTask {
 
   @@index([emmaMailTemplate])
   @@index([lastSeenAt])
+  @@index([sourceHospitalRecordId])
+}
+
+model TrackedHospital {
+  id                String   @id @default(cuid())
+  airtableRecordId  String   @unique
+  shortName         String?
+  name              String?
+  address           String?
+  sourceSnapshot    Json
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  lastSeenAt        DateTime @default(now())
 }
 
 model CommunicationCursor {
