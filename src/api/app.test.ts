@@ -115,6 +115,36 @@ describe("public API", () => {
     expect(authorization?.sourceHospitalRecordId).toBe("hospital-A");
   });
 
+  it("keeps paginated search and detail endpoints inside grant scope", async () => {
+    const grant = portalRecord({ sourceHospitalRecordId: "hospital-A" });
+    const scopes: string[] = [];
+    const { baseUrl } = await startApp(
+      new MemoryStore(null), grant, new MemoryUnsubscribeStore(null),
+      async () => emptyPortalView(),
+      {
+        listCases: async (authorization) => {
+          scopes.push(authorization.sourceHospitalRecordId);
+          return { items: [], nextCursor: null };
+        },
+        getCase: async (authorization) => {
+          scopes.push(authorization.sourceHospitalRecordId);
+          return null;
+        },
+        getDevice: async (authorization) => {
+          scopes.push(authorization.sourceHospitalRecordId);
+          return null;
+        },
+      },
+    );
+    const token = signPortalGrantToken(grant, secret);
+    const page = await fetch(`${baseUrl}/p/${token}/data/cases?q=secret&hospitalId=hospital-B`);
+    expect(page.status).toBe(200);
+    expect(await page.json()).toEqual({ items: [], nextCursor: null });
+    expect((await fetch(`${baseUrl}/p/${token}/data/cases/case-B`)).status).toBe(404);
+    expect((await fetch(`${baseUrl}/p/${token}/data/devices/device-B`)).status).toBe(404);
+    expect(scopes).toEqual(["hospital-A", "hospital-A", "hospital-A"]);
+  });
+
   it("GET unsubscribe only displays confirmation and POST records opt-out", async () => {
     const record = unsubscribeRecord();
     const unsubscribeStore = new MemoryUnsubscribeStore(record);
@@ -160,6 +190,11 @@ async function startApp(
   unsubscribeStore: PublicUnsubscribeStore = new MemoryUnsubscribeStore(null),
   buildPortal: (authorization: PortalAuthorizationContext) => Promise<HospitalPortalViewModel> =
     async () => emptyPortalView(),
+  dataViews: {
+    listCases?: (authorization: PortalAuthorizationContext) => Promise<{ items: []; nextCursor: null }>;
+    getCase?: (authorization: PortalAuthorizationContext) => Promise<null>;
+    getDevice?: (authorization: PortalAuthorizationContext) => Promise<null>;
+  } = {},
 ): Promise<{ baseUrl: string }> {
   const prisma = {
     $queryRaw: async () => [{ ok: 1 }],
@@ -169,7 +204,13 @@ async function startApp(
     new PublicAccessLinkService(store, secret),
     new PublicPortalAccessService(new MemoryPortalStore(portalGrant), secret),
     new PublicUnsubscribeService(unsubscribeStore, secret),
-    { portalViews: { build: buildPortal } },
+    { portalViews: {
+      build: buildPortal,
+      listCases: dataViews.listCases ?? (async () => ({ items: [], nextCursor: null })),
+      getCase: dataViews.getCase ?? (async () => null),
+      listDevices: async () => ({ items: [], nextCursor: null }),
+      getDevice: dataViews.getDevice ?? (async () => null),
+    } },
   );
   server = app.listen(0, "127.0.0.1");
   await new Promise<void>((resolve) => server?.once("listening", resolve));
@@ -182,8 +223,8 @@ function emptyPortalView(): HospitalPortalViewModel {
     hospital: { shortName: "Szpital", name: "Szpital", address: null },
     serviceProviderName: "Tiemed",
     summary: { requiresAction: 0, repairs: 0, inspections: 0 },
-    cases: [], repairs: [], inspections: [], devices: [], documents: [],
-    focusedCaseId: null,
+    initialCases: { items: [], nextCursor: null },
+    focusedCase: null,
   };
 }
 

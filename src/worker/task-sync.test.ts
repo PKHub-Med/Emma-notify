@@ -15,6 +15,8 @@ import {
 } from "./communication-event.js";
 import {
   buildTaskPollingFormula,
+  buildTaskIncrementalFormula,
+  TASK_EDITABLE_FIELD_IDS,
   buildTaskSnapshot,
   runTaskSync,
   type TaskSyncStore,
@@ -53,12 +55,11 @@ class FakeAirtable implements AirtableIncrementalSource {
 
 class MemoryTaskStore implements TaskSyncStore {
   readonly tasks = new Map<string, { task: MappedTask; firstSeenAt: Date }>();
+  checkpoint: { baselineCompletedAt: Date | null; lastSuccessfulSyncAt: Date | null } | null = null;
 
   async markRunning(_at: Date): Promise<void> {}
 
-  async getTrackedRecordIds(): Promise<string[]> {
-    return [...this.tasks.keys()];
-  }
+  async getCheckpoint() { return this.checkpoint; }
 
   async upsertTask(task: MappedTask, seenAt: Date): Promise<TaskUpsertOutcome> {
     const existing = this.tasks.get(task.airtableRecordId);
@@ -73,7 +74,12 @@ class MemoryTaskStore implements TaskSyncStore {
     ) ? "UNCHANGED" : "CHANGED";
   }
 
-  async markSuccessful(_at: Date): Promise<void> {}
+  async markSuccessful(at: Date, ensureBaseline: boolean): Promise<void> {
+    this.checkpoint = {
+      baselineCompletedAt: this.checkpoint?.baselineCompletedAt ?? (ensureBaseline ? at : null),
+      lastSuccessfulSyncAt: at,
+    };
+  }
   async markFailed(_at: Date): Promise<void> {}
 }
 
@@ -122,9 +128,7 @@ describe("task polling and communication events", () => {
 
     const stats = await fixture.run();
 
-    expect(fixture.source.lastOptions?.filterByFormula).toBe(
-      buildTaskPollingFormula(),
-    );
+    expect(fixture.source.lastOptions).toBeUndefined();
     expect(stats).toMatchObject({ tasksFetched: 1, firstSeen: 1 });
     expect(fixture.communication.baselineCompleted).toBe(true);
     expect(fixture.communication.events).toHaveLength(0);
@@ -139,6 +143,17 @@ describe("task polling and communication events", () => {
 
     expect(fixture.store.tasks.size).toBe(1);
     expect(fixture.communication.events).toHaveLength(0);
+    expect(fixture.source.lastOptions?.filterByFormula).toContain("LAST_MODIFIED_TIME");
+  });
+
+  it("fetches zero records on an identical incremental poll", async () => {
+    const fixture = taskFixture();
+    fixture.source.setCurrent(taskRecord());
+    const baseline = await fixture.run();
+    fixture.source.setCurrent();
+    const incremental = await fixture.run();
+    expect(baseline).toMatchObject({ mode: "BASELINE", recordsFetched: 1 });
+    expect(incremental).toMatchObject({ mode: "INCREMENTAL", recordsFetched: 0 });
   });
 
   it("creates an event for a new task first seen after baseline", async () => {
@@ -206,8 +221,7 @@ describe("task polling and communication events", () => {
       [TASK_FIELDS.emmaCustomerStatus]: "",
       [TASK_FIELDS.emmaMailTemplate]: "",
     });
-    fixture.source.currentRecords = [];
-    fixture.source.recordsById.set(blank.id, blank);
+    fixture.source.setCurrent(blank);
     await fixture.run();
 
     fixture.source.setCurrent(active);
@@ -231,6 +245,29 @@ describe("task polling and communication events", () => {
       digestCalls: 0,
       resendCalls: 0,
     });
+  });
+
+  it("observes only confirmed editable fields in LAST_MODIFIED_TIME", () => {
+    const formula = buildTaskIncrementalFormula(new Date("2026-08-11T09:58:00Z"));
+    for (const fieldId of TASK_EDITABLE_FIELD_IDS) expect(formula).toContain(`{${fieldId}}`);
+    expect(formula).not.toContain(`{${TASK_FIELDS.emmaCustomerStatus}}`);
+    expect(formula).not.toContain(`{${TASK_FIELDS.emmaMailTemplate}}`);
+    expect(buildTaskPollingFormula()).toContain("LAST_MODIFIED_TIME");
+  });
+
+  it("runs an explicit reconcile without an incremental filter", async () => {
+    const fixture = taskFixture();
+    fixture.communication.baselineCompleted = true;
+    fixture.source.setCurrent(taskRecord());
+    const stats = await runTaskSync({
+      airtable: fixture.source,
+      store: fixture.store,
+      communicationStore: fixture.communication,
+      requestedMode: "RECONCILE",
+      now: () => new Date("2026-08-11T10:00:00.000Z"),
+    });
+    expect(stats.mode).toBe("RECONCILE");
+    expect(fixture.source.lastOptions).toBeUndefined();
   });
 
   it("marks a failed synchronization without creating an event", async () => {

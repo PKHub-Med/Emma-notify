@@ -11,6 +11,7 @@ export const AIRTABLE_TABLE_IDS = {
 export const TASK_FIELDS = {
   sequenceNumber: "fld4gbrsoGZu9ypaG",
   day: "fldAImlfkzvwvBWM3",
+  plannedDay: "fld90rJaXlfO9uF20",
   activity: "fld9RzXBJhbtuByps",
   assigneeLinks: "fldycuqcSGGjlRrNn",
   completed: "fldoDQQssvNrgpghY",
@@ -46,6 +47,7 @@ export const HOSPITAL_FIELDS = {
 } as const;
 
 export const SERVICE_ORDER_FIELDS = {
+  reportedAt: "fld2QkVQLirhVDuU6",
   businessNumber: "fldvxV5Kvva5i1BJN",
   clientOrderNumber: "fldd7gJIpGiIz8jof",
   caseSubtype: "fldZUjAkbnVhSIfrV",

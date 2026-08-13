@@ -57,9 +57,11 @@ export async function runHospitalSync(dependencies: {
   airtable: AirtableRecordSource;
   store: HospitalSyncStore;
   now?: () => Date;
-}): Promise<number> {
+  log?: (message: string) => void;
+}): Promise<{ recordsFetched: number; pagesFetched: number; requestsMade: number; durationMs: number }> {
   const now = dependencies.now ?? (() => new Date());
   const startedAt = now();
+  const before = metrics(dependencies.airtable);
   await dependencies.store.markRunning(startedAt);
   try {
     const records = await dependencies.airtable.fetchAllRecords(
@@ -69,10 +71,26 @@ export async function runHospitalSync(dependencies: {
     for (const record of records) {
       await dependencies.store.upsert(mapHospital(record), startedAt);
     }
-    await dependencies.store.markSuccessful(now());
-    return records.length;
+    const completedAt = now();
+    await dependencies.store.markSuccessful(completedAt);
+    const after = metrics(dependencies.airtable);
+    const stats = {
+      recordsFetched: records.length,
+      pagesFetched: after.pagesFetched - before.pagesFetched,
+      requestsMade: after.requestsMade - before.requestsMade,
+      durationMs: Math.max(0, completedAt.getTime() - startedAt.getTime()),
+    };
+    dependencies.log?.(`AIRTABLE_SYNC_STATS entityType=HOSPITAL mode=RECONCILE recordsFetched=${stats.recordsFetched} pagesFetched=${stats.pagesFetched} requestsMade=${stats.requestsMade} durationMs=${stats.durationMs}`);
+    return stats;
   } catch (error: unknown) {
     await dependencies.store.markFailed(now());
     throw error;
   }
+}
+
+function metrics(source: AirtableRecordSource) {
+  const measured = source as AirtableRecordSource & {
+    getRequestMetrics?: () => { requestsMade: number; pagesFetched: number };
+  };
+  return measured.getRequestMetrics?.() ?? { requestsMade: 0, pagesFetched: 0 };
 }

@@ -150,6 +150,7 @@ function mappedServiceOrder(): MappedCase {
     currentStatus: "Legacy",
     faultDescription: "Usterka",
     sourceCreatedAt: null,
+    reportedAt: null,
     sourceModifiedAt: null,
     inspectionDueDate: null,
     inspectionDueDateRaw: null,

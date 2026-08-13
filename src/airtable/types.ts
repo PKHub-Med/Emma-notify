@@ -28,3 +28,12 @@ export type AirtableIncrementalSource = AirtableRecordSource & {
     fieldIds: readonly string[],
   ): Promise<AirtableRecord>;
 };
+
+export type AirtableRequestMetrics = {
+  requestsMade: number;
+  pagesFetched: number;
+};
+
+export type AirtableMetricsSource = {
+  getRequestMetrics(): AirtableRequestMetrics;
+};

@@ -10,11 +10,13 @@ const apiEnvironmentSchema = z.object({
   ...baseEnvironmentShape,
   PORT: z.coerce.number().int().positive().max(65_535).default(3000),
   ACCESS_LINK_SIGNING_SECRET: accessLinkSigningSecretSchema,
+  PORTAL_PAGE_SIZE: z.coerce.number().int().positive().max(100).default(30),
 });
 
 export type ApiConfig = BaseConfig & {
   port: number;
   accessLinkSigningSecret: string;
+  portalPageSize: number;
 };
 
 export function loadApiConfig(environment: NodeJS.ProcessEnv): ApiConfig {
@@ -28,6 +30,7 @@ export function loadApiConfig(environment: NodeJS.ProcessEnv): ApiConfig {
     databaseUrl: parsed.data.DATABASE_URL,
     port: parsed.data.PORT,
     accessLinkSigningSecret: parsed.data.ACCESS_LINK_SIGNING_SECRET,
+    portalPageSize: parsed.data.PORTAL_PAGE_SIZE,
     timezone: parsed.data.TIMEZONE,
     emailMode: parsed.data.EMAIL_MODE,
     testEmail: parsed.data.TEST_EMAIL || null,

@@ -47,6 +47,7 @@ enum SyncEntityType {
   CONTACT
   TASK
   HOSPITAL
+  SERVICE_ORDER_REPORTED_AT
 }
 
 enum SyncStatus {
@@ -126,6 +127,7 @@ model TrackedCase {
   faultDescription    String?
   sourceSnapshot      Json?
   sourceCreatedAt     DateTime?
+  reportedAt          DateTime?
   sourceModifiedAt    DateTime?
   inspectionDueDate       DateTime?
   inspectionDueDateRaw    String?
@@ -142,7 +144,8 @@ model TrackedCase {
   @@unique([caseType, airtableRecordId])
   @@index([active, lastSeenAt])
   @@index([sourceModifiedAt])
-  @@index([sourceHospitalRecordId, caseType, active])
+  @@index([sourceHospitalRecordId, caseType, active, sourceModifiedAt, airtableRecordId])
+  @@index([sourceHospitalRecordId, caseType, active, reportedAt, airtableRecordId])
 }
 
 model TrackedTask {
@@ -169,6 +172,8 @@ model TrackedTask {
   @@index([emmaMailTemplate])
   @@index([lastSeenAt])
   @@index([sourceHospitalRecordId])
+  @@index([sourceHospitalRecordId, updatedAt])
+  @@index([linkedInspectionRecordIds], type: Gin)
 }
 
 model TrackedHospital {

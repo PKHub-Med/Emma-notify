@@ -24,6 +24,7 @@ describe("central Airtable contract", () => {
     expect(TASK_FIELDS).toEqual({
       sequenceNumber: "fld4gbrsoGZu9ypaG",
       day: "fldAImlfkzvwvBWM3",
+      plannedDay: "fld90rJaXlfO9uF20",
       activity: "fld9RzXBJhbtuByps",
       assigneeLinks: "fldycuqcSGGjlRrNn",
       completed: "fldoDQQssvNrgpghY",
@@ -49,6 +50,7 @@ describe("central Airtable contract", () => {
   });
 
   it("keeps the legacy service status and exposes the confirmed EMMA fields", () => {
+    expect(SERVICE_ORDER_FIELDS.reportedAt).toBe("fld2QkVQLirhVDuU6");
     expect(SERVICE_ORDER_FIELDS.caseSubtype).toBe("fldZUjAkbnVhSIfrV");
     expect(SERVICE_ORDER_FIELDS.customerStatus).toBe("fldN0dGXaGv40EHsk");
     expect(SERVICE_ORDER_FIELDS.emmaCustomerStatus).toBe("fldOi8KDzJ1zwMaWJ");

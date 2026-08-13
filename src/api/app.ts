@@ -28,7 +28,8 @@ export function createApp(
   portalAccess: PublicPortalAccessService,
   unsubscribe: PublicUnsubscribeService,
   options: {
-    portalViews?: Pick<HospitalPortalViewModelService, "build">;
+    portalViews?: Pick<HospitalPortalViewModelService,
+      "build" | "listCases" | "getCase" | "listDevices" | "getDevice">;
     serviceName?: string;
   } = {},
 ): Express {
@@ -80,11 +81,68 @@ export function createApp(
       const view = await portalViews.build(result.authorization);
       const nonce = randomBytes(18).toString("base64url");
       response.set(portalPageHeaders(nonce));
-      response.status(200).type("html").send(renderHospitalPortal(view, nonce));
+      const dataBasePath = `/p/${encodeURIComponent(request.params.token ?? "")}`;
+      response.status(200).type("html").send(
+        renderHospitalPortal(view, nonce, new Date(), dataBasePath),
+      );
     } catch {
       response.set(PUBLIC_PAGE_HEADERS);
       response.status(500).type("html").send(portalNotFoundPage());
     }
+  });
+
+  app.get("/p/:token/data/cases", async (request, response) => {
+    response.set(PORTAL_DATA_HEADERS);
+    const authorization = await authorizePortalData(portalAccess, request.params.token ?? "");
+    if (!authorization) { response.status(404).json({ error: "NOT_FOUND" }); return; }
+    const filter = stringQuery(request.query.filter);
+    const query = stringQuery(request.query.q);
+    const cursor = stringQuery(request.query.cursor);
+    const limit = numberQuery(request.query.limit);
+    const page = await portalViews.listCases(authorization, {
+      ...(filter ? { filter } : {}), ...(query ? { query } : {}),
+      ...(cursor ? { cursor } : {}), ...(limit ? { limit } : {}),
+    });
+    response.status(200).json(page);
+  });
+
+  app.get("/p/:token/data/cases/:caseId", async (request, response) => {
+    response.set(PORTAL_DATA_HEADERS);
+    const authorization = await authorizePortalData(portalAccess, request.params.token ?? "");
+    if (!authorization) { response.status(404).json({ error: "NOT_FOUND" }); return; }
+    const item = await portalViews.getCase(authorization, request.params.caseId ?? "");
+    if (!item) { response.status(404).json({ error: "NOT_FOUND" }); return; }
+    response.status(200).json(item);
+  });
+
+  app.get("/p/:token/data/devices", async (request, response) => {
+    response.set(PORTAL_DATA_HEADERS);
+    const authorization = await authorizePortalData(portalAccess, request.params.token ?? "");
+    if (!authorization) { response.status(404).json({ error: "NOT_FOUND" }); return; }
+    const query = stringQuery(request.query.q);
+    const cursor = stringQuery(request.query.cursor);
+    const limit = numberQuery(request.query.limit);
+    const page = await portalViews.listDevices(authorization, {
+      ...(query ? { query } : {}), ...(cursor ? { cursor } : {}),
+      ...(limit ? { limit } : {}),
+    });
+    response.status(200).json(page);
+  });
+
+  app.get("/p/:token/data/devices/:deviceId", async (request, response) => {
+    response.set(PORTAL_DATA_HEADERS);
+    const authorization = await authorizePortalData(portalAccess, request.params.token ?? "");
+    if (!authorization) { response.status(404).json({ error: "NOT_FOUND" }); return; }
+    const item = await portalViews.getDevice(authorization, request.params.deviceId ?? "");
+    if (!item) { response.status(404).json({ error: "NOT_FOUND" }); return; }
+    response.status(200).json(item);
+  });
+
+  app.get("/p/:token/data/documents", async (request, response) => {
+    response.set(PORTAL_DATA_HEADERS);
+    const authorization = await authorizePortalData(portalAccess, request.params.token ?? "");
+    if (!authorization) { response.status(404).json({ error: "NOT_FOUND" }); return; }
+    response.status(200).json({ items: [], nextCursor: null });
   });
 
   app.get("/link-expired", (_request, response) => {
@@ -108,4 +166,27 @@ export function createApp(
   });
 
   return app;
+}
+
+const PORTAL_DATA_HEADERS = {
+  "Cache-Control": "no-store",
+  "X-Robots-Tag": "noindex, nofollow, noarchive",
+  "Referrer-Policy": "no-referrer",
+} as const;
+
+async function authorizePortalData(
+  portalAccess: PublicPortalAccessService,
+  token: string,
+) {
+  const result = await portalAccess.authorizeData(token);
+  return result.outcome === "VALID" ? result.authorization : null;
+}
+
+function stringQuery(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
+function numberQuery(value: unknown): number | undefined {
+  if (typeof value !== "string" || !/^\d+$/.test(value)) return undefined;
+  return Number(value);
 }

@@ -9,6 +9,7 @@ export function renderHospitalPortal(
   view: HospitalPortalViewModel,
   scriptNonce: string,
   now = new Date(),
+  dataBasePath = "/p/token",
 ): string {
   const modelJson = safeJson(view);
   const todayWarsaw = dateKey(now);
@@ -40,10 +41,10 @@ export function renderHospitalPortal(
   </aside>
   <main class="content"><div class="workspace">
     ${summaryScreen(view)}
-    ${devicesScreen(view.devices)}
-    ${repairsScreen(view.repairs)}
-    ${inspectionsScreen(view.inspections)}
-    ${documentsScreen(view)}
+    ${devicesScreen()}
+    ${repairsScreen()}
+    ${inspectionsScreen()}
+    ${documentsScreen()}
     ${deviceCardScreen()}
     ${caseCardScreen()}
   </div></main>
@@ -54,6 +55,7 @@ export function renderHospitalPortal(
 <script nonce="${escapeHtml(scriptNonce)}">
 const portalModel=${modelJson};
 const todayWarsaw=${JSON.stringify(todayWarsaw)};
+const dataBasePath=${safeJson(dataBasePath)};
 ${PORTAL_SCRIPT}
 </script>
 </body></html>`;
@@ -64,7 +66,7 @@ export function portalPageHeaders(scriptNonce: string) {
     "Cache-Control": "no-store",
     "X-Robots-Tag": "noindex, nofollow, noarchive",
     "Referrer-Policy": "no-referrer",
-    "Content-Security-Policy": `default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${scriptNonce}'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; img-src 'none'; font-src 'none'`,
+    "Content-Security-Policy": `default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${scriptNonce}'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; img-src 'none'; font-src 'none'`,
   } as const;
 }
 
@@ -78,42 +80,43 @@ function summaryScreen(view: HospitalPortalViewModel): string {
     </div>
     <section class="panel"><div class="filter-state"><div><h2>Lista zadań</h2><p id="filterLabel">Wszystkie sprawy — najświeższa zmiana na górze.</p></div><button class="clear-filter" id="clearFilter">Pokaż wszystkie</button></div>
       ${searchBar("summarySearch", "Szukaj po urządzeniu, Numerze Sprawy, numerze klienta, numerze seryjnym, inwentarzowym lub statusie…")}
-      <div class="task-list" id="taskList">${view.cases.map(summaryRow).join("")}</div>
-      ${emptyState("summaryEmpty", "Brak spraw dostępnych w tym widoku.", view.cases.length === 0)}
+      <div class="task-list" id="taskList">${view.initialCases.items.map(summaryRow).join("")}</div>
+      ${emptyState("summaryEmpty", "Brak spraw dostępnych w tym widoku.", view.initialCases.items.length === 0)}
+      ${pagingControls("summary", view.initialCases.nextCursor !== null)}
       ${historyButton()}
     </section>
   </section>`;
 }
 
-function devicesScreen(devices: readonly PortalDevice[]): string {
+function devicesScreen(): string {
   return `<section class="screen" id="devices"><div class="page-head"><div class="kicker">Urządzenia</div><h1>Urządzenia</h1><p>Lista urządzeń powiązanych ze sprawami dostępnymi w tym widoku. Kliknięcie otwiera kartę urządzenia.</p></div>
     <div class="panel">${searchBar("deviceSearch", "Szukaj po nazwie urządzenia, producencie, modelu, numerze seryjnym lub inwentarzowym…")}
-      <div class="task-list" id="deviceRows">${devices.map(deviceRow).join("")}</div>
-      ${emptyState("deviceNoResults", "Brak urządzeń pasujących do wyszukiwania.", devices.length === 0)}${historyButton()}
+      <div class="task-list" id="deviceRows"></div>
+      ${emptyState("deviceNoResults", "Brak urządzeń pasujących do wyszukiwania.", false)}${pagingControls("devices", false)}${historyButton()}
     </div></section>`;
 }
 
-function repairsScreen(items: readonly PortalCaseListItem[]): string {
+function repairsScreen(): string {
   return `<section class="screen" id="repairs"><div class="page-head"><div class="kicker">Naprawy</div><h1>Naprawy</h1><p>Lista napraw urządzeń powiązanych ze sprawami dostępnymi w tym widoku. Kliknięcie otwiera kartę sprawy.</p></div>
     <div class="panel">${searchBar("repairSearch", "Szukaj po urządzeniu, Numerze Sprawy, numerze klienta, SN, numerze inwentarzowym lub statusie…")}
-      <div class="task-list repair-list" id="repairRows">${items.map(repairRow).join("")}</div>
-      ${emptyState("repairNoResults", "Brak napraw pasujących do wyszukiwania.", items.length === 0)}${historyButton()}
+      <div class="task-list repair-list" id="repairRows"></div>
+      ${emptyState("repairNoResults", "Brak napraw pasujących do wyszukiwania.", false)}${pagingControls("repairs", false)}${historyButton()}
     </div></section>`;
 }
 
-function inspectionsScreen(items: readonly PortalCaseListItem[]): string {
+function inspectionsScreen(): string {
   return `<section class="screen" id="inspections"><div class="page-head"><div class="kicker">Przeglądy</div><h1>Przeglądy</h1><p>Przeglądy urządzeń powiązanych z dostępnymi sprawami. Kliknięcie otwiera kartę sprawy.</p></div>
     <div class="panel">${searchBar("inspectionSearch", "Szukaj po urządzeniu, Numerze Sprawy, numerze klienta, SN, dacie przeglądu lub statusie…")}
-      <div class="task-list" id="inspectionRows">${items.map(inspectionRow).join("")}</div>
-      ${emptyState("inspectionNoResults", "Brak przeglądów pasujących do wyszukiwania.", items.length === 0)}${historyButton()}
+      <div class="task-list" id="inspectionRows"></div>
+      ${emptyState("inspectionNoResults", "Brak przeglądów pasujących do wyszukiwania.", false)}${pagingControls("inspections", false)}${historyButton()}
     </div></section>`;
 }
 
-function documentsScreen(view: HospitalPortalViewModel): string {
+function documentsScreen(): string {
   return `<section class="screen" id="documents"><div class="page-head"><div class="kicker">Dokumenty</div><h1>Dokumenty</h1><p>Wyszukuj dokumenty po urządzeniu, producencie, modelu, numerze seryjnym albo nazwie pliku.</p></div>
     <div class="panel" style="padding:15px"><div class="document-tools"><input id="documentSearch" type="search" placeholder="Szukaj dokumentu, urządzenia, producenta, modelu lub numeru seryjnego…" aria-label="Szukaj dokumentów"><select id="documentField"><option value="all">Wszystkie pola</option><option value="device">Nazwa urządzenia</option><option value="maker">Producent</option><option value="model">Model</option><option value="serial">Numer seryjny</option><option value="document">Nazwa dokumentu</option></select></div>
       <table class="documents-table"><thead><tr><th>Dokument</th><th>Urządzenie</th><th>Producent</th><th>Model</th><th>Numer seryjny</th><th>Sprawa</th></tr></thead><tbody id="documentsBody"></tbody></table>
-      ${emptyState("documentNoResults", "Brak dokumentów w tym widoku.", view.documents.length === 0)}${historyButton("bottom-history")}
+      ${emptyState("documentNoResults", "Brak dokumentów w tym widoku.", true)}${historyButton("bottom-history")}
     </div></section>`;
 }
 
@@ -161,6 +164,10 @@ function searchBar(id: string, placeholder: string): string {
 
 function historyButton(wrapper = "history-row"): string {
   return `<div class="${wrapper}"><button class="history-btn" data-open-history>Załaduj dane historyczne</button></div>`;
+}
+
+function pagingControls(name: string, visible: boolean): string {
+  return `<div class="portal-pagination" id="${name}Pagination"><button class="history-btn" id="${name}More"${visible ? "" : " hidden"}>Pokaż więcej</button><span class="portal-loading" id="${name}Loading" hidden>Ładowanie…</span><span class="portal-error" id="${name}Error" hidden>Nie udało się pobrać danych. Spróbuj ponownie.</span></div>`;
 }
 
 function emptyState(id: string, message: string, visible: boolean): string {
@@ -216,41 +223,51 @@ function documentIcon() { return `<svg viewBox="0 0 24 24"><path d="M8 3h7l5 5v1
 const PORTAL_SCRIPT = String.raw`
 const screens=[...document.querySelectorAll('.screen')];
 const navButtons=[...document.querySelectorAll('.nav button')];
-let lastScreen='summary';
-let currentCase=null;
-let activeSummaryFilter=null;
-const caseById=new Map(portalModel.cases.map(item=>[item.sourceRecordId,item]));
-const deviceById=new Map(portalModel.devices.map(item=>[item.sourceRecordId,item]));
+const caseCache=new Map();
+if(portalModel.focusedCase)caseCache.set(portalModel.focusedCase.sourceRecordId,portalModel.focusedCase);
+for(const item of portalModel.initialCases.items)caseCache.set(item.sourceRecordId,item);
+let lastScreen='summary';let currentCase=null;let activeSummaryFilter='ALL';
 const text=(value,fallback='—')=>typeof value==='string'&&value.trim()?value:fallback;
 const node=(tag,className,content)=>{const result=document.createElement(tag);if(className)result.className=className;if(content!==undefined)result.textContent=content;return result};
-const append=(parent,...children)=>{for(const child of children){if(child)parent.append(child)}return parent};
+const append=(parent,...children)=>{for(const child of children)if(child)parent.append(child);return parent};
 const formatDate=value=>value?new Intl.DateTimeFormat('pl-PL',{day:'2-digit',month:'2-digit',year:'numeric',timeZone:'Europe/Warsaw'}).format(new Date(value)):'—';
 const formatDateTime=value=>value?new Intl.DateTimeFormat('pl-PL',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit',hour12:false,timeZone:'Europe/Warsaw'}).format(new Date(value)):'—';
 const statusClass=status=>{const value=(status||'').toLocaleLowerCase('pl-PL');if(value.includes('oczekujemy na decyzję')||value.includes('niesprawny')||value.includes('problem'))return'red';if(value.includes('naprawa')||value.includes('diagnostyka')||value.includes('części'))return'amber';if(value.includes('sprawny')||value.includes('zakończ'))return'green';if(value.includes('do realizacji')||value.includes('umów'))return'blue';return'neutral'};
-function showScreen(id){screens.forEach(s=>s.classList.toggle('active',s.id===id));navButtons.forEach(b=>b.classList.toggle('active',b.dataset.screen===id));}
-navButtons.forEach(button=>button.addEventListener('click',()=>{lastScreen=button.dataset.screen;showScreen(button.dataset.screen)}));
-function activate(element,callback){element.addEventListener('click',callback);element.addEventListener('keydown',event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();callback()}})}
-document.querySelectorAll('.case-open').forEach(element=>activate(element,()=>openCase(element.dataset.caseId)));
-document.querySelectorAll('.device-open').forEach(element=>activate(element,()=>openDevice(element.dataset.deviceId)));
+const status=value=>node('span','status-tag '+statusClass(value),text(value,'Brak informacji'));
+const deviceMeta=item=>[text(item.manufacturer),text(item.model),'SN: '+text(item.serialNumber),'Nr inw.: '+text(item.inventoryNumber)].join(' · ');
+function activate(element,callback){element.tabIndex=0;element.setAttribute('role','button');element.addEventListener('click',callback);element.addEventListener('keydown',event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();callback()}})}
+function showScreen(id){screens.forEach(screen=>screen.classList.toggle('active',screen.id===id));navButtons.forEach(button=>button.classList.toggle('active',button.dataset.screen===id));}
+async function api(path,params={}){const url=new URL(dataBasePath+'/data/'+path,location.origin);for(const [key,value]of Object.entries(params))if(value)url.searchParams.set(key,String(value));const response=await fetch(url,{headers:{Accept:'application/json'},cache:'no-store'});if(!response.ok)throw new Error('PORTAL_DATA_UNAVAILABLE');return response.json()}
 function meta(label,value){const wrap=node('div','meta');append(wrap,node('label','',label),node('strong','',text(value)));return wrap}
-function status(value){return node('span','status-tag '+statusClass(value),text(value,'Brak informacji'))}
-function caseLink(item){const button=node('button','case-link');button.type='button';const info=node('span');append(info,node('b','','Numer Sprawy: '+text(item.caseNumber)),node('span','',item.currentStatus));append(button,info,node('span','arrow','›'));button.addEventListener('click',()=>openCase(item.sourceRecordId));return button}
-function openCase(id){const item=caseById.get(id);if(!item)return;const active=document.querySelector('.screen.active');if(active&&active.id!=='caseCard')lastScreen=active.id;currentCase=item;document.getElementById('casePageTitle').textContent='Numer Sprawy: '+text(item.caseNumber);const deviceButton=document.getElementById('caseScreenDeviceLink');deviceButton.hidden=!item.deviceId;deviceButton.textContent=item.deviceId?item.deviceName+' → karta urządzenia':'Przejdź do karty urządzenia';const detail=document.getElementById('caseDetail');detail.replaceChildren();const header=node('div','case-header-line');append(header,node('span','case-kind',item.type==='REPAIR'?'Naprawa':'Przegląd'),node('span','case-service-inline','Serwis: '+portalModel.serviceProviderName));const hero=node('div','case-hero');const titleLine=node('div','hero-title-line');const title=node('h2','',item.deviceName);const inline=node('div','inline-status case-main-status');append(inline,node('label','','AKTUALNY STATUS'),status(item.currentStatus));append(titleLine,title,inline);const grid=node('div','meta-grid case-meta-grid');append(grid,meta('Numer Sprawy',item.caseNumber),meta('Numer zlecenia klienta',text(item.clientOrderNumber,'brak numeru')),meta('Numer seryjny',item.serialNumber),meta('Nr inwentarzowy',item.inventoryNumber));if(item.type==='REPAIR')append(grid,meta('Data zgłoszenia',formatDateTime(item.reportedAt)));else append(grid,meta('Data wykonania przeglądu',formatDate(item.inspectionPerformedAt)),meta('Ważny do',formatDate(item.validUntil)));const description=meta(item.type==='REPAIR'?'Usterka / opis':'Uwagi / opis',item.description);description.style.marginTop='9px';append(hero,titleLine,grid,description);append(detail,header,hero);if(item.documents.length){const section=node('div','section');append(section,node('h3','','Dokumenty'),node('div','no-results','Dokumenty są dostępne wyłącznie przez bezpieczne łącza portalu.'));detail.append(section)}if(item.photos.length){const section=node('div','media-section');append(section,node('h3','','Zdjęcia'));detail.append(section)}if(item.history.length){const section=node('div','section');append(section,node('h3','','Historia zmian'),node('p','history-order-note','Najstarsza zmiana jest na górze, najnowsza na dole.'));const timeline=node('div','case-history');for(const event of item.history){const row=node('div','case-history-item');const date=node('div','case-history-date',formatDateTime(event.changedAt));const rail=node('div','case-history-rail');rail.append(node('div','case-history-dot'));const card=node('div','case-history-card');append(card,node('b','',event.title),node('p','',text(event.description,'')));append(row,date,rail,card);timeline.append(row)}section.append(timeline);detail.append(section)}showScreen('caseCard')}
-function openDevice(id){const item=deviceById.get(id);if(!item)return;const active=document.querySelector('.screen.active');lastScreen=active&&active.id==='caseCard'?'caseCard':'devices';document.getElementById('devicePageTitle').textContent=item.deviceName;const detail=document.getElementById('deviceDetail');detail.replaceChildren();const hero=node('div','device-hero');const titleLine=node('div','hero-title-line');const inline=node('div','inline-status');append(inline,node('label','','AKTUALNY STATUS'),status(item.currentStatus));append(titleLine,node('h2','',item.deviceName),inline);const grid=node('div','meta-grid');append(grid,meta('Nr inwentarzowy',item.inventoryNumber),meta('Numer seryjny',item.serialNumber),meta('Producent / model',[item.manufacturer,item.model].filter(Boolean).join(' · ')||null));append(hero,titleLine,grid,inspectionPanel(item.validUntil));detail.append(hero);const repairSection=node('div','section');repairSection.append(node('h3','','Naprawy'));const repairList=node('div','case-list');const repairs=item.repairs.map(id=>caseById.get(id)).filter(Boolean);repairs.length?repairs.forEach(value=>repairList.append(caseLink(value))):repairList.append(emptyMini('Brak napraw','Brak napraw w tym widoku.'));repairSection.append(repairList);const inspectionSection=node('div','section');inspectionSection.append(node('h3','','Przeglądy'));const inspectionList=node('div','case-list');const inspections=item.inspections.map(id=>caseById.get(id)).filter(Boolean);inspections.length?inspections.forEach(value=>inspectionList.append(caseLink(value))):inspectionList.append(emptyMini('Brak przeglądów','Brak przeglądów w tym widoku.'));inspectionSection.append(inspectionList);append(detail,repairSection,inspectionSection);showScreen('deviceCard')}
-function emptyMini(title,description){const item=node('div','mini');append(item,node('b','',title),node('span','',description));return item}
-function inspectionPanel(validUntil){const panel=node('div','device-card-inspection');const left=node('div');append(left,node('div','label','Przegląd urządzenia'),node('strong','','Termin: '+formatDate(validUntil)));const right=node('div');const health=inspectionHealth(validUntil);append(right,node('span','inspection-state '+health.state,health.label),node('span','inspection-date',health.detail));append(panel,left,right);return panel}
+function makeSummaryRow(item){const row=node('article','task case-open');row.dataset.category=item.type==='REPAIR'?'repair':'inspection';row.dataset.requiresAction=String(item.requiresAction);const main=node('div');append(main,node('div','task-device',item.deviceName),node('div','task-meta',deviceMeta(item)));const caseMeta=node('div','task-case-meta');append(caseMeta,node('span','','Numer Sprawy: '+text(item.caseNumber)),node('span','','Nr zlecenia klienta: '+text(item.clientOrderNumber,'brak numeru')));main.append(caseMeta);const current=node('div');append(current,node('div','task-current-label','Aktualny status'),status(item.currentStatus));const side=node('div','task-side');append(side,node('div','task-date-label','Ostatnia zmiana'),node('div','task-date',formatDateTime(item.lastChangedAt)));append(row,main,current,side);activate(row,()=>openCase(item.sourceRecordId));return row}
+function makeRepairRow(item){const row=node('article','repair-row repair-row-search');const main=node('div');append(main,node('b','',item.deviceName),node('span','sub',deviceMeta(item)),node('span','sub','Numer Sprawy: '+text(item.caseNumber)+' · Nr zlecenia klienta: '+text(item.clientOrderNumber,'brak numeru')));const state=node('div');state.append(status(item.currentStatus));const date=node('div','date-block');append(date,node('span','','Data zgłoszenia'),node('strong','',formatDateTime(item.reportedAt)));append(row,main,state,date);activate(row,()=>openCase(item.sourceRecordId));return row}
+function makeInspectionRow(item){const row=node('article','list-row inspection-row-search');const main=node('div','list-row-main');append(main,node('b','',item.deviceName),node('span','',deviceMeta(item)),node('span','','Numer Sprawy: '+text(item.caseNumber)+' · Nr zlecenia klienta: '+text(item.clientOrderNumber,'brak numeru')));const middle=node('div','list-row-mid');append(middle,node('b','','Aktualny status'),status(item.currentStatus));const dates=node('div','inspection-dates');const performed=node('span');append(performed,node('b','','Data wykonania'),document.createTextNode(formatDate(item.inspectionPerformedAt)));const due=node('span');append(due,node('b','','Ważny do'),document.createTextNode(formatDate(item.validUntil)));append(dates,performed,due);append(row,main,middle,dates);activate(row,()=>openCase(item.sourceRecordId));return row}
 function inspectionHealth(value){if(!value)return{state:'',label:'Brak terminu',detail:'brak danych'};const due=value.slice(0,10);const days=Math.round((Date.parse(due+'T00:00:00Z')-Date.parse(todayWarsaw+'T00:00:00Z'))/86400000);return days<0?{state:'overdue',label:'Przegląd nieaktualny',detail:'po terminie '+Math.abs(days)+' dni'}:{state:days<=30?'soon':'ok',label:'Przegląd aktualny',detail:'kończy się za '+days+' dni'}}
-document.getElementById('caseBack').addEventListener('click',()=>showScreen(lastScreen||'summary'));
-document.getElementById('caseScreenDeviceLink').addEventListener('click',()=>{if(currentCase?.deviceId)openDevice(currentCase.deviceId)});
-const labels={action:'Naprawy i przeglądy, które wymagają reakcji po stronie szpitala.',repair:'Wszystkie naprawy — aktywne, wymagające akcji i zakończone.',inspection:'Wszystkie przeglądy — planowane, wykonane, aktualne i po terminie.'};
-const summaryRows=[...document.querySelectorAll('#taskList .task')];
-function refreshSummary(){const query=(document.getElementById('summarySearch').value||'').trim().toLocaleLowerCase('pl-PL');let visible=0;for(const row of summaryRows){const filterOk=!activeSummaryFilter||(activeSummaryFilter==='action'?row.dataset.requiresAction==='true':row.dataset.category===activeSummaryFilter);const searchOk=!query||row.textContent.toLocaleLowerCase('pl-PL').includes(query);row.style.display=filterOk&&searchOk?'grid':'none';if(filterOk&&searchOk)visible++}document.getElementById('summaryEmpty').style.display=visible?'none':'block'}
-document.querySelectorAll('.summary-card').forEach(card=>card.addEventListener('click',()=>{activeSummaryFilter=activeSummaryFilter===card.dataset.filter?null:card.dataset.filter;document.querySelectorAll('.summary-card').forEach(value=>value.classList.toggle('active',value.dataset.filter===activeSummaryFilter));document.getElementById('filterLabel').textContent=activeSummaryFilter?labels[activeSummaryFilter]:'Wszystkie sprawy — najświeższa zmiana na górze.';refreshSummary()}));
-document.getElementById('clearFilter').addEventListener('click',()=>{activeSummaryFilter=null;document.querySelectorAll('.summary-card').forEach(value=>value.classList.remove('active'));document.getElementById('filterLabel').textContent='Wszystkie sprawy — najświeższa zmiana na górze.';refreshSummary()});
-document.getElementById('summarySearch').addEventListener('input',refreshSummary);
-function bindSearch(inputId,selector,emptyId){const input=document.getElementById(inputId);const rows=[...document.querySelectorAll(selector)];input.addEventListener('input',()=>{const query=(input.value||'').trim().toLocaleLowerCase('pl-PL');let visible=0;for(const row of rows){const show=!query||row.textContent.toLocaleLowerCase('pl-PL').includes(query);row.style.display=show?'grid':'none';if(show)visible++}document.getElementById(emptyId).style.display=visible?'none':'block'})}
-bindSearch('deviceSearch','.device-row-search','deviceNoResults');bindSearch('repairSearch','.repair-row-search','repairNoResults');bindSearch('inspectionSearch','.inspection-row-search','inspectionNoResults');
+function makeDeviceRow(item){const row=node('article','list-row device-row-search');const main=node('div','list-row-main');append(main,node('b','',item.deviceName),node('span','',deviceMeta(item)));const health=inspectionHealth(item.validUntil);const inspection=node('div','device-list-status');append(inspection,node('span','inspection-state '+health.state,health.label),node('span','inspection-date',health.detail));const side=node('div','list-row-side');side.append(status(item.currentStatus));append(row,main,inspection,side);activate(row,()=>openDevice(item.sourceRecordId));return row}
+const lists={
+ summary:{container:document.getElementById('taskList'),empty:document.getElementById('summaryEmpty'),more:document.getElementById('summaryMore'),loading:document.getElementById('summaryLoading'),error:document.getElementById('summaryError'),filter:'ALL',query:null,cursor:portalModel.initialCases.nextCursor,initialized:true,render:makeSummaryRow},
+ repairs:{container:document.getElementById('repairRows'),empty:document.getElementById('repairNoResults'),more:document.getElementById('repairsMore'),loading:document.getElementById('repairsLoading'),error:document.getElementById('repairsError'),filter:'REPAIR',query:null,cursor:null,initialized:false,render:makeRepairRow},
+ inspections:{container:document.getElementById('inspectionRows'),empty:document.getElementById('inspectionNoResults'),more:document.getElementById('inspectionsMore'),loading:document.getElementById('inspectionsLoading'),error:document.getElementById('inspectionsError'),filter:'INSPECTION',query:null,cursor:null,initialized:false,render:makeInspectionRow}
+};
+async function loadCases(name,reset=false){const state=lists[name];if(state.loading.dataset.busy==='true')return;if(reset){state.cursor=null;state.container.replaceChildren()}state.loading.dataset.busy='true';state.loading.hidden=false;state.error.hidden=true;state.more.disabled=true;try{const page=await api('cases',{filter:state.filter,q:state.query,cursor:state.cursor});for(const item of page.items){caseCache.set(item.sourceRecordId,item);state.container.append(state.render(item))}state.cursor=page.nextCursor;state.more.hidden=!page.nextCursor;state.empty.style.display=state.container.children.length?'none':'block';state.initialized=true}catch{state.error.hidden=false}finally{state.loading.dataset.busy='false';state.loading.hidden=true;state.more.disabled=false}}
+for(const [name,state]of Object.entries(lists))state.more.addEventListener('click',()=>loadCases(name,false));
+let devicesState={container:document.getElementById('deviceRows'),empty:document.getElementById('deviceNoResults'),more:document.getElementById('devicesMore'),loading:document.getElementById('devicesLoading'),error:document.getElementById('devicesError'),query:null,cursor:null,initialized:false,busy:false};
+async function loadDevices(reset=false){if(devicesState.busy)return;if(reset){devicesState.cursor=null;devicesState.container.replaceChildren()}devicesState.busy=true;devicesState.loading.hidden=false;devicesState.error.hidden=true;devicesState.more.disabled=true;try{const page=await api('devices',{q:devicesState.query,cursor:devicesState.cursor});for(const item of page.items)devicesState.container.append(makeDeviceRow(item));devicesState.cursor=page.nextCursor;devicesState.more.hidden=!page.nextCursor;devicesState.empty.style.display=devicesState.container.children.length?'none':'block';devicesState.initialized=true}catch{devicesState.error.hidden=false}finally{devicesState.busy=false;devicesState.loading.hidden=true;devicesState.more.disabled=false}}
+devicesState.more.addEventListener('click',()=>loadDevices(false));
+navButtons.forEach(button=>button.addEventListener('click',()=>{const id=button.dataset.screen;lastScreen=id;showScreen(id);if(id==='repairs'&&!lists.repairs.initialized)loadCases('repairs',true);if(id==='inspections'&&!lists.inspections.initialized)loadCases('inspections',true);if(id==='devices'&&!devicesState.initialized)loadDevices(true)}));
+const labels={ACTION:'Naprawy i przeglądy, które wymagają reakcji po stronie szpitala.',REPAIR:'Wszystkie naprawy — aktywne, wymagające akcji i zakończone.',INSPECTION:'Wszystkie przeglądy — planowane, wykonane, aktualne i po terminie.'};
+document.querySelectorAll('.summary-card').forEach(card=>card.addEventListener('click',()=>{const value=card.dataset.filter.toUpperCase();activeSummaryFilter=activeSummaryFilter===value?'ALL':value;lists.summary.filter=activeSummaryFilter;document.querySelectorAll('.summary-card').forEach(item=>item.classList.toggle('active',item.dataset.filter.toUpperCase()===activeSummaryFilter));document.getElementById('filterLabel').textContent=activeSummaryFilter==='ALL'?'Wszystkie sprawy — najświeższa zmiana na górze.':labels[activeSummaryFilter];loadCases('summary',true)}));
+document.getElementById('clearFilter').addEventListener('click',()=>{activeSummaryFilter='ALL';lists.summary.filter='ALL';document.querySelectorAll('.summary-card').forEach(item=>item.classList.remove('active'));document.getElementById('filterLabel').textContent='Wszystkie sprawy — najświeższa zmiana na górze.';loadCases('summary',true)});
+function debounceSearch(inputId,callback){let timer;document.getElementById(inputId).addEventListener('input',event=>{clearTimeout(timer);timer=setTimeout(()=>{const query=event.target.value.trim();if(query.length===1)return;callback(query.length>=2?query:null)},300)})}
+debounceSearch('summarySearch',query=>{lists.summary.query=query;loadCases('summary',true)});debounceSearch('repairSearch',query=>{lists.repairs.query=query;loadCases('repairs',true)});debounceSearch('inspectionSearch',query=>{lists.inspections.query=query;loadCases('inspections',true)});debounceSearch('deviceSearch',query=>{devicesState.query=query;loadDevices(true)});
+async function openCase(id){const active=document.querySelector('.screen.active');if(active&&active.id!=='caseCard')lastScreen=active.id;const detail=document.getElementById('caseDetail');detail.replaceChildren(node('div','portal-loading','Ładowanie…'));showScreen('caseCard');try{const item=portalModel.focusedCase?.sourceRecordId===id?portalModel.focusedCase:await api('cases/'+encodeURIComponent(id));caseCache.set(id,item);currentCase=item;renderCase(item)}catch{detail.replaceChildren(node('div','portal-error','Nie udało się pobrać danych. Spróbuj ponownie.'))}}
+function renderCase(item){document.getElementById('casePageTitle').textContent='Numer Sprawy: '+text(item.caseNumber);const deviceButton=document.getElementById('caseScreenDeviceLink');deviceButton.hidden=!item.deviceId;deviceButton.textContent=item.deviceId?item.deviceName+' → karta urządzenia':'Przejdź do karty urządzenia';const detail=document.getElementById('caseDetail');detail.replaceChildren();const header=node('div','case-header-line');append(header,node('span','case-kind',item.type==='REPAIR'?'Naprawa':'Przegląd'),node('span','case-service-inline','Serwis: '+portalModel.serviceProviderName));const hero=node('div','case-hero');const titleLine=node('div','hero-title-line');const inline=node('div','inline-status case-main-status');append(inline,node('label','','AKTUALNY STATUS'),status(item.currentStatus));append(titleLine,node('h2','',item.deviceName),inline);const grid=node('div','meta-grid case-meta-grid');append(grid,meta('Numer Sprawy',item.caseNumber),meta('Numer zlecenia klienta',text(item.clientOrderNumber,'brak numeru')),meta('Numer seryjny',item.serialNumber),meta('Nr inwentarzowy',item.inventoryNumber));if(item.type==='REPAIR')append(grid,meta('Data zgłoszenia',formatDateTime(item.reportedAt)));else append(grid,meta('Data wykonania przeglądu',formatDate(item.inspectionPerformedAt)),meta('Ważny do',formatDate(item.validUntil)));const description=meta(item.type==='REPAIR'?'Usterka / opis':'Uwagi / opis',item.description);description.style.marginTop='9px';append(hero,titleLine,grid,description);append(detail,header,hero);if(item.history?.length){const section=node('div','section');append(section,node('h3','','Historia zmian'),node('p','history-order-note','Najstarsza zmiana jest na górze, najnowsza na dole.'));const timeline=node('div','case-history');for(const event of item.history){const row=node('div','case-history-item');const rail=node('div','case-history-rail');rail.append(node('div','case-history-dot'));const card=node('div','case-history-card');append(card,node('b','',event.title),node('p','',text(event.description,'')));append(row,node('div','case-history-date',formatDateTime(event.changedAt)),rail,card);timeline.append(row)}section.append(timeline);detail.append(section)}}
+async function openDevice(id){const active=document.querySelector('.screen.active');lastScreen=active&&active.id==='caseCard'?'caseCard':'devices';const detail=document.getElementById('deviceDetail');detail.replaceChildren(node('div','portal-loading','Ładowanie…'));showScreen('deviceCard');try{const item=await api('devices/'+encodeURIComponent(id));renderDevice(item)}catch{detail.replaceChildren(node('div','portal-error','Nie udało się pobrać danych. Spróbuj ponownie.'))}}
+function renderDevice(item){document.getElementById('devicePageTitle').textContent=item.deviceName;const detail=document.getElementById('deviceDetail');detail.replaceChildren();const hero=node('div','device-hero');const titleLine=node('div','hero-title-line');const inline=node('div','inline-status');append(inline,node('label','','AKTUALNY STATUS'),status(item.currentStatus));append(titleLine,node('h2','',item.deviceName),inline);const grid=node('div','meta-grid');append(grid,meta('Nr inwentarzowy',item.inventoryNumber),meta('Numer seryjny',item.serialNumber),meta('Producent / model',[item.manufacturer,item.model].filter(Boolean).join(' · ')||null));const health=inspectionHealth(item.validUntil);const inspection=node('div','device-card-inspection');const left=node('div');append(left,node('div','label','Przegląd urządzenia'),node('strong','','Termin: '+formatDate(item.validUntil)));const right=node('div');append(right,node('span','inspection-state '+health.state,health.label),node('span','inspection-date',health.detail));append(inspection,left,right);append(hero,titleLine,grid,inspection);detail.append(hero);for(const type of ['REPAIR','INSPECTION']){const section=node('div','section');append(section,node('h3','',type==='REPAIR'?'Naprawy':'Przeglądy'));const list=node('div','case-list');const cases=item.cases.items.filter(value=>value.type===type);if(cases.length)for(const value of cases)list.append(caseLink(value));else list.append(emptyMini(type==='REPAIR'?'Brak napraw':'Brak przeglądów','Brak danych w tym widoku.'));section.append(list);detail.append(section)}}
+function caseLink(item){caseCache.set(item.sourceRecordId,item);const button=node('button','case-link');button.type='button';const info=node('span');append(info,node('b','','Numer Sprawy: '+text(item.caseNumber)),node('span','',item.currentStatus));append(button,info,node('span','arrow','›'));button.addEventListener('click',()=>openCase(item.sourceRecordId));return button}
+function emptyMini(title,description){const item=node('div','mini');append(item,node('b','',title),node('span','',description));return item}
+document.getElementById('caseBack').addEventListener('click',()=>showScreen(lastScreen||'summary'));document.getElementById('caseScreenDeviceLink').addEventListener('click',()=>{if(currentCase?.deviceId)openDevice(currentCase.deviceId)});
 const historyModal=document.getElementById('historyModal');document.querySelectorAll('[data-open-history]').forEach(button=>button.addEventListener('click',()=>historyModal.classList.add('show')));document.querySelectorAll('[data-close-history]').forEach(button=>button.addEventListener('click',()=>historyModal.classList.remove('show')));historyModal.addEventListener('click',event=>{if(event.target===historyModal)historyModal.classList.remove('show')});document.addEventListener('keydown',event=>{if(event.key==='Escape')historyModal.classList.remove('show')});
-document.querySelectorAll('[data-inspection-due]').forEach(element=>{const health=inspectionHealth(element.dataset.inspectionDue);element.className='inspection-state '+health.state;element.textContent=health.label;const detail=element.nextElementSibling;if(detail)detail.textContent=health.detail});
-if(portalModel.focusedCaseId&&caseById.has(portalModel.focusedCaseId))openCase(portalModel.focusedCaseId);
+document.querySelectorAll('#taskList .case-open').forEach((row,index)=>activate(row,()=>openCase(portalModel.initialCases.items[index].sourceRecordId)));
+if(portalModel.focusedCase)openCase(portalModel.focusedCase.sourceRecordId);
 `;

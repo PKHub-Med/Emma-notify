@@ -34,6 +34,7 @@ export type MappedCase = {
   currentStatus: string | null;
   faultDescription: string | null;
   sourceCreatedAt: Date | null;
+  reportedAt: Date | null;
   sourceModifiedAt: Date | null;
   inspectionDueDate: Date | null;
   inspectionDueDateRaw: string | null;
@@ -84,6 +85,7 @@ export function mapServiceOrder(record: AirtableRecord): MappedCase {
       record.fields[SERVICE_ORDER_FIELDS.deviceLink],
     ),
     sourceCreatedAt: parseAirtableDate(record.createdTime),
+    reportedAt: parseAirtableDate(record.fields[SERVICE_ORDER_FIELDS.reportedAt]),
     sourceModifiedAt: parseAirtableDate(
       record.fields[SERVICE_ORDER_FIELDS.sourceModifiedAt],
     ),
@@ -147,6 +149,7 @@ export function mapInspection(record: AirtableRecord): MappedCase {
     currentStatus: values.currentStatus,
     faultDescription: null,
     sourceCreatedAt: parseAirtableDate(record.createdTime),
+    reportedAt: null,
     sourceModifiedAt: parseAirtableDate(
       record.fields[INSPECTION_FIELDS.sourceModifiedAt],
     ),

@@ -22,6 +22,8 @@ const workerEnvironmentSchema = z.object({
   AIRTABLE_PAT: z.string().min(1),
   AIRTABLE_POLL_SECONDS: z.coerce.number().int().positive().default(60),
   AIRTABLE_SYNC_OVERLAP_SECONDS: z.coerce.number().int().nonnegative().default(120),
+  AIRTABLE_TASK_RECONCILE_SECONDS: z.coerce.number().int().positive().default(21_600),
+  AIRTABLE_HOSPITAL_POLL_SECONDS: z.coerce.number().int().positive().default(3_600),
   DIGEST_QUIET_MINUTES: z.coerce.number().int().nonnegative().default(1),
   RESEND_API_KEY: z.string().default(""),
   RESEND_CASE_DIGEST_TEMPLATE_ID: z.string().default(""),
@@ -43,6 +45,8 @@ export type WorkerConfig = BaseConfig & {
   airtablePat: string;
   airtablePollSeconds: number;
   airtableSyncOverlapSeconds: number;
+  airtableTaskReconcileSeconds: number;
+  airtableHospitalPollSeconds: number;
   digestQuietMinutes: number;
   resendApiKey: string | null;
   resendCaseDigestTemplateId: string | null;
@@ -69,6 +73,8 @@ export function loadWorkerConfig(environment: NodeJS.ProcessEnv): WorkerConfig {
     airtablePat: parsed.data.AIRTABLE_PAT,
     airtablePollSeconds: parsed.data.AIRTABLE_POLL_SECONDS,
     airtableSyncOverlapSeconds: parsed.data.AIRTABLE_SYNC_OVERLAP_SECONDS,
+    airtableTaskReconcileSeconds: parsed.data.AIRTABLE_TASK_RECONCILE_SECONDS,
+    airtableHospitalPollSeconds: parsed.data.AIRTABLE_HOSPITAL_POLL_SECONDS,
     digestQuietMinutes: parsed.data.DIGEST_QUIET_MINUTES,
     resendApiKey: parsed.data.RESEND_API_KEY.trim() || null,
     resendCaseDigestTemplateId:

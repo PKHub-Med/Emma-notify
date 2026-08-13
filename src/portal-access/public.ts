@@ -67,6 +67,18 @@ export class PublicPortalAccessService {
   }
 
   async open(token: string, now = new Date()): Promise<PortalAccessOpenResult> {
+    return this.authorize(token, now, true);
+  }
+
+  async authorizeData(token: string, now = new Date()): Promise<PortalAccessOpenResult> {
+    return this.authorize(token, now, false);
+  }
+
+  private async authorize(
+    token: string,
+    now: Date,
+    recordOpen: boolean,
+  ): Promise<PortalAccessOpenResult> {
     const parsed = parseAccessLinkToken(token);
     if (!parsed) return { outcome: "NOT_FOUND" };
     const grant = await this.store.findByPublicId(parsed.publicId);
@@ -76,7 +88,7 @@ export class PublicPortalAccessService {
     if (grant.revokedAt || grant.expiresAt.getTime() <= now.getTime()) {
       return { outcome: "INACTIVE" };
     }
-    if (!await this.store.recordValidOpen(grant.id, now)) {
+    if (recordOpen && !await this.store.recordValidOpen(grant.id, now)) {
       return { outcome: "INACTIVE" };
     }
     return {

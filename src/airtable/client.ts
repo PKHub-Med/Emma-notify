@@ -4,6 +4,8 @@ import type {
   AirtableListOptions,
   AirtableIncrementalSource,
   AirtableRecordSource,
+  AirtableRequestMetrics,
+  AirtableMetricsSource,
 } from "./types.js";
 
 const RETRYABLE_STATUSES = new Set([429, 500, 502, 503, 504]);
@@ -20,12 +22,14 @@ export type AirtableClientOptions = {
   sleep?: (milliseconds: number) => Promise<void>;
 };
 
-export class AirtableClient implements AirtableRecordSource, AirtableIncrementalSource {
+export class AirtableClient implements AirtableRecordSource, AirtableIncrementalSource, AirtableMetricsSource {
   private readonly baseId: string;
   private readonly personalAccessToken: string;
   private readonly fetchFunction: FetchFunction;
   private readonly timeoutMs: number;
   private readonly sleep: (milliseconds: number) => Promise<void>;
+  private requestsMade = 0;
+  private pagesFetched = 0;
 
   constructor(options: AirtableClientOptions) {
     this.baseId = options.baseId;
@@ -65,6 +69,10 @@ export class AirtableClient implements AirtableRecordSource, AirtableIncremental
     return this.parseRecord(await this.requestJson(url, tableId), tableId);
   }
 
+  getRequestMetrics(): AirtableRequestMetrics {
+    return { requestsMade: this.requestsMade, pagesFetched: this.pagesFetched };
+  }
+
   private async fetchPage(
     tableId: string,
     fieldIds: readonly string[],
@@ -82,7 +90,9 @@ export class AirtableClient implements AirtableRecordSource, AirtableIncremental
     }
     if (offset) url.searchParams.set("offset", offset);
 
-    return this.parsePage(await this.requestJson(url, tableId), tableId);
+    const page = this.parsePage(await this.requestJson(url, tableId), tableId);
+    this.pagesFetched += 1;
+    return page;
   }
 
   private async requestJson(url: URL, tableId: string): Promise<unknown> {
@@ -90,6 +100,7 @@ export class AirtableClient implements AirtableRecordSource, AirtableIncremental
       let response: Response;
 
       try {
+        this.requestsMade += 1;
         response = await this.fetchFunction(url, {
           method: "GET",
           headers: { Authorization: `Bearer ${this.personalAccessToken}` },

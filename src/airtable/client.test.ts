@@ -29,6 +29,7 @@ describe("AirtableClient", () => {
     expect(finalUrl).toContain("returnFieldsByFieldId=true");
     expect(finalUrl).toContain("fields%5B%5D=fldOne");
     expect(finalUrl).toContain("offset=next-page");
+    expect(client.getRequestMetrics()).toEqual({ requestsMade: 3, pagesFetched: 2 });
   });
 
   it("uses GET-only requests with filterByFormula and record IDs", async () => {

@@ -1140,4 +1140,8 @@ button{font:inherit}
   .task-case-meta{display:grid}
 }
 
+.portal-pagination{display:flex;align-items:center;justify-content:center;gap:12px;padding:15px 18px;border-top:1px solid var(--line)}
+.portal-loading{color:var(--muted);font-size:13px}
+.portal-error{color:var(--red);font-size:13px}
+[hidden]{display:none!important}
 `;

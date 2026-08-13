@@ -38,6 +38,7 @@ const app = createApp(prisma, accessLinks, portalAccess, unsubscribe, {
   portalViews: new HospitalPortalViewModelService(
     new PrismaHospitalPortalStore(prisma),
     config.serviceName,
+    config.portalPageSize,
   ),
   serviceName: config.serviceName,
 });

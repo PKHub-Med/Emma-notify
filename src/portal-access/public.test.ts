@@ -32,6 +32,14 @@ describe("PublicPortalAccessService", () => {
     expect(store.lastOpenedAt).toEqual(now);
   });
 
+  it("authorizes paginated data without incrementing page openCount", async () => {
+    const grant = record();
+    const store = new MemoryPublicPortalStore(grant);
+    const result = await service(store).authorizeData(token(grant), now);
+    expect(result.outcome).toBe("VALID");
+    expect(store.openCount).toBe(0);
+  });
+
   it("rejects a one-character token change as NOT_FOUND", async () => {
     const grant = record();
     const valid = token(grant);

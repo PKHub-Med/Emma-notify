@@ -30,6 +30,7 @@ describe("case mappers", () => {
       [SERVICE_ORDER_FIELDS.sourceHospitalLink]: ["recHospital", "recIgnored"],
       [SERVICE_ORDER_FIELDS.faultDescription]: "Usterka",
       [SERVICE_ORDER_FIELDS.sourceModifiedAt]: "2026-08-08T10:00:00.000Z",
+      [SERVICE_ORDER_FIELDS.reportedAt]: "2026-08-02T07:30:00.000Z",
     }));
 
     expect(mapped).toMatchObject({
@@ -48,6 +49,16 @@ describe("case mappers", () => {
       sourceHospitalRecordId: "recHospital",
     });
     expect(mapped.sourceSnapshot).not.toHaveProperty("contactRecordIds");
+    expect(mapped.reportedAt?.toISOString()).toBe("2026-08-02T07:30:00.000Z");
+  });
+
+  it("does not fall back to source or sync timestamps when reportedAt is absent", () => {
+    const mapped = mapServiceOrder(record("recMissingDate", {
+      [SERVICE_ORDER_FIELDS.sourceModifiedAt]: "2026-08-08T10:00:00.000Z",
+    }));
+    expect(mapped.reportedAt).toBeNull();
+    expect(mapped.sourceCreatedAt).not.toBeNull();
+    expect(mapped.sourceModifiedAt).not.toBeNull();
   });
 
   it("maps an inspection and preserves an invalid due date", () => {

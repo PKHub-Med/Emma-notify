@@ -34,6 +34,7 @@ import {
   PrismaUnsubscribeGrantStore,
 } from "../communication-unsubscribe/service.js";
 import { PrismaHospitalSyncStore, runHospitalSync } from "./hospital-sync.js";
+import { runReportedAtBackfill } from "./reported-at-backfill.js";
 
 const HEARTBEAT_INTERVAL_MS = 30_000;
 const DELIVERY_PLANNER_INTERVAL_MS = 15_000;
@@ -78,6 +79,7 @@ const communicationEmailProvider = createResendClient(config.resendApiKey);
 let heartbeatTimer: NodeJS.Timeout | undefined;
 let incrementalTimer: NodeJS.Timeout | undefined;
 let taskTimer: NodeJS.Timeout | undefined;
+let taskReconcileTimer: NodeJS.Timeout | undefined;
 let hospitalTimer: NodeJS.Timeout | undefined;
 let recipientResolutionTimer: NodeJS.Timeout | undefined;
 let deliveryPlannerTimer: NodeJS.Timeout | undefined;
@@ -137,6 +139,11 @@ async function start(): Promise<void> {
       communicationStore,
       log: (message) => console.info(message),
     });
+    await runReportedAtBackfill({
+      prisma,
+      airtable,
+      log: (message) => console.info(message),
+    }).catch(() => console.error("[reported-at-backfill] failed; retry on next restart"));
     startPollingLoops();
   } catch {
     console.error("[baseline] failed; worker will continue heartbeat");
@@ -150,9 +157,12 @@ function startPollingLoops(): void {
   taskTimer = setInterval(() => {
     void pollTasks();
   }, config.airtablePollSeconds * 1_000);
+  taskReconcileTimer = setInterval(() => {
+    void pollTasks("RECONCILE");
+  }, config.airtableTaskReconcileSeconds * 1_000);
   hospitalTimer = setInterval(() => {
     void pollHospitals();
-  }, config.airtablePollSeconds * 1_000);
+  }, config.airtableHospitalPollSeconds * 1_000);
   recipientResolutionTimer = setInterval(() => {
     void pollRecipientResolution();
   }, config.airtablePollSeconds * 1_000);
@@ -174,8 +184,11 @@ async function pollHospitals(): Promise<void> {
   if (hospitalRunning || shuttingDown) return;
   hospitalRunning = true;
   try {
-    const count = await runHospitalSync({ airtable, store: hospitalSyncStore });
-    console.info(`[hospital-sync] completed hospitalsFetched=${count}`);
+    await runHospitalSync({
+      airtable,
+      store: hospitalSyncStore,
+      log: (message) => console.info(message),
+    });
   } catch {
     console.error("[hospital-sync] failed; next poll will retry");
   } finally {
@@ -245,7 +258,7 @@ async function pollRecipientResolution(): Promise<void> {
   }
 }
 
-async function pollTasks(): Promise<void> {
+async function pollTasks(requestedMode: "AUTO" | "RECONCILE" = "AUTO"): Promise<void> {
   if (taskRunning || shuttingDown) return;
   taskRunning = true;
   try {
@@ -253,6 +266,8 @@ async function pollTasks(): Promise<void> {
       airtable,
       store: taskSyncStore,
       communicationStore,
+      overlapSeconds: config.airtableSyncOverlapSeconds,
+      requestedMode,
       log: (message) => console.info(message),
     });
   } catch {
@@ -292,6 +307,7 @@ async function shutdown(signal: NodeJS.Signals): Promise<void> {
   if (heartbeatTimer) clearInterval(heartbeatTimer);
   if (incrementalTimer) clearInterval(incrementalTimer);
   if (taskTimer) clearInterval(taskTimer);
+  if (taskReconcileTimer) clearInterval(taskReconcileTimer);
   if (hospitalTimer) clearInterval(hospitalTimer);
   if (recipientResolutionTimer) clearInterval(recipientResolutionTimer);
   if (deliveryPlannerTimer) clearInterval(deliveryPlannerTimer);
