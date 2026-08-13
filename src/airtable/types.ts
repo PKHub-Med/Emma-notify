@@ -36,4 +36,9 @@ export type AirtableRequestMetrics = {
 
 export type AirtableMetricsSource = {
   getRequestMetrics(): AirtableRequestMetrics;
+  fetchAllRecordsWithMetrics?(
+    tableId: string,
+    fieldIds: readonly string[],
+    options?: AirtableListOptions,
+  ): Promise<{ records: AirtableRecord[]; metrics: AirtableRequestMetrics }>;
 };

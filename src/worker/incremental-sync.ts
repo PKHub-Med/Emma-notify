@@ -37,6 +37,12 @@ import {
   observeCommunication,
   type CommunicationEventStore,
 } from "./communication-event.js";
+import {
+  atIncrementalStage,
+  formatIncrementalSyncFailure,
+  IncrementalSyncStageError,
+  type IncrementalSyncStage,
+} from "./incremental-sync-error.js";
 
 export type IncrementalSyncOptions = {
   overlapSeconds: number;
@@ -103,12 +109,14 @@ export async function runIncrementalSync(dependencies: {
   const startedAt = now();
   const stats = emptyStats();
   const contactCache = new Map<string, Contact>();
-  const serviceCommunicationEnabled = dependencies.communicationStore
-    ? await dependencies.communicationStore.isBaselineCompleted("SERVICE_ORDER")
-    : false;
+  try {
+    const serviceCommunicationEnabled = dependencies.communicationStore
+      ? await atIncrementalStage("COMMUNICATION", () =>
+          dependencies.communicationStore!.isBaselineCompleted("SERVICE_ORDER"))
+      : false;
 
-  for (const definition of ENTITY_DEFINITIONS) {
-    await syncEntity(
+    for (const definition of ENTITY_DEFINITIONS) {
+      await syncEntity(
       definition,
       dependencies.airtable,
       dependencies.store,
@@ -120,14 +128,22 @@ export async function runIncrementalSync(dependencies: {
       dependencies.communicationStore,
       serviceCommunicationEnabled,
       dependencies.log,
-    );
-  }
+      );
+    }
 
-  const completedAt = now();
-  stats.durationMs = Math.max(0, completedAt.getTime() - startedAt.getTime());
-  await dependencies.store.setWorkerLastSync(completedAt);
-  dependencies.log?.(`[incremental-sync] completed ${formatStats(stats)}`);
-  return stats;
+    const completedAt = now();
+    stats.durationMs = Math.max(0, completedAt.getTime() - startedAt.getTime());
+    await atIncrementalStage("DB", () => dependencies.store.setWorkerLastSync(completedAt));
+    dependencies.log?.(`[incremental-sync] completed ${formatStats(stats)}`);
+    return stats;
+  } catch (error: unknown) {
+    const failedAt = now();
+    dependencies.log?.(formatIncrementalSyncFailure({
+      error,
+      durationMs: failedAt.getTime() - startedAt.getTime(),
+    }));
+    throw error;
+  }
 }
 
 export function buildLastModifiedFormula(fieldId: string, since: Date): string {
@@ -147,26 +163,32 @@ async function syncEntity(
   serviceCommunicationEnabled: boolean,
   log: ((message: string) => void) | undefined,
 ): Promise<void> {
-  const checkpoint = await store.getCheckpoint(definition.entityType);
+  const checkpoint = await atIncrementalStage("DB", () =>
+    store.getCheckpoint(definition.entityType));
   if (!checkpoint) {
-    throw new Error(`Baseline checkpoint missing for ${definition.entityType}`);
+    throw new IncrementalSyncStageError(
+      "DB",
+      new Error(`Baseline checkpoint missing for ${definition.entityType}`),
+    );
   }
-  await store.markRunning(definition.entityType, startedAt);
+  await atIncrementalStage("DB", () => store.markRunning(definition.entityType, startedAt));
 
   try {
     const effectiveSince = new Date(
       checkpoint.getTime() - options.overlapSeconds * 1_000,
     );
-    const records = await airtable.fetchAllRecords(
-      definition.tableId,
-      definition.fieldIds,
-      {
-        filterByFormula: buildLastModifiedFormula(
-          definition.modifiedFieldId,
-          effectiveSince,
-        ),
-      },
-    );
+    const entityStage = definition.entityType as IncrementalSyncStage;
+    const records = await atIncrementalStage(entityStage, () =>
+      airtable.fetchAllRecords(
+        definition.tableId,
+        definition.fieldIds,
+        {
+          filterByFormula: buildLastModifiedFormula(
+            definition.modifiedFieldId,
+            effectiveSince,
+          ),
+        },
+      ));
     stats[definition.fetchedStat] += records.length;
 
     for (const record of records) {
@@ -186,9 +208,12 @@ async function syncEntity(
       );
     }
 
-    await store.markSuccessful(definition.entityType, startedAt);
+    await atIncrementalStage("DB", () =>
+      store.markSuccessful(definition.entityType, startedAt));
   } catch (error: unknown) {
-    await store.markFailed(definition.entityType, now());
+    // Preserve the operation that caused the poll to fail. Checkpoint status is
+    // best-effort here and must not mask the primary stage/error metadata.
+    await store.markFailed(definition.entityType, now()).catch(() => undefined);
     throw error;
   }
 }
@@ -207,44 +232,47 @@ async function processRecord(
   serviceCommunicationEnabled: boolean,
   log: ((message: string) => void) | undefined,
 ): Promise<void> {
-  const mappedCase = definition.map(record);
-  const recipients = await resolveCurrentRecipients(
-    mappedCase.contactRecordIds,
-    airtable,
-    contactCache,
-  );
-  const storedCase = await store.findCase(mappedCase);
+  const entityStage = definition.entityType as IncrementalSyncStage;
+  const mappedCase = await atIncrementalStage(entityStage, async () =>
+    definition.map(record));
+  const recipients = await atIncrementalStage(entityStage, () =>
+    resolveCurrentRecipients(mappedCase.contactRecordIds, airtable, contactCache));
+  const storedCase = await atIncrementalStage("DB", () => store.findCase(mappedCase));
 
   if (!storedCase || !legacyNotificationsEnabled) {
-    const trackedCaseId = await store.upsertCaseWithoutEvent(mappedCase, detectedAt);
-    await store.syncRecipients(trackedCaseId, recipients, detectedAt);
+    const trackedCaseId = await atIncrementalStage("DB", () =>
+      store.upsertCaseWithoutEvent(mappedCase, detectedAt));
+    await atIncrementalStage("DB", () =>
+      store.syncRecipients(trackedCaseId, recipients, detectedAt));
     if (
       !legacyNotificationsEnabled &&
       definition.entityType === SyncEntityType.SERVICE_ORDER &&
       communicationStore
     ) {
-      const result = await observeCommunication({
+      const result = await atIncrementalStage("COMMUNICATION", () => observeCommunication({
         store: communicationStore,
         observation: buildServiceOrderObservation(mappedCase, detectedAt),
         allowEvent: serviceCommunicationEnabled,
         detectedAt,
         ...(log ? { log } : {}),
-      });
+      }));
       if (result.outcome === "CREATED") stats.communicationEventsCreated += 1;
     }
     return;
   }
 
-  await store.syncRecipients(storedCase.id, recipients, detectedAt);
+  await atIncrementalStage("DB", () =>
+    store.syncRecipients(storedCase.id, recipients, detectedAt));
   const oldStatus = normalizeStatus(storedCase.currentStatus);
   const newStatus = normalizeStatus(mappedCase.currentStatus);
   if (oldStatus === newStatus) {
-    await store.upsertCaseWithoutEvent(mappedCase, detectedAt);
+    await atIncrementalStage("DB", () =>
+      store.upsertCaseWithoutEvent(mappedCase, detectedAt));
     return;
   }
 
   stats.statusChangesDetected += 1;
-  const result = await store.processStatusChange({
+  const result = await atIncrementalStage("DB", () => store.processStatusChange({
     trackedCaseId: storedCase.id,
     mappedCase: { ...mappedCase, currentStatus: newStatus },
     eventType: definition.eventType,
@@ -261,7 +289,7 @@ async function processRecord(
     }),
     detectedAt,
     quietMinutes,
-  });
+  }));
 
   if (result.duplicate) {
     stats.duplicateEventsIgnored += 1;

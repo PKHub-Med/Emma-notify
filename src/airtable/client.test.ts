@@ -36,7 +36,7 @@ describe("AirtableClient", () => {
     const fetchFunction = vi
       .fn<typeof fetch>()
       .mockResolvedValueOnce(response({ records: [] }))
-      .mockResolvedValueOnce(response(airtableRecord("recContact")));
+      .mockResolvedValueOnce(response({ records: [airtableRecord("recContact")] }));
     const client = new AirtableClient({
       baseId: "appBase",
       personalAccessToken: "secret-token",
@@ -51,11 +51,53 @@ describe("AirtableClient", () => {
     const listUrl = String(fetchFunction.mock.calls[0]?.[0]);
     const recordUrl = String(fetchFunction.mock.calls[1]?.[0]);
     expect(listUrl).toContain("filterByFormula=");
-    expect(recordUrl).toContain("tblContacts/recContact");
+    expect(recordUrl).toContain("tblContacts?");
+    expect(recordUrl).toContain("pageSize=1");
+    expect(recordUrl).toContain("filterByFormula=RECORD_ID");
     expect(recordUrl).toContain("returnFieldsByFieldId=true");
     expect(recordUrl).toContain("fields%5B%5D=fldEmail");
     expect(fetchFunction.mock.calls[0]?.[1]).toMatchObject({ method: "GET" });
     expect(fetchFunction.mock.calls[1]?.[1]).toMatchObject({ method: "GET" });
+  });
+
+  it("reports safe Airtable request metadata without exposing credentials", async () => {
+    const fetchFunction = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response("", { status: 422 }),
+    );
+    const client = new AirtableClient({
+      baseId: "appBase",
+      personalAccessToken: "secret-token",
+      fetchFunction,
+    });
+
+    await expect(client.fetchRecord("tblContacts", "recContact", ["fldEmail"]))
+      .rejects.toMatchObject({
+        name: "AirtableRequestError",
+        code: "AIRTABLE_HTTP_422",
+        httpStatus: 422,
+        requestType: "RECORD",
+        tableId: "tblContacts",
+      });
+  });
+
+  it("returns operation-local list metrics", async () => {
+    const client = new AirtableClient({
+      baseId: "appBase",
+      personalAccessToken: "secret-token",
+      fetchFunction: vi.fn<typeof fetch>().mockResolvedValue(
+        response({ records: [] }),
+      ),
+    });
+
+    const measured = await client.fetchAllRecordsWithMetrics(
+      "tblTasks",
+      ["fldStatus"],
+    );
+
+    expect(measured).toMatchObject({
+      records: [],
+      metrics: { requestsMade: 1, pagesFetched: 1 },
+    });
   });
 });
 

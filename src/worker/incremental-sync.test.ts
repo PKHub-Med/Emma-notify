@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { AirtableRequestError } from "../airtable/client.js";
 import {
   BufferStatus,
   CaseType,
@@ -220,6 +221,94 @@ class RecordingCommunicationStore implements CommunicationEventStore {
 }
 
 describe("incremental status sync", () => {
+  it("logs SERVICE_ORDER Airtable metadata and allows the following poll to succeed", async () => {
+    const source = new FakeAirtable();
+    const store = new MemoryStore();
+    const logs: string[] = [];
+    const originalFetch = source.fetchAllRecords.bind(source);
+    vi.spyOn(source, "fetchAllRecords")
+      .mockRejectedValueOnce(new AirtableRequestError(
+        "Airtable record request failed for table tblContact",
+        AIRTABLE_TABLE_IDS.contacts,
+        "RECORD",
+        422,
+      ))
+      .mockImplementation(originalFetch);
+    const poll = () => runIncrementalSync({
+      airtable: source,
+      store,
+      options: { overlapSeconds: 120, quietMinutes: 1, legacyNotificationsEnabled: false },
+      now: () => date(0),
+      log: (message) => logs.push(message),
+    });
+
+    await expect(poll()).rejects.toThrow("Incremental synchronization stage failed");
+    await expect(poll()).resolves.toMatchObject({ serviceOrdersFetched: 0 });
+    expect(logs[0]).toContain("INCREMENTAL_SYNC_FAILED stage=SERVICE_ORDER");
+    expect(logs[0]).toContain("errorCode=AIRTABLE_HTTP_422");
+    expect(logs[0]).toContain("requestType=RECORD requestEntity=CONTACT httpStatus=422");
+  });
+
+  it("logs failures from INSPECTION, DB and COMMUNICATION with their exact stage", async () => {
+    const cases: Array<{ expected: string; run: () => Promise<unknown>; logs: string[] }> = [];
+
+    const inspectionSource = new FakeAirtable();
+    const inspectionStore = new MemoryStore();
+    const inspectionLogs: string[] = [];
+    vi.spyOn(inspectionSource, "fetchAllRecords").mockImplementation(async (tableId) => {
+      if (tableId === AIRTABLE_TABLE_IDS.inspections) throw new Error("inspection unavailable");
+      return [];
+    });
+    cases.push({
+      expected: "stage=INSPECTION",
+      logs: inspectionLogs,
+      run: () => runIncrementalSync({
+        airtable: inspectionSource, store: inspectionStore,
+        options: { overlapSeconds: 120, quietMinutes: 1, legacyNotificationsEnabled: false },
+        now: () => date(0), log: (message) => inspectionLogs.push(message),
+      }),
+    });
+
+    const dbSource = new FakeAirtable();
+    const dbStore = new MemoryStore();
+    const dbLogs: string[] = [];
+    vi.spyOn(dbStore, "getCheckpoint").mockRejectedValue(Object.assign(
+      new Error("query details must not be logged"), { code: "P2024" },
+    ));
+    cases.push({
+      expected: "stage=DB",
+      logs: dbLogs,
+      run: () => runIncrementalSync({
+        airtable: dbSource, store: dbStore,
+        options: { overlapSeconds: 120, quietMinutes: 1, legacyNotificationsEnabled: false },
+        now: () => date(0), log: (message) => dbLogs.push(message),
+      }),
+    });
+
+    const communicationSource = new FakeAirtable();
+    const communicationStore = new RecordingCommunicationStore();
+    const communicationLogs: string[] = [];
+    vi.spyOn(communicationStore, "isBaselineCompleted")
+      .mockRejectedValue(new Error("Communication baseline read failed"));
+    cases.push({
+      expected: "stage=COMMUNICATION",
+      logs: communicationLogs,
+      run: () => runIncrementalSync({
+        airtable: communicationSource, store: new MemoryStore(), communicationStore,
+        options: { overlapSeconds: 120, quietMinutes: 1, legacyNotificationsEnabled: false },
+        now: () => date(0), log: (message) => communicationLogs.push(message),
+      }),
+    });
+
+    for (const testCase of cases) {
+      await expect(testCase.run()).rejects.toThrow();
+      expect(testCase.logs).toHaveLength(1);
+      expect(testCase.logs[0]).toContain(`INCREMENTAL_SYNC_FAILED ${testCase.expected}`);
+    }
+    expect(dbLogs[0]).toContain("errorCode=P2024");
+    expect(dbLogs[0]).not.toContain("query details");
+  });
+
   it("does not create an event or buffer when legacy notifications are disabled", async () => {
     const fixture = serviceFixture("A", "B", [
       eligibleContact("recContact", "one@example.com"),

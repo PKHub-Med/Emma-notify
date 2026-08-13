@@ -94,7 +94,7 @@ export async function runCommunicationDeliveryCleanup(input: {
   log?: (message: string) => void;
 }): Promise<DeliveryCleanupStats | null> {
   if (!input.activation) {
-    input.log?.("COMMUNICATION_DELIVERY_CLEANUP_SKIPPED reason=SEND_NOT_BEFORE_MISSING");
+    input.log?.("COMMUNICATION_DELIVERY_CLEANUP skipped reason=send_not_before_missing");
     return null;
   }
   const startedAt = (input.now ?? (() => new Date()))();
@@ -104,7 +104,10 @@ export async function runCommunicationDeliveryCleanup(input: {
     activation: input.activation,
     completedAt: startedAt,
   });
-  if (!result) return null;
+  if (!result) {
+    input.log?.("COMMUNICATION_DELIVERY_CLEANUP skipped reason=already_completed");
+    return null;
+  }
   for (const deliveryId of result.cancelledIds) {
     input.log?.(
       `COMMUNICATION_DELIVERY_CANCELLED deliveryId=${deliveryId} ` +

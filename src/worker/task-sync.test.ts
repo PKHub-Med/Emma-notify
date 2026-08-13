@@ -372,12 +372,21 @@ describe("task polling and communication events", () => {
   it("marks a failed synchronization without creating an event", async () => {
     const fixture = taskFixture();
     const markFailed = vi.spyOn(fixture.store, "markFailed");
+    const logs: string[] = [];
     vi.spyOn(fixture.source, "fetchAllRecords")
       .mockRejectedValueOnce(new Error("offline"));
 
-    await expect(fixture.run()).rejects.toThrow("offline");
+    await expect(runTaskSync({
+      airtable: fixture.source,
+      store: fixture.store,
+      communicationStore: fixture.communication,
+      now: () => new Date("2026-08-11T10:00:00.000Z"),
+      log: (message) => logs.push(message),
+    })).rejects.toThrow("offline");
     expect(markFailed).toHaveBeenCalledOnce();
     expect(fixture.communication.events).toHaveLength(0);
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).toContain("INCREMENTAL_SYNC_FAILED stage=TASK");
   });
 });
 

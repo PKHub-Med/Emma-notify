@@ -360,7 +360,7 @@ async function pollTasks(
       log: (message) => console.info(message),
     });
   } catch {
-    console.error("[task-sync] failed; next poll will retry");
+    // runTaskSync emits the safe, stage-aware failure log. The timer remains alive.
   } finally {
     taskRunning = false;
   }
@@ -382,7 +382,7 @@ async function pollIncremental(): Promise<void> {
       log: (message) => console.info(message),
     });
   } catch {
-    console.error("[incremental-sync] failed; next poll will retry");
+    // runIncrementalSync emits the safe, stage-aware failure log. The timer remains alive.
   } finally {
     incrementalRunning = false;
   }

@@ -13,6 +13,23 @@ const MAX_ATTEMPTS = 5;
 const DEFAULT_TIMEOUT_MS = 15_000;
 
 type FetchFunction = typeof fetch;
+export type AirtableRequestType = "LIST" | "RECORD";
+
+export class AirtableRequestError extends Error {
+  readonly code: string;
+
+  constructor(
+    message: string,
+    readonly tableId: string,
+    readonly requestType: AirtableRequestType,
+    readonly httpStatus?: number,
+    options?: ErrorOptions,
+  ) {
+    super(message, options);
+    this.name = "AirtableRequestError";
+    this.code = httpStatus ? `AIRTABLE_HTTP_${httpStatus}` : "AIRTABLE_REQUEST_FAILED";
+  }
+}
 
 export type AirtableClientOptions = {
   baseId: string;
@@ -45,16 +62,25 @@ export class AirtableClient implements AirtableRecordSource, AirtableIncremental
     fieldIds: readonly string[],
     options: AirtableListOptions = {},
   ): Promise<AirtableRecord[]> {
+    return (await this.fetchAllRecordsWithMetrics(tableId, fieldIds, options)).records;
+  }
+
+  async fetchAllRecordsWithMetrics(
+    tableId: string,
+    fieldIds: readonly string[],
+    options: AirtableListOptions = {},
+  ): Promise<{ records: AirtableRecord[]; metrics: AirtableRequestMetrics }> {
     const records: AirtableRecord[] = [];
+    const metrics = { requestsMade: 0, pagesFetched: 0 };
     let offset: string | undefined;
 
     do {
-      const page = await this.fetchPage(tableId, fieldIds, options, offset);
+      const page = await this.fetchPage(tableId, fieldIds, options, offset, metrics);
       records.push(...page.records);
       offset = page.offset;
     } while (offset);
 
-    return records;
+    return { records, metrics };
   }
 
   async fetchRecord(
@@ -62,12 +88,33 @@ export class AirtableClient implements AirtableRecordSource, AirtableIncremental
     recordId: string,
     fieldIds: readonly string[],
   ): Promise<AirtableRecord> {
+    // Airtable's retrieve-record endpoint rejects fields[] with HTTP 422. Use
+    // the list endpoint with RECORD_ID() so the response remains field-limited.
     const url = new URL(
-      `https://api.airtable.com/v0/${encodeURIComponent(this.baseId)}/${encodeURIComponent(tableId)}/${encodeURIComponent(recordId)}`,
+      `https://api.airtable.com/v0/${encodeURIComponent(this.baseId)}/${encodeURIComponent(tableId)}`,
     );
+    url.searchParams.set("pageSize", "1");
     url.searchParams.set("returnFieldsByFieldId", "true");
     for (const fieldId of fieldIds) url.searchParams.append("fields[]", fieldId);
-    return this.parseRecord(await this.requestJson(url, tableId), tableId);
+    url.searchParams.set(
+      "filterByFormula",
+      `RECORD_ID() = '${escapeFormulaString(recordId)}'`,
+    );
+    const page = this.parsePage(
+      await this.requestJson(url, tableId, "RECORD"),
+      tableId,
+    );
+    this.pagesFetched += 1;
+    const record = page.records[0];
+    if (!record) {
+      throw new AirtableRequestError(
+        `Airtable record was not found in table ${tableId}`,
+        tableId,
+        "RECORD",
+        404,
+      );
+    }
+    return record;
   }
 
   getRequestMetrics(): AirtableRequestMetrics {
@@ -79,6 +126,7 @@ export class AirtableClient implements AirtableRecordSource, AirtableIncremental
     fieldIds: readonly string[],
     options: AirtableListOptions,
     offset?: string,
+    operationMetrics?: AirtableRequestMetrics,
   ): Promise<AirtablePage> {
     const url = new URL(
       `https://api.airtable.com/v0/${encodeURIComponent(this.baseId)}/${encodeURIComponent(tableId)}`,
@@ -91,17 +139,27 @@ export class AirtableClient implements AirtableRecordSource, AirtableIncremental
     }
     if (offset) url.searchParams.set("offset", offset);
 
-    const page = this.parsePage(await this.requestJson(url, tableId), tableId);
+    const page = this.parsePage(
+      await this.requestJson(url, tableId, "LIST", operationMetrics),
+      tableId,
+    );
     this.pagesFetched += 1;
+    if (operationMetrics) operationMetrics.pagesFetched += 1;
     return page;
   }
 
-  private async requestJson(url: URL, tableId: string): Promise<unknown> {
+  private async requestJson(
+    url: URL,
+    tableId: string,
+    requestType: AirtableRequestType,
+    operationMetrics?: AirtableRequestMetrics,
+  ): Promise<unknown> {
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
       let response: Response;
 
       try {
         this.requestsMade += 1;
+        if (operationMetrics) operationMetrics.requestsMade += 1;
         response = await this.fetchFunction(url, {
           method: "GET",
           headers: { Authorization: `Bearer ${this.personalAccessToken}` },
@@ -109,9 +167,13 @@ export class AirtableClient implements AirtableRecordSource, AirtableIncremental
         });
       } catch (error: unknown) {
         if (attempt === MAX_ATTEMPTS) {
-          throw new Error(`Airtable request failed for table ${tableId}`, {
-            cause: error,
-          });
+          throw new AirtableRequestError(
+            `Airtable ${requestType.toLowerCase()} request failed for table ${tableId}`,
+            tableId,
+            requestType,
+            undefined,
+            { cause: error },
+          );
         }
         await this.sleep(this.backoffMilliseconds(attempt));
         continue;
@@ -122,8 +184,11 @@ export class AirtableClient implements AirtableRecordSource, AirtableIncremental
       }
 
       if (!RETRYABLE_STATUSES.has(response.status) || attempt === MAX_ATTEMPTS) {
-        throw new Error(
-          `Airtable request failed for table ${tableId} with status ${response.status}`,
+        throw new AirtableRequestError(
+          `Airtable ${requestType.toLowerCase()} request failed for table ${tableId} with status ${response.status}`,
+          tableId,
+          requestType,
+          response.status,
         );
       }
 
@@ -134,7 +199,11 @@ export class AirtableClient implements AirtableRecordSource, AirtableIncremental
       await this.sleep(delay);
     }
 
-    throw new Error(`Airtable request failed for table ${tableId}`);
+    throw new AirtableRequestError(
+      `Airtable ${requestType.toLowerCase()} request failed for table ${tableId}`,
+      tableId,
+      requestType,
+    );
   }
 
   private parsePage(value: unknown, tableId: string): AirtablePage {
@@ -167,6 +236,10 @@ export class AirtableClient implements AirtableRecordSource, AirtableIncremental
   private backoffMilliseconds(attempt: number): number {
     return 500 * 2 ** (attempt - 1);
   }
+}
+
+function escapeFormulaString(value: string): string {
+  return value.replaceAll("\\", "\\\\").replaceAll("'", "\\'");
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {

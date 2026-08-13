@@ -9,6 +9,8 @@ import {
 import { mapTask, type MappedTask } from "../airtable/task.js";
 import type {
   AirtableIncrementalSource,
+  AirtableListOptions,
+  AirtableRecord,
   AirtableRequestMetrics,
 } from "../airtable/types.js";
 import {
@@ -16,6 +18,7 @@ import {
   observeCommunication,
   type CommunicationEventStore,
 } from "./communication-event.js";
+import { formatIncrementalSyncFailure } from "./incremental-sync-error.js";
 
 export type TaskSyncMode = "BASELINE" | "INCREMENTAL" | "RECONCILE" | "REMINDER_ELIGIBILITY";
 export type TaskUpsertOutcome = "FIRST_SEEN" | "UNCHANGED" | "CHANGED";
@@ -108,10 +111,8 @@ export async function runTaskSync(dependencies: {
 }): Promise<TaskSyncStats> {
   const now = dependencies.now ?? (() => new Date());
   const startedAt = now();
-  await dependencies.store.markRunning(startedAt);
-  const metricsBefore = requestMetrics(dependencies.airtable);
-
   try {
+    await dependencies.store.markRunning(startedAt);
     const checkpoint = await dependencies.store.getCheckpoint();
     const communicationBaseline = await dependencies.communicationStore.isBaselineCompleted("TASK");
     const mode: TaskSyncMode = dependencies.requestedMode === "REMINDER_ELIGIBILITY"
@@ -130,11 +131,13 @@ export async function runTaskSync(dependencies: {
             dependencies.timeZone ?? "Europe/Warsaw",
           ) }
         : undefined;
-    const records = await dependencies.airtable.fetchAllRecords(
+    const measured = await fetchTaskRecords(
+      dependencies.airtable,
       AIRTABLE_TABLE_IDS.tasks,
       TASK_FIELD_IDS,
       listOptions,
     );
+    const records = measured.records;
     const stats: TaskSyncStats = {
       mode, tasksFetched: records.length, recordsFetched: records.length,
       pagesFetched: 0, requestsMade: 0, firstSeen: 0, changed: 0, unchanged: 0,
@@ -166,14 +169,19 @@ export async function runTaskSync(dependencies: {
       mode === "BASELINE",
       mode !== "REMINDER_ELIGIBILITY",
     );
-    const metricsAfter = requestMetrics(dependencies.airtable);
-    stats.pagesFetched = metricsAfter.pagesFetched - metricsBefore.pagesFetched;
-    stats.requestsMade = metricsAfter.requestsMade - metricsBefore.requestsMade;
+    stats.pagesFetched = measured.metrics.pagesFetched;
+    stats.requestsMade = measured.metrics.requestsMade;
     stats.durationMs = Math.max(0, completedAt.getTime() - startedAt.getTime());
     dependencies.log?.(formatTaskSyncStats(stats));
     return stats;
   } catch (error: unknown) {
-    await dependencies.store.markFailed(now());
+    await dependencies.store.markFailed(now()).catch(() => undefined);
+    const failedAt = now();
+    dependencies.log?.(formatIncrementalSyncFailure({
+      error,
+      fallbackStage: "TASK",
+      durationMs: failedAt.getTime() - startedAt.getTime(),
+    }));
     throw error;
   }
 }
@@ -221,6 +229,34 @@ function requestMetrics(source: AirtableIncrementalSource): AirtableRequestMetri
     getRequestMetrics?: () => AirtableRequestMetrics;
   };
   return metricsSource.getRequestMetrics?.() ?? { requestsMade: 0, pagesFetched: 0 };
+}
+
+async function fetchTaskRecords(
+  source: AirtableIncrementalSource,
+  tableId: string,
+  fieldIds: readonly string[],
+  options?: AirtableListOptions,
+): Promise<{ records: AirtableRecord[]; metrics: AirtableRequestMetrics }> {
+  const measuredSource = source as AirtableIncrementalSource & {
+    fetchAllRecordsWithMetrics?: (
+      tableId: string,
+      fieldIds: readonly string[],
+      options?: AirtableListOptions,
+    ) => Promise<{ records: AirtableRecord[]; metrics: AirtableRequestMetrics }>;
+  };
+  if (measuredSource.fetchAllRecordsWithMetrics) {
+    return measuredSource.fetchAllRecordsWithMetrics(tableId, fieldIds, options);
+  }
+  const before = requestMetrics(source);
+  const records = await source.fetchAllRecords(tableId, fieldIds, options);
+  const after = requestMetrics(source);
+  return {
+    records,
+    metrics: {
+      pagesFetched: after.pagesFetched - before.pagesFetched,
+      requestsMade: after.requestsMade - before.requestsMade,
+    },
+  };
 }
 
 function taskData(task: MappedTask, snapshot: ReturnType<typeof buildTaskSnapshot>, seenAt: Date) {
