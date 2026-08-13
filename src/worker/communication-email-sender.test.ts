@@ -39,6 +39,38 @@ describe("communication email activation and recipient safety", () => {
     expect(fixture.provider.requests).toHaveLength(1);
   });
 
+  it("cancels a historical missing-scope delivery before claim and never revisits it", async () => {
+    const fixture = setup({
+      detectedAt: new Date(activation.getTime() - 1),
+      eventSnapshot: {},
+    });
+    const prepare = vi.fn();
+    for (let loop = 0; loop < 100; loop += 1) {
+      await run(fixture, { communicationAssetsEnabled: true }, [], now, { prepare });
+    }
+    expect(fixture.candidate.status).toBe(CommunicationDeliveryStatus.CANCELLED);
+    expect(fixture.store.cancelReason).toBe(
+      CommunicationDeliveryCancelReason.MISSING_HOSPITAL_SCOPE_LEGACY,
+    );
+    expect(fixture.candidate.attemptCount).toBe(0);
+    expect(fixture.provider.requests).toHaveLength(0);
+    expect(prepare).not.toHaveBeenCalled();
+  });
+
+  it("does not retry a FAILED missing-scope delivery even if nextRetryAt was set", async () => {
+    const fixture = setup({
+      status: CommunicationDeliveryStatus.FAILED,
+      nextRetryAt: new Date(now.getTime() - 1),
+      eventSnapshot: {},
+    });
+    await run(fixture);
+    expect(fixture.candidate.status).toBe(CommunicationDeliveryStatus.CANCELLED);
+    expect(fixture.store.cancelReason).toBe(
+      CommunicationDeliveryCancelReason.MISSING_HOSPITAL_SCOPE,
+    );
+    expect(fixture.candidate.attemptCount).toBe(0);
+  });
+
   it("runs bounded asset preflight before sending when explicitly enabled", async () => {
     const fixture = setup();
     const order: string[] = [];
@@ -71,6 +103,21 @@ describe("communication email activation and recipient safety", () => {
     expect(fixture.candidate.recipient.email).toBe(intended);
     expect(fixture.store.actualRecipientEmail).toBe("test@example.test");
     expect(fixture.store.emailMode).toBe("TEST");
+  });
+
+  it("sends one new scoped REPAIR_COMPLETED only to TEST_EMAIL", async () => {
+    const fixture = setup({
+      scenario: CommunicationScenario.REPAIR_COMPLETED,
+      eventSnapshot: {
+        ...repairSnapshot(),
+        emmaCustomerStatus: "Naprawa zakoĹ„czona",
+      },
+    });
+    await run(fixture);
+    expect(fixture.candidate.status).toBe(CommunicationDeliveryStatus.SENT);
+    expect(fixture.provider.requests).toHaveLength(1);
+    expect(fixture.provider.requests[0]?.to).toBe("test@example.test");
+    expect(fixture.store.actualRecipientEmail).toBe("test@example.test");
   });
 
   it("uses published hosted template and replyTo without from/subject/html/text/react", async () => {
@@ -437,6 +484,7 @@ function repairSnapshot() {
 
 function reminderSnapshot(overrides = {}) {
   return {
+    sourceHospitalRecordId: "recHospital",
     day: "2026-08-16",
     emmaCustomerStatus: "Wizyta potwierdzona",
     emmaMailTemplate: "Przegląd-przypomnienie_o_wizycie",

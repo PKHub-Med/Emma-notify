@@ -243,9 +243,17 @@ export async function runCommunicationDeliveryPlanner(input: {
       createDeliveryPlan(event, recipient.id, planningNow, input.timeZone));
     const created = await input.store.ensureDeliveries(event, plans, planningNow);
     for (const delivery of created) {
-      input.log?.(
-        `COMMUNICATION_DELIVERY_CREATED eventId=${event.id} scenario=${event.scenario} status=${delivery.status} scheduleReason=${delivery.scheduleReason}`,
-      );
+      if (delivery.status === CommunicationDeliveryStatus.CANCELLED) {
+        input.log?.(
+          `COMMUNICATION_DELIVERY_CANCELLED deliveryId=${delivery.id} ` +
+          `reason=${delivery.cancelReason ?? "UNKNOWN"}`,
+        );
+      } else {
+        input.log?.(
+          `COMMUNICATION_DELIVERY_CREATED eventId=${event.id} scenario=${event.scenario} ` +
+          `status=${delivery.status} scheduleReason=${delivery.scheduleReason}`,
+        );
+      }
     }
   }
 
@@ -299,6 +307,20 @@ export function createDeliveryPlan(
   now: Date,
   timeZone: string,
 ): DeliveryPlan {
+  if (!snapshotString(event.eventSnapshot, "sourceHospitalRecordId")) {
+    return {
+      recipientId,
+      status: CommunicationDeliveryStatus.CANCELLED,
+      scheduledFor: event.scenario === CommunicationScenario.INSPECTION_REMINDER
+        ? reminderScheduledForOrDetectedAt(event, timeZone)
+        : event.detectedAt,
+      readyAt: null,
+      scheduleReason: event.scenario === CommunicationScenario.INSPECTION_REMINDER
+        ? CommunicationDeliveryScheduleReason.REMINDER_0600
+        : CommunicationDeliveryScheduleReason.EVENT_DRIVEN,
+      cancelReason: CommunicationDeliveryCancelReason.MISSING_HOSPITAL_SCOPE,
+    };
+  }
   if (event.scenario !== CommunicationScenario.INSPECTION_REMINDER) {
     return {
       recipientId,
@@ -336,6 +358,14 @@ export function createDeliveryPlan(
     scheduleReason: CommunicationDeliveryScheduleReason.REMINDER_0600,
     cancelReason: null,
   };
+}
+
+function reminderScheduledForOrDetectedAt(
+  event: DeliveryPlanningEvent,
+  timeZone: string,
+): Date {
+  const visitDate = parseLocalDate(snapshotValue(event.eventSnapshot, "day"));
+  return visitDate ? reminderScheduledFor(visitDate, timeZone) : event.detectedAt;
 }
 
 export function reminderCancellationReason(
@@ -383,4 +413,9 @@ function snapshotValue(snapshot: unknown, key: string): unknown {
   return typeof snapshot === "object" && snapshot !== null && !Array.isArray(snapshot)
     ? (snapshot as Record<string, unknown>)[key]
     : undefined;
+}
+
+function snapshotString(snapshot: unknown, key: string): string | null {
+  const value = snapshotValue(snapshot, key);
+  return typeof value === "string" && value.trim() ? value.trim() : null;
 }

@@ -36,6 +36,10 @@ import {
 import { PrismaHospitalSyncStore, runHospitalSync } from "./hospital-sync.js";
 import { runReportedAtBackfill } from "./reported-at-backfill.js";
 import {
+  PrismaCommunicationDeliveryCleanupStore,
+  runCommunicationDeliveryCleanup,
+} from "./communication-delivery-cleanup.js";
+import {
   CommunicationAssetResolver,
   PrismaCommunicationAssetRegistrationStore,
 } from "../assets/communication-assets.js";
@@ -68,6 +72,7 @@ const hospitalSyncStore = new PrismaHospitalSyncStore(prisma);
 const communicationStore = new PrismaCommunicationEventStore(prisma);
 const recipientResolutionStore = new PrismaRecipientResolutionStore(prisma);
 const communicationDeliveryStore = new PrismaCommunicationDeliveryStore(prisma);
+const communicationDeliveryCleanupStore = new PrismaCommunicationDeliveryCleanupStore(prisma);
 const communicationEmailStore = new PrismaCommunicationEmailSendStore(prisma);
 const communicationTemplateDataSource = new PrismaCommunicationTemplateDataSource(
   prisma,
@@ -158,6 +163,11 @@ async function start(): Promise<void> {
   });
 
   console.info(`[worker] Started as ${WORKER_ID} at ${now.toISOString()}`);
+  await runCommunicationDeliveryCleanup({
+    store: communicationDeliveryCleanupStore,
+    activation: config.communicationSendNotBefore,
+    log: (message) => console.info(message),
+  });
   heartbeatTimer = setInterval(() => {
     void writeHeartbeat().catch((error: unknown) => {
       console.error("[worker] Heartbeat failed", error);

@@ -102,6 +102,8 @@ enum CommunicationDeliveryCancelReason {
   INVALID_REMINDER_DATE
   PRE_ACTIVATION
   RECIPIENT_OPTED_OUT
+  MISSING_HOSPITAL_SCOPE
+  MISSING_HOSPITAL_SCOPE_LEGACY
 }
 
 model TrackedCase {
@@ -553,5 +555,7 @@ model WorkerState {
   startedAt        DateTime
   lastHeartbeatAt  DateTime
   lastSyncAt       DateTime?
+  communicationDeliveryCleanupKey String?
+  communicationDeliveryCleanupAt  DateTime?
   updatedAt        DateTime @updatedAt
 }

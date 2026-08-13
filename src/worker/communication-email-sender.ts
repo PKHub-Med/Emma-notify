@@ -389,6 +389,16 @@ export async function sendCommunicationDelivery(input: {
 }): Promise<"SENT" | "FAILED" | "CANCELLED" | "SKIPPED"> {
   const activation = input.config.communicationSendNotBefore;
   if (!input.config.communicationEmailsEnabled || !activation) return "SKIPPED";
+  if (!snapshotString(input.candidate.event.eventSnapshot, "sourceHospitalRecordId")) {
+    const reason = isPreActivation(input.candidate, activation)
+      ? CommunicationDeliveryCancelReason.MISSING_HOSPITAL_SCOPE_LEGACY
+      : CommunicationDeliveryCancelReason.MISSING_HOSPITAL_SCOPE;
+    await input.store.cancel(input.candidate.id, reason, input.now);
+    input.log?.(
+      `COMMUNICATION_DELIVERY_CANCELLED deliveryId=${input.candidate.id} reason=${reason}`,
+    );
+    return "CANCELLED";
+  }
   if (isPreActivation(input.candidate, activation)) {
     await input.store.cancel(
       input.candidate.id,
@@ -561,6 +571,12 @@ function isPreActivation(candidate: CommunicationSendCandidate, activation: Date
   return candidate.scenario === CommunicationScenario.INSPECTION_REMINDER
     ? candidate.scheduledFor.getTime() < activation.getTime()
     : candidate.event.detectedAt.getTime() < activation.getTime();
+}
+
+function snapshotString(snapshot: unknown, key: string): string | null {
+  if (typeof snapshot !== "object" || snapshot === null || Array.isArray(snapshot)) return null;
+  const value = (snapshot as Record<string, unknown>)[key];
+  return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
 async function fail(

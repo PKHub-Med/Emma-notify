@@ -46,6 +46,18 @@ describe("event-driven communication delivery", () => {
     expect(plan.scheduledFor).toEqual(source.detectedAt);
     expect(plan.status).toBe(CommunicationDeliveryStatus.READY);
   });
+
+  it("creates a terminal delivery when a new event has no hospital scope", async () => {
+    const source = event(CommunicationScenario.REPAIR_COMPLETED, ["recipientA"]);
+    source.eventSnapshot = {};
+    const store = new MemoryDeliveryStore([source]);
+    await planner(store, new Date("2026-08-13T08:00:00Z"));
+    expect(store.deliveries[0]).toMatchObject({
+      status: CommunicationDeliveryStatus.CANCELLED,
+      cancelReason: CommunicationDeliveryCancelReason.MISSING_HOSPITAL_SCOPE,
+      readyAt: null,
+    });
+  });
 });
 
 describe("inspection reminder scheduling", () => {
@@ -318,7 +330,7 @@ function event(
     detectedAt: new Date("2026-08-13T07:00:00Z"),
     eventSnapshot: scenario === CommunicationScenario.INSPECTION_REMINDER
       ? reminderSnapshot()
-      : {},
+      : { sourceHospitalRecordId: "recHospital" },
     recipients: recipientIds.map((id) => ({ id })),
   };
 }
@@ -333,6 +345,7 @@ function reminderStore() {
 
 function reminderSnapshot() {
   return {
+    sourceHospitalRecordId: "recHospital",
     day: "2026-08-15",
     emmaCustomerStatus: "Wizyta potwierdzona",
     emmaMailTemplate: "Przegląd-przypomnienie_o_wizycie",
