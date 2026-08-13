@@ -48,6 +48,7 @@ enum SyncEntityType {
   TASK
   HOSPITAL
   SERVICE_ORDER_REPORTED_AT
+  DEVICE
 }
 
 enum SyncStatus {
@@ -119,7 +120,6 @@ model TrackedCase {
   caseLocation        String?
   hospitalName        String?
   sourceHospitalRecordId String?
-  deviceAirtableId    String?
   deviceName          String?
   manufacturer        String?
   model               String?
@@ -135,6 +135,9 @@ model TrackedCase {
   inspectionDueDateRaw    String?
   inspectionScheduledDate DateTime?
   inspectionBookingStatus String?
+  inspectionPerformedAt   DateTime?
+  inspectionResult        String?
+  inspectionValidUntil    DateTime?
   firstSeenAt         DateTime        @default(now())
   lastSeenAt          DateTime        @default(now())
   active              Boolean         @default(true)
@@ -142,12 +145,50 @@ model TrackedCase {
   events              CaseEvent[]
   bufferItems         BufferItem[]
   digestItems         DigestItem[]
+  devices             TrackedCaseDevice[]
 
   @@unique([caseType, airtableRecordId])
   @@index([active, lastSeenAt])
   @@index([sourceModifiedAt])
   @@index([sourceHospitalRecordId, caseType, active, sourceModifiedAt, airtableRecordId])
   @@index([sourceHospitalRecordId, caseType, active, reportedAt, airtableRecordId])
+}
+
+model TrackedCaseDevice {
+  id                String      @id @default(cuid())
+  trackedCaseId     String
+  deviceAirtableId  String
+  createdAt         DateTime    @default(now())
+  trackedCase       TrackedCase @relation(fields: [trackedCaseId], references: [id], onDelete: Cascade)
+
+  @@unique([trackedCaseId, deviceAirtableId])
+  @@index([trackedCaseId])
+  @@index([deviceAirtableId, trackedCaseId])
+}
+
+model TrackedDevice {
+  id                     String   @id @default(cuid())
+  airtableRecordId       String   @unique
+  sourceHospitalRecordId String?
+  name                   String?
+  manufacturer           String?
+  model                  String?
+  serialNumber           String?
+  inventoryNumber        String?
+  department             String?
+  location               String?
+  deviceStatus           String?
+  sourceCreatedAt        DateTime?
+  sourceModifiedAt       DateTime?
+  sourceSnapshot         Json
+  firstSeenAt            DateTime @default(now())
+  lastSeenAt             DateTime @default(now())
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+
+  @@index([sourceHospitalRecordId, sourceModifiedAt, sourceCreatedAt, airtableRecordId])
+  @@index([sourceHospitalRecordId, name, airtableRecordId])
+  @@index([sourceModifiedAt])
 }
 
 model TrackedTask {

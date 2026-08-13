@@ -39,7 +39,7 @@ describe("case mappers", () => {
       businessNumber: "42",
       clientOrderNumber: "CLIENT-7",
       hospitalName: "Hospital",
-      deviceAirtableId: "recDevice",
+      deviceAirtableIds: ["recDevice"],
       currentStatus: "W naprawie",
       emmaCustomerStatus: "Naprawa rozpoczęta",
       emmaMailTemplate: "Naprawa-zmiana_stanu",
@@ -61,6 +61,16 @@ describe("case mappers", () => {
     expect(mapped.sourceModifiedAt).not.toBeNull();
   });
 
+  it.each([
+    [undefined, []],
+    [["recOnly"], ["recOnly"]],
+  ])("maps ServiceOrder Device links as 0..N (%j)", (input, expected) => {
+    const mapped = mapServiceOrder(record("recServiceLinks", {
+      [SERVICE_ORDER_FIELDS.deviceLink]: input,
+    }));
+    expect(mapped.deviceAirtableIds).toEqual(expected);
+  });
+
   it("maps an inspection and preserves an invalid due date", () => {
     const mapped = mapInspection(record("recInspection", {
       [INSPECTION_FIELDS.businessNumber]: "17",
@@ -70,6 +80,8 @@ describe("case mappers", () => {
       [INSPECTION_FIELDS.dueDate]: "#ERROR!",
       [INSPECTION_FIELDS.bookingStatus]: [" Nowe ", "", "Potwierdzone"],
       [INSPECTION_FIELDS.scheduledDate]: "2026-09-01T09:00:00.000Z",
+      [INSPECTION_FIELDS.performedAt]: "2026-08-31",
+      [INSPECTION_FIELDS.result]: "SPRAWNY",
     }));
 
     expect(mapped).toMatchObject({
@@ -80,10 +92,30 @@ describe("case mappers", () => {
       inspectionDueDateRaw: "#ERROR!",
       inspectionBookingStatus: "Nowe, Potwierdzone",
       invalidDueDate: true,
+      inspectionResult: "SPRAWNY",
     });
     expect(mapped.inspectionScheduledDate?.toISOString()).toBe(
       "2026-09-01T09:00:00.000Z",
     );
+    expect(mapped.inspectionPerformedAt?.toISOString()).toBe(
+      "2026-08-31T00:00:00.000Z",
+    );
+  });
+
+  it("does not invent an inspection performed date or validity fallback", () => {
+    const mapped = mapInspection(record("recNoPerformedDate", {
+      [INSPECTION_FIELDS.sourceModifiedAt]: "2026-08-31T10:00:00.000Z",
+    }));
+    expect(mapped.inspectionPerformedAt).toBeNull();
+    expect(mapped.inspectionValidUntil).toBeNull();
+    expect(mapped.inspectionResult).toBeNull();
+  });
+
+  it("preserves every linked Device ID without silently truncating", () => {
+    const mapped = mapInspection(record("recMulti", {
+      [INSPECTION_FIELDS.deviceLink]: ["recA", "recB", "recC", "recB"],
+    }));
+    expect(mapped.deviceAirtableIds).toEqual(["recA", "recB", "recC"]);
   });
 });
 

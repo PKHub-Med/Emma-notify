@@ -58,6 +58,7 @@ class FakeAirtable implements AirtableIncrementalSource {
   serviceOrders: AirtableRecord[] = [];
   inspections: AirtableRecord[] = [];
   contacts = new Map<string, AirtableRecord>();
+  fetchedRecordTables: string[] = [];
 
   async fetchAllRecords(
     tableId: string,
@@ -70,9 +71,10 @@ class FakeAirtable implements AirtableIncrementalSource {
   }
 
   async fetchRecord(
-    _tableId: string,
+    tableId: string,
     recordId: string,
   ): Promise<AirtableRecord> {
+    this.fetchedRecordTables.push(tableId);
     const contact = this.contacts.get(recordId);
     if (!contact) throw new Error("Missing fake contact");
     return contact;
@@ -221,6 +223,17 @@ class RecordingCommunicationStore implements CommunicationEventStore {
 }
 
 describe("incremental status sync", () => {
+  it("never fetches Devices per Service Order", async () => {
+    const source = new FakeAirtable();
+    const store = new MemoryStore();
+    source.contacts.set("recContact", eligibleContact("recContact", "one@example.com"));
+    source.serviceOrders = [serviceRecord("recService", "B", ["recContact"] )];
+    store.seedCase(CaseType.SERVICE_ORDER, "recService", "A");
+    await run(source, store, date(0));
+    expect(source.fetchedRecordTables).toEqual([AIRTABLE_TABLE_IDS.contacts]);
+    expect(source.fetchedRecordTables).not.toContain(AIRTABLE_TABLE_IDS.devices);
+  });
+
   it("logs SERVICE_ORDER Airtable metadata and allows the following poll to succeed", async () => {
     const source = new FakeAirtable();
     const store = new MemoryStore();

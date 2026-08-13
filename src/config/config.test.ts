@@ -77,6 +77,8 @@ describe("loadWorkerConfig", () => {
       airtableSyncOverlapSeconds: 120,
       airtableTaskPollSeconds: 180,
       airtableReminderCheckSeconds: 900,
+      airtableDevicePollSeconds: 600,
+      airtableDeviceReconcileSeconds: 21600,
       digestQuietMinutes: 1,
       timezone: "Europe/Warsaw",
       emailMode: "TEST",

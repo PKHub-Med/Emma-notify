@@ -167,14 +167,21 @@ export function createApp(
 
   app.get("/p/:token/data/devices/:deviceId", async (request, response) => {
     response.set(PORTAL_DATA_HEADERS);
+    const hasCursor = request.query.cursor !== undefined;
     try {
       const authorization = await authorizePortalData(portalAccess, request.params.token ?? "");
       if (!authorization) { response.status(404).json({ error: "NOT_FOUND" }); return; }
-      const item = await portalViews.getDevice(authorization, request.params.deviceId ?? "");
+      const cursor = cursorQuery(request.query.cursor);
+      const limit = numberQuery(request.query.limit);
+      const item = await portalViews.getDevice(
+        authorization,
+        request.params.deviceId ?? "",
+        { ...(cursor ? { cursor } : {}), ...(limit ? { limit } : {}) },
+      );
       if (!item) { response.status(404).json({ error: "NOT_FOUND" }); return; }
       response.status(200).json(item);
     } catch (error: unknown) {
-      sendPortalDataError(response, error, "device-detail", undefined, false, false);
+      sendPortalDataError(response, error, "device-detail", undefined, hasCursor, false);
     }
   });
 

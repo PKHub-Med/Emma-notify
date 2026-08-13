@@ -93,6 +93,20 @@ export const INSPECTION_FIELDS = {
   sourceModifiedAt: "fldd2z5eJg2GsHLgD",
   bookingStatus: "fldZnO530QNvWM4I8",
   scheduledDate: "fldsN3Yu1qFao8B87",
+  performedAt: "fld3knASxSRaBdDVt",
+  result: "fldWQzKcmaHodBwLF",
+} as const;
+
+export const DEVICE_FIELDS = {
+  name: "fld1mWRdnl9zZFi1s",
+  manufacturer: "fldQ8yyTwOUHi8wGm",
+  model: "fldeQr3QmeJMY8Of0",
+  serialNumber: "fld3qIBT5mBui84Xb",
+  inventoryNumber: "fldBs1xaGTKcijSWj",
+  location: "fldl06MEL6RkrDo21",
+  hospitalLink: "fldMBpYguSqrxskc4",
+  deviceStatus: "fldWbzAsP0qK4t5ud",
+  sourceModifiedAt: "fldE4CsBR20ba22Qv",
 } as const;
 
 export const CONTACT_FIELDS = {
@@ -108,6 +122,7 @@ export const CONTACT_FIELD_IDS = Object.values(CONTACT_FIELDS);
 export const TASK_FIELD_IDS = Object.values(TASK_FIELDS);
 export const EMPLOYEE_FIELD_IDS = Object.values(EMPLOYEE_FIELDS);
 export const HOSPITAL_FIELD_IDS = Object.values(HOSPITAL_FIELDS);
+export const DEVICE_FIELD_IDS = Object.values(DEVICE_FIELDS);
 
 function uniqueFieldIds(fields: Record<string, string>): string[] {
   return [...new Set(Object.values(fields))];

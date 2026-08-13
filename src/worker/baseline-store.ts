@@ -36,7 +36,10 @@ export interface BaselineStore {
 }
 
 export class PrismaBaselineStore implements BaselineStore {
-  constructor(private readonly prisma: PrismaClient) {}
+  constructor(
+    private readonly prisma: PrismaClient,
+    private readonly log: (message: string) => void = console.warn,
+  ) {}
 
   async getCompletionState(
     entityTypes: readonly BaselineEntityType[],
@@ -84,6 +87,7 @@ export class PrismaBaselineStore implements BaselineStore {
     const {
       contactRecordIds: _contactRecordIds,
       invalidDueDate: _invalidDueDate,
+      deviceAirtableIds,
       sourceSnapshot,
       ...caseData
     } = mappedCase;
@@ -93,18 +97,28 @@ export class PrismaBaselineStore implements BaselineStore {
       lastSeenAt: seenAt,
       active: true,
     };
-    const trackedCase = await this.prisma.trackedCase.upsert({
-      where: {
-        caseType_airtableRecordId: {
-          caseType: mappedCase.caseType,
-          airtableRecordId: mappedCase.airtableRecordId,
+    return this.prisma.$transaction(async (transaction) => {
+      const trackedCase = await transaction.trackedCase.upsert({
+        where: {
+          caseType_airtableRecordId: {
+            caseType: mappedCase.caseType,
+            airtableRecordId: mappedCase.airtableRecordId,
+          },
         },
-      },
-      create: data,
-      update: data,
-      select: { id: true },
+        create: data,
+        update: data,
+        select: { id: true },
+      });
+      await synchronizeCaseDeviceRelations(transaction, {
+        trackedCaseId: trackedCase.id,
+        caseType: mappedCase.caseType,
+        sourceRecordId: mappedCase.airtableRecordId,
+        directHospitalRecordId: mappedCase.sourceHospitalRecordId,
+        deviceAirtableIds,
+        log: this.log,
+      });
+      return trackedCase.id;
     });
-    return trackedCase.id;
   }
 
   async syncRecipients(
@@ -210,4 +224,80 @@ export class PrismaBaselineStore implements BaselineStore {
       data: { lastSyncAt: at },
     });
   }
+}
+
+export async function synchronizeCaseDeviceRelations(
+  transaction: Prisma.TransactionClient,
+  input: {
+    trackedCaseId: string;
+    caseType: string;
+    sourceRecordId: string;
+    directHospitalRecordId: string | null;
+    deviceAirtableIds: readonly string[];
+    log?: (message: string) => void;
+  },
+): Promise<string | null> {
+  const deviceIds = [...new Set(input.deviceAirtableIds.filter(Boolean))];
+  await transaction.trackedCaseDevice.deleteMany({
+    where: {
+      trackedCaseId: input.trackedCaseId,
+      ...(deviceIds.length ? { deviceAirtableId: { notIn: deviceIds } } : {}),
+    },
+  });
+  if (deviceIds.length) {
+    await transaction.trackedCaseDevice.createMany({
+      data: deviceIds.map((deviceAirtableId) => ({
+        trackedCaseId: input.trackedCaseId,
+        deviceAirtableId,
+      })),
+      skipDuplicates: true,
+    });
+  }
+
+  const devices = deviceIds.length
+    ? await transaction.trackedDevice.findMany({
+        where: { airtableRecordId: { in: deviceIds } },
+        select: { airtableRecordId: true, sourceHospitalRecordId: true },
+      })
+    : [];
+  const knownHospitals = new Set(
+    devices.flatMap((device) => device.sourceHospitalRecordId
+      ? [device.sourceHospitalRecordId]
+      : []),
+  );
+  let sourceHospitalRecordId = input.directHospitalRecordId;
+  let reason: string | null = null;
+
+  if (input.directHospitalRecordId) {
+    if ([...knownHospitals].some((id) => id !== input.directHospitalRecordId)) {
+      sourceHospitalRecordId = null;
+      reason = "DIRECT_DEVICE_MISMATCH";
+    }
+  } else if (!deviceIds.length) {
+    sourceHospitalRecordId = null;
+  } else if (
+    devices.length !== deviceIds.length ||
+    devices.some((device) => !device.sourceHospitalRecordId)
+  ) {
+    sourceHospitalRecordId = null;
+    reason = "UNRESOLVED_DEVICE_SCOPE";
+  } else if (knownHospitals.size === 1) {
+    sourceHospitalRecordId = [...knownHospitals][0] ?? null;
+  } else {
+    sourceHospitalRecordId = null;
+    reason = "MULTIPLE_HOSPITALS";
+  }
+
+  await transaction.trackedCase.update({
+    where: { id: input.trackedCaseId },
+    data: { sourceHospitalRecordId },
+  });
+  if (reason) {
+    (input.log ?? console.warn)(
+      `CASE_DEVICE_HOSPITAL_SCOPE_AMBIGUOUS caseType=${input.caseType} ` +
+      `sourceRecordId=${input.sourceRecordId} linkedDevices=${deviceIds.length} ` +
+      `resolvedDevices=${devices.length} uniqueHospitals=${knownHospitals.size} reason=${reason}`,
+    );
+  }
+  return sourceHospitalRecordId;
 }

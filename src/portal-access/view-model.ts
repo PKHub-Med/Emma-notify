@@ -26,6 +26,7 @@ export type PortalCaseListItem = {
   type: "REPAIR" | "INSPECTION";
   sourceRecordId: string;
   deviceId: string | null;
+  devices: PortalCaseDevice[];
   deviceName: string;
   manufacturer: string | null;
   model: string | null;
@@ -46,6 +47,15 @@ export type PortalCaseListItem = {
   photos: PortalDocument[];
 };
 
+export type PortalCaseDevice = {
+  sourceRecordId: string;
+  deviceName: string;
+  manufacturer: string | null;
+  model: string | null;
+  serialNumber: string | null;
+  inventoryNumber: string | null;
+};
+
 export type PortalDevice = {
   sourceRecordId: string;
   deviceName: string;
@@ -55,6 +65,8 @@ export type PortalDevice = {
   inventoryNumber: string | null;
   currentStatus: string;
   validUntil: Date | null;
+  inspectionPerformedAt: Date | null;
+  inspectionResult: string | null;
 };
 
 export type PortalDeviceDetail = PortalDevice & {
@@ -69,7 +81,7 @@ export type PortalPage<T> = {
 export type HospitalPortalViewModel = {
   hospital: { shortName: string; name: string; address: string | null };
   serviceProviderName: string;
-  summary: { requiresAction: number; repairs: number; inspections: number };
+  summary: { requiresAction: number; repairs: number; inspections: number; devices: number };
   initialCases: PortalPage<PortalCaseListItem>;
   focusedCase: PortalCaseListItem | null;
 };
@@ -84,13 +96,13 @@ type StoredHospital = { shortName: string | null; name: string | null; address: 
 type StoredEvent = { eventType: string; oldValue: unknown; newValue: unknown; detectedAt: Date };
 
 export type StoredPortalCase = {
+  id: string;
   airtableRecordId: string;
   businessNumber: string | null;
   clientOrderNumber: string | null;
   emmaCustomerStatus: string | null;
   taskCustomerStatus?: string | null;
   hospitalName: string | null;
-  deviceAirtableId: string | null;
   deviceName: string | null;
   manufacturer: string | null;
   model: string | null;
@@ -102,6 +114,9 @@ export type StoredPortalCase = {
   reportedAt: Date | null;
   sourceModifiedAt: Date | null;
   inspectionDueDate: Date | null;
+  inspectionPerformedAt: Date | null;
+  inspectionResult: string | null;
+  inspectionValidUntil: Date | null;
   events: StoredEvent[];
 };
 
@@ -136,6 +151,7 @@ export interface HospitalPortalStore {
     cursor: string | null;
     limit: number;
     deviceId?: string;
+    hospitalWideDevice?: boolean;
   }): Promise<PortalPage<PortalCaseListItem>>;
   findScopedCase(scope: PortalDataScope, sourceRecordId: string): Promise<PortalCaseListItem | null>;
   resolveFocusedCase(scope: PortalDataScope): Promise<PortalCaseListItem | null>;
@@ -144,16 +160,21 @@ export interface HospitalPortalStore {
     cursor: string | null;
     limit: number;
   }): Promise<PortalPage<PortalDevice>>;
-  findScopedDevice(scope: PortalDataScope, sourceRecordId: string, limit: number): Promise<PortalDeviceDetail | null>;
+  findScopedDevice(
+    scope: PortalDataScope,
+    sourceRecordId: string,
+    limit: number,
+    cursor?: string | null,
+  ): Promise<PortalDeviceDetail | null>;
 }
 
 const CASE_SELECT = {
+  id: true,
   airtableRecordId: true,
   businessNumber: true,
   clientOrderNumber: true,
   emmaCustomerStatus: true,
   hospitalName: true,
-  deviceAirtableId: true,
   deviceName: true,
   manufacturer: true,
   model: true,
@@ -165,6 +186,9 @@ const CASE_SELECT = {
   reportedAt: true,
   sourceModifiedAt: true,
   inspectionDueDate: true,
+  inspectionPerformedAt: true,
+  inspectionResult: true,
+  inspectionValidUntil: true,
   events: {
     where: {
       visibleToCustomer: true,
@@ -191,19 +215,25 @@ export class PrismaHospitalPortalStore implements HospitalPortalStore {
   }
 
   async getSummaryCounts(scope: PortalDataScope): Promise<HospitalPortalViewModel["summary"]> {
-    const rows = await this.prisma.$queryRaw<SummaryCountRow[]>(Prisma.sql`
+    const [rows, devices] = await Promise.all([
+      this.prisma.$queryRaw<SummaryCountRow[]>(Prisma.sql`
       WITH scoped AS (${scopedCasesSql(scope)})
       SELECT
         COUNT(*) FILTER (WHERE type = 'REPAIR') AS repairs,
         COUNT(*) FILTER (WHERE type = 'INSPECTION') AS inspections,
         COUNT(*) FILTER (WHERE UPPER(TRIM(status)) IN ('OCZEKUJEMY NA DECYZJĘ', 'DO REALIZACJI')) AS "requiresAction"
       FROM scoped
-    `);
+    `),
+      this.prisma.trackedDevice.count({
+        where: { sourceHospitalRecordId: scope.hospitalId },
+      }),
+    ]);
     const row = rows[0];
     return {
       repairs: Number(row?.repairs ?? 0n),
       inspections: Number(row?.inspections ?? 0n),
       requiresAction: Number(row?.requiresAction ?? 0n),
+      devices,
     };
   }
 
@@ -213,12 +243,15 @@ export class PrismaHospitalPortalStore implements HospitalPortalStore {
     cursor: string | null;
     limit: number;
     deviceId?: string;
+    hospitalWideDevice?: boolean;
   }): Promise<PortalPage<PortalCaseListItem>> {
     const cursor = decodePortalCaseCursor(options.cursor);
     const filterSql = caseFilterSql(options.filter);
     const searchSql = searchFilterSql(options.query);
     const deviceSql = options.deviceId
-      ? Prisma.sql`AND "deviceId" = ${options.deviceId}`
+      ? Prisma.sql`AND EXISTS (SELECT 1 FROM "TrackedCaseDevice" case_device
+          WHERE case_device."trackedCaseId" = scoped_case."trackedCaseId"
+            AND case_device."deviceAirtableId" = ${options.deviceId})`
       : Prisma.empty;
     const cursorSql = cursor
       ? Prisma.sql`AND (
@@ -229,9 +262,9 @@ export class PrismaHospitalPortalStore implements HospitalPortalStore {
         )`
       : Prisma.empty;
     const keys = await this.prisma.$queryRaw<PageKey[]>(Prisma.sql`
-      WITH scoped AS (${scopedCasesSql(scope)})
+      WITH scoped AS (${scopedCasesSql(scope, options.hospitalWideDevice)})
       SELECT type, "sourceRecordId", "sortKey"
-      FROM scoped
+      FROM scoped scoped_case
       WHERE 1=1 ${filterSql} ${searchSql} ${deviceSql} ${cursorSql}
       ORDER BY "sortKey" DESC, type DESC, "sourceRecordId" DESC
       LIMIT ${options.limit + 1}
@@ -282,27 +315,23 @@ export class PrismaHospitalPortalStore implements HospitalPortalStore {
     const searchSql = deviceSearchFilterSql(options.query);
     const cursorSql = cursor
       ? Prisma.sql`AND (
-          "sortKey" < CAST(${cursor.sortKey.toString()} AS bigint)
-          OR ("sortKey" = CAST(${cursor.sortKey.toString()} AS bigint)
-            AND "deviceId" < ${cursor.sourceRecordId})
+          FLOOR(EXTRACT(EPOCH FROM COALESCE(d."sourceModifiedAt", d."sourceCreatedAt", TIMESTAMP '1970-01-01')) * 1000)::bigint < CAST(${cursor.sortKey.toString()} AS bigint)
+          OR (FLOOR(EXTRACT(EPOCH FROM COALESCE(d."sourceModifiedAt", d."sourceCreatedAt", TIMESTAMP '1970-01-01')) * 1000)::bigint = CAST(${cursor.sortKey.toString()} AS bigint)
+            AND d."airtableRecordId" < ${cursor.sourceRecordId})
         )`
       : Prisma.empty;
     const keys = await this.prisma.$queryRaw<DeviceKey[]>(Prisma.sql`
-      WITH scoped AS (${scopedCasesSql(scope)}), devices AS (
-        SELECT DISTINCT ON ("deviceId") "deviceId" AS "sourceRecordId", "sortKey",
-          "deviceName", manufacturer, model, "serialNumber", "inventoryNumber", status, "validUntil"
-        FROM scoped WHERE "deviceId" IS NOT NULL
-          ${scope.contextType === "INSPECTION_TASK" ? Prisma.sql`AND type = 'INSPECTION'` : Prisma.empty}
-        ORDER BY "deviceId", "sortKey" DESC
-      )
-      SELECT "sourceRecordId", "sortKey" FROM devices
-      WHERE 1=1 ${searchSql} ${cursorSql}
+      SELECT d."airtableRecordId" AS "sourceRecordId",
+        FLOOR(EXTRACT(EPOCH FROM COALESCE(d."sourceModifiedAt", d."sourceCreatedAt", TIMESTAMP '1970-01-01')) * 1000)::bigint AS "sortKey"
+      FROM "TrackedDevice" d
+      WHERE d."sourceHospitalRecordId" = ${scope.hospitalId}
+        ${searchSql} ${cursorSql}
       ORDER BY "sortKey" DESC, "sourceRecordId" DESC
       LIMIT ${options.limit + 1}
     `);
     const hasMore = keys.length > options.limit;
     const selected = keys.slice(0, options.limit);
-    const items = await Promise.all(selected.map((key) => this.loadDevice(scope, key.sourceRecordId)));
+    const items = await this.loadDevices(scope, selected.map((key) => key.sourceRecordId));
     const last = selected.at(-1);
     return {
       items: items.filter((item): item is PortalDevice => item !== null),
@@ -310,41 +339,80 @@ export class PrismaHospitalPortalStore implements HospitalPortalStore {
     };
   }
 
-  async findScopedDevice(scope: PortalDataScope, sourceRecordId: string, limit: number): Promise<PortalDeviceDetail | null> {
+  async findScopedDevice(
+    scope: PortalDataScope,
+    sourceRecordId: string,
+    limit: number,
+    cursor: string | null = null,
+  ): Promise<PortalDeviceDetail | null> {
     const device = await this.loadDevice(scope, sourceRecordId);
     if (!device) return null;
     return {
       ...device,
       cases: await this.pageCases(scope, {
-        filter: "ALL", query: null, cursor: null, limit, deviceId: sourceRecordId,
+        filter: "ALL", query: null, cursor, limit, deviceId: sourceRecordId,
+        hospitalWideDevice: true,
       }),
     };
   }
 
   private async loadDevice(scope: PortalDataScope, sourceRecordId: string): Promise<PortalDevice | null> {
-    const keys = await this.prisma.$queryRaw<Array<{
-      sourceRecordId: string; deviceName: string | null; manufacturer: string | null;
-      model: string | null; serialNumber: string | null; inventoryNumber: string | null;
-      status: string | null; validUntil: Date | null;
+    return (await this.loadDevices(scope, [sourceRecordId]))[0] ?? null;
+  }
+
+  private async loadDevices(
+    scope: PortalDataScope,
+    sourceRecordIds: readonly string[],
+  ): Promise<PortalDevice[]> {
+    if (sourceRecordIds.length === 0) return [];
+    const devices = await this.prisma.trackedDevice.findMany({
+      where: {
+        airtableRecordId: { in: [...sourceRecordIds] },
+        sourceHospitalRecordId: scope.hospitalId,
+      },
+      select: {
+        airtableRecordId: true, name: true, manufacturer: true, model: true,
+        serialNumber: true, inventoryNumber: true, deviceStatus: true,
+      },
+    });
+    const inspections = await this.prisma.$queryRaw<Array<{
+      deviceAirtableId: string;
+      inspectionPerformedAt: Date | null;
+      inspectionResult: string | null;
+      inspectionValidUntil: Date | null;
     }>>(Prisma.sql`
-      WITH scoped AS (${scopedCasesSql(scope)})
-      SELECT "deviceId" AS "sourceRecordId", "deviceName", manufacturer, model,
-        "serialNumber", "inventoryNumber", status, "validUntil"
-      FROM scoped WHERE "deviceId" = ${sourceRecordId}
-        ${scope.contextType === "INSPECTION_TASK" ? Prisma.sql`AND type = 'INSPECTION'` : Prisma.empty}
-      ORDER BY "sortKey" DESC LIMIT 1
+      SELECT DISTINCT ON (cd."deviceAirtableId")
+        cd."deviceAirtableId", c."inspectionPerformedAt", c."inspectionResult",
+        c."inspectionValidUntil"
+      FROM "TrackedCase" c
+      JOIN "TrackedCaseDevice" cd ON cd."trackedCaseId" = c.id
+      WHERE c."caseType" = 'INSPECTION' AND c.active = true
+        AND c."sourceHospitalRecordId" = ${scope.hospitalId}
+        AND c."inspectionPerformedAt" IS NOT NULL
+        AND cd."deviceAirtableId" IN (${Prisma.join(sourceRecordIds)})
+      ORDER BY cd."deviceAirtableId", c."inspectionPerformedAt" DESC,
+        c."sourceModifiedAt" DESC NULLS LAST, c."airtableRecordId" DESC
     `);
-    const row = keys[0];
-    return row ? {
-      sourceRecordId: row.sourceRecordId,
-      deviceName: row.deviceName || "Urządzenie medyczne",
-      manufacturer: row.manufacturer,
-      model: row.model,
-      serialNumber: row.serialNumber,
-      inventoryNumber: row.inventoryNumber,
-      currentStatus: row.status || "Brak informacji",
-      validUntil: row.validUntil,
-    } : null;
+    const inspectionsByDevice = new Map(inspections.map((item) =>
+      [item.deviceAirtableId, item]));
+    const devicesById = new Map(devices.map((device) => [device.airtableRecordId, device]));
+    return sourceRecordIds.flatMap((sourceRecordId) => {
+      const device = devicesById.get(sourceRecordId);
+      if (!device) return [];
+      const inspection = inspectionsByDevice.get(sourceRecordId);
+      return [{
+        sourceRecordId: device.airtableRecordId,
+        deviceName: device.name || "Urządzenie medyczne",
+        manufacturer: device.manufacturer,
+        model: device.model,
+        serialNumber: device.serialNumber,
+        inventoryNumber: device.inventoryNumber,
+        currentStatus: device.deviceStatus || "Brak informacji",
+        validUntil: inspection?.inspectionValidUntil ?? null,
+        inspectionPerformedAt: inspection?.inspectionPerformedAt ?? null,
+        inspectionResult: inspection?.inspectionResult ?? null,
+      }];
+    });
   }
 
   private async loadCases(
@@ -370,6 +438,35 @@ export class PrismaHospitalPortalStore implements HospitalPortalStore {
       orderBy: { updatedAt: "desc" },
       select: { emmaCustomerStatus: true, linkedInspectionRecordIds: true },
     });
+    const caseIds = rows.map((row) => row.id);
+    const caseDeviceLinks = caseIds.length === 0 ? [] : await this.prisma.trackedCaseDevice.findMany({
+      where: { trackedCaseId: { in: caseIds } },
+      orderBy: [{ trackedCaseId: "asc" }, { deviceAirtableId: "asc" }],
+      select: { trackedCaseId: true, deviceAirtableId: true },
+    });
+    const linkedDeviceIds = [...new Set(caseDeviceLinks.map((link) => link.deviceAirtableId))];
+    const linkedDevices = linkedDeviceIds.length === 0 ? [] : await this.prisma.trackedDevice.findMany({
+      where: { airtableRecordId: { in: linkedDeviceIds } },
+      select: {
+        airtableRecordId: true, name: true, manufacturer: true, model: true,
+        serialNumber: true, inventoryNumber: true,
+      },
+    });
+    const linkedDeviceById = new Map(linkedDevices.map((device) => [device.airtableRecordId, device]));
+    const devicesByCase = new Map<string, PortalCaseDevice[]>();
+    for (const link of caseDeviceLinks) {
+      const device = linkedDeviceById.get(link.deviceAirtableId);
+      const items = devicesByCase.get(link.trackedCaseId) ?? [];
+      items.push({
+        sourceRecordId: link.deviceAirtableId,
+        deviceName: device?.name || "Urządzenie medyczne",
+        manufacturer: device?.manufacturer ?? null,
+        model: device?.model ?? null,
+        serialNumber: device?.serialNumber ?? null,
+        inventoryNumber: device?.inventoryNumber ?? null,
+      });
+      devicesByCase.set(link.trackedCaseId, items);
+    }
     const taskStatus = new Map<string, string | null>();
     for (const task of tasks) {
       for (const id of stringArray(task.linkedInspectionRecordIds)) {
@@ -382,7 +479,7 @@ export class PrismaHospitalPortalStore implements HospitalPortalStore {
       return row ? [mapCase({
         ...row,
         taskCustomerStatus: taskStatus.get(key.sourceRecordId) ?? null,
-      }, key.type)] : [];
+      }, key.type, devicesByCase.get(row.id) ?? [])] : [];
     });
   }
 }
@@ -447,19 +544,32 @@ export class HospitalPortalViewModelService {
     });
   }
 
-  getDevice(authorization: PortalAuthorizationContext, id: string): Promise<PortalDeviceDetail | null> {
-    return this.store.findScopedDevice(portalDataScope(authorization), id, this.pageSize);
+  getDevice(authorization: PortalAuthorizationContext, id: string, options: {
+    cursor?: string; limit?: number;
+  } = {}): Promise<PortalDeviceDetail | null> {
+    const cursor = options.cursor || null;
+    if (cursor) decodePortalCaseCursor(cursor);
+    return this.store.findScopedDevice(
+      portalDataScope(authorization),
+      id,
+      clampLimit(options.limit, this.pageSize),
+      cursor,
+    );
   }
 }
 
-function scopedCasesSql(scope: PortalDataScope): Prisma.Sql {
-  const repairScope = scope.contextType === "REPAIR"
+function scopedCasesSql(scope: PortalDataScope, hospitalWideDevice = false): Prisma.Sql {
+  const repairScope = hospitalWideDevice
+    ? Prisma.empty
+    : scope.contextType === "REPAIR"
     ? Prisma.sql`AND c."airtableRecordId" = ${scope.contextId}`
     : Prisma.sql`AND EXISTS (SELECT 1 FROM "TrackedTask" context_task
         WHERE context_task."airtableRecordId" = ${scope.contextId}
           AND context_task."sourceHospitalRecordId" = ${scope.hospitalId}
           AND context_task."linkedServiceOrderRecordIds" ? c."airtableRecordId")`;
-  const inspectionScope = scope.contextType === "REPAIR"
+  const inspectionScope = hospitalWideDevice
+    ? Prisma.empty
+    : scope.contextType === "REPAIR"
     ? Prisma.sql`AND false`
     : Prisma.sql`AND EXISTS (SELECT 1 FROM "TrackedTask" context_task
         WHERE context_task."airtableRecordId" = ${scope.contextId}
@@ -468,8 +578,8 @@ function scopedCasesSql(scope: PortalDataScope): Prisma.Sql {
       AND UPPER(TRIM(COALESCE(c."currentStatus", ''))) IN
         ('SPRAWNE', 'NIESPRAWNE', 'WARUNKOWO DOPUSZCZONE')`;
   return Prisma.sql`
-    SELECT 'REPAIR'::text AS type, c."airtableRecordId" AS "sourceRecordId",
-      c."deviceAirtableId" AS "deviceId", c."deviceName", c.manufacturer, c.model,
+    SELECT 'REPAIR'::text AS type, c.id AS "trackedCaseId",
+      c."airtableRecordId" AS "sourceRecordId", c."deviceName", c.manufacturer, c.model,
       c."serialNumber", c."inventoryNumber",
       COALESCE(c."emmaCustomerStatus", c."currentStatus", 'Brak informacji') AS status,
       FLOOR(EXTRACT(EPOCH FROM COALESCE((SELECT MAX(e."detectedAt") FROM "CaseEvent" e
@@ -480,8 +590,8 @@ function scopedCasesSql(scope: PortalDataScope): Prisma.Sql {
     WHERE c."caseType" = 'SERVICE_ORDER' AND c.active = true
       AND c."sourceHospitalRecordId" = ${scope.hospitalId} ${repairScope}
     UNION ALL
-    SELECT 'INSPECTION'::text AS type, c."airtableRecordId" AS "sourceRecordId",
-      c."deviceAirtableId" AS "deviceId", c."deviceName", c.manufacturer, c.model,
+    SELECT 'INSPECTION'::text AS type, c.id AS "trackedCaseId",
+      c."airtableRecordId" AS "sourceRecordId", c."deviceName", c.manufacturer, c.model,
       c."serialNumber", c."inventoryNumber",
       COALESCE(c."currentStatus", (SELECT t."emmaCustomerStatus" FROM "TrackedTask" t
         WHERE t."sourceHospitalRecordId" = ${scope.hospitalId}
@@ -495,7 +605,7 @@ function scopedCasesSql(scope: PortalDataScope): Prisma.Sql {
       + FLOOR(EXTRACT(EPOCH FROM COALESCE((SELECT MAX(e."detectedAt") FROM "CaseEvent" e
         WHERE e."trackedCaseId" = c.id AND e."visibleToCustomer" = true),
         c."sourceModifiedAt", c."sourceCreatedAt", TIMESTAMP '1970-01-01 00:00:00')) * 1000)::bigint AS "sortKey",
-      c."inspectionDueDate" AS "validUntil", c."businessNumber", c."clientOrderNumber"
+      c."inspectionValidUntil" AS "validUntil", c."businessNumber", c."clientOrderNumber"
     FROM "TrackedCase" c
     WHERE c."caseType" = 'INSPECTION' AND c.active = true
       AND c."sourceHospitalRecordId" = ${scope.hospitalId} ${inspectionScope}
@@ -520,16 +630,30 @@ function caseFilterSql(filter: PortalCaseFilter): Prisma.Sql {
 function searchFilterSql(query: string | null): Prisma.Sql {
   if (!query) return Prisma.empty;
   const pattern = `%${query.replaceAll("\\", "\\\\").replaceAll("%", "\\%").replaceAll("_", "\\_")}%`;
-  return Prisma.sql`AND CONCAT_WS(' ', "deviceName", manufacturer, model, "serialNumber", "inventoryNumber", "businessNumber", "clientOrderNumber", status) ILIKE ${pattern} ESCAPE '\\'`;
+  return Prisma.sql`AND (
+    CONCAT_WS(' ', "deviceName", manufacturer, model, "serialNumber", "inventoryNumber", "businessNumber", "clientOrderNumber", status) ILIKE ${pattern} ESCAPE '\\'
+    OR EXISTS (
+      SELECT 1 FROM "TrackedCaseDevice" search_link
+      JOIN "TrackedDevice" search_device
+        ON search_device."airtableRecordId" = search_link."deviceAirtableId"
+      WHERE search_link."trackedCaseId" = scoped_case."trackedCaseId"
+        AND CONCAT_WS(' ', search_device.name, search_device.manufacturer, search_device.model,
+          search_device."serialNumber", search_device."inventoryNumber") ILIKE ${pattern} ESCAPE '\\'
+    )
+  )`;
 }
 
 function deviceSearchFilterSql(query: string | null): Prisma.Sql {
   if (!query) return Prisma.empty;
   const pattern = `%${query.replaceAll("\\", "\\\\").replaceAll("%", "\\%").replaceAll("_", "\\_")}%`;
-  return Prisma.sql`AND CONCAT_WS(' ', "deviceName", manufacturer, model, "serialNumber", "inventoryNumber") ILIKE ${pattern} ESCAPE '\\'`;
+  return Prisma.sql`AND CONCAT_WS(' ', d.name, d.manufacturer, d.model, d."serialNumber", d."inventoryNumber") ILIKE ${pattern} ESCAPE '\\'`;
 }
 
-function mapCase(stored: StoredPortalCase, type: "REPAIR" | "INSPECTION"): PortalCaseListItem {
+function mapCase(
+  stored: StoredPortalCase,
+  type: "REPAIR" | "INSPECTION",
+  devices: PortalCaseDevice[],
+): PortalCaseListItem {
   const currentStatus = type === "INSPECTION"
     ? stored.currentStatus || stored.taskCustomerStatus || stored.emmaCustomerStatus || "Brak informacji"
     : stored.emmaCustomerStatus || stored.currentStatus || "Brak informacji";
@@ -539,18 +663,26 @@ function mapCase(stored: StoredPortalCase, type: "REPAIR" | "INSPECTION"): Porta
     changedAt: event.detectedAt,
   }));
   return {
-    type, sourceRecordId: stored.airtableRecordId, deviceId: stored.deviceAirtableId,
-    deviceName: stored.deviceName || "Urządzenie medyczne",
-    manufacturer: stored.manufacturer, model: stored.model,
-    manufacturerModel: joinNonEmpty([stored.manufacturer, stored.model]),
-    serialNumber: stored.serialNumber, inventoryNumber: stored.inventoryNumber,
+    type, sourceRecordId: stored.airtableRecordId,
+    deviceId: devices.length === 1 ? devices[0]!.sourceRecordId : null,
+    devices,
+    deviceName: devices.length === 1
+      ? devices[0]!.deviceName
+      : devices.length > 1 ? `${devices.length} urządzenia` : stored.deviceName || "Urządzenie medyczne",
+    manufacturer: devices.length === 1 ? devices[0]!.manufacturer : stored.manufacturer,
+    model: devices.length === 1 ? devices[0]!.model : stored.model,
+    manufacturerModel: devices.length === 1
+      ? joinNonEmpty([devices[0]!.manufacturer, devices[0]!.model])
+      : joinNonEmpty([stored.manufacturer, stored.model]),
+    serialNumber: devices.length === 1 ? devices[0]!.serialNumber : stored.serialNumber,
+    inventoryNumber: devices.length === 1 ? devices[0]!.inventoryNumber : stored.inventoryNumber,
     caseNumber: stored.businessNumber, clientOrderNumber: stored.clientOrderNumber,
     currentStatus,
     lastChangedAt: history.at(-1)?.changedAt ?? stored.sourceModifiedAt ?? stored.sourceCreatedAt,
     requiresAction: requiresCustomerAction(currentStatus),
     reportedAt: type === "REPAIR" ? stored.reportedAt : null,
-    inspectionPerformedAt: null,
-    validUntil: type === "INSPECTION" ? stored.inspectionDueDate : null,
+    inspectionPerformedAt: type === "INSPECTION" ? stored.inspectionPerformedAt : null,
+    validUntil: type === "INSPECTION" ? stored.inspectionValidUntil : null,
     description: stored.faultDescription, history, documents: [], photos: [],
   };
 }

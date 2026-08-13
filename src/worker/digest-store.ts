@@ -67,7 +67,10 @@ export class PrismaDigestStore implements DigestStore {
                         caseSubtype: true,
                         caseLocation: true,
                         hospitalName: true,
-                        deviceAirtableId: true,
+                        devices: {
+                          orderBy: { deviceAirtableId: "asc" },
+                          select: { deviceAirtableId: true },
+                        },
                         deviceName: true,
                         manufacturer: true,
                         model: true,
@@ -133,7 +136,12 @@ export class PrismaDigestStore implements DigestStore {
                   detectedAt: true,
                 },
               });
-              const snapshot = buildCaseSnapshot(item.trackedCase);
+              const snapshot = buildCaseSnapshot({
+                ...item.trackedCase,
+                deviceAirtableId: item.trackedCase.devices.length === 1
+                  ? item.trackedCase.devices[0]!.deviceAirtableId
+                  : null,
+              });
               const changes = buildDigestChanges(events);
 
               await transaction.digestItem.create({

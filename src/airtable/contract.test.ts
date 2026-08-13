@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   AIRTABLE_TABLE_IDS,
+  DEVICE_FIELDS,
   EMPLOYEE_FIELDS,
   HOSPITAL_FIELDS,
+  INSPECTION_FIELDS,
   SERVICE_ORDER_FIELDS,
   TASK_FIELDS,
 } from "./field-ids.js";
@@ -71,5 +73,22 @@ describe("central Airtable contract", () => {
       contactLinks: "fldNyY3MjrWXUcw7q",
       sourceModifiedAt: "fld8VR6YogRo6aG0f",
     });
+  });
+
+  it("contains Metadata API-confirmed Device and Inspection fields", () => {
+    expect(DEVICE_FIELDS).toEqual({
+      name: "fld1mWRdnl9zZFi1s",
+      manufacturer: "fldQ8yyTwOUHi8wGm",
+      model: "fldeQr3QmeJMY8Of0",
+      serialNumber: "fld3qIBT5mBui84Xb",
+      inventoryNumber: "fldBs1xaGTKcijSWj",
+      location: "fldl06MEL6RkrDo21",
+      hospitalLink: "fldMBpYguSqrxskc4",
+      deviceStatus: "fldWbzAsP0qK4t5ud",
+      sourceModifiedAt: "fldE4CsBR20ba22Qv",
+    });
+    expect(INSPECTION_FIELDS.performedAt).toBe("fld3knASxSRaBdDVt");
+    expect(INSPECTION_FIELDS.result).toBe("fldWQzKcmaHodBwLF");
+    expect(INSPECTION_FIELDS.dueDate).toBe("fldNMzupWUaEKzn7u");
   });
 });

@@ -14,7 +14,10 @@ import {
   calculateSendAfter,
   normalizeStatus,
 } from "./notification-domain.js";
-import { PrismaBaselineStore } from "./baseline-store.js";
+import {
+  PrismaBaselineStore,
+  synchronizeCaseDeviceRelations,
+} from "./baseline-store.js";
 
 export type IncrementalEntityType =
   | typeof SyncEntityType.SERVICE_ORDER
@@ -201,6 +204,13 @@ export class PrismaIncrementalStore implements IncrementalStore {
       where: { id: command.trackedCaseId },
       data: mappedCaseUpdate(command.mappedCase, command.detectedAt),
     });
+    await synchronizeCaseDeviceRelations(transaction, {
+      trackedCaseId: command.trackedCaseId,
+      caseType: command.mappedCase.caseType,
+      sourceRecordId: command.mappedCase.airtableRecordId,
+      directHospitalRecordId: command.mappedCase.sourceHospitalRecordId,
+      deviceAirtableIds: command.mappedCase.deviceAirtableIds,
+    });
 
     const recipients = await transaction.caseRecipient.findMany({
       where: {
@@ -299,6 +309,8 @@ function mappedCaseUpdate(mappedCase: MappedCase, seenAt: Date) {
     invalidDueDate: _invalidDueDate,
     caseType: _caseType,
     airtableRecordId: _airtableRecordId,
+    deviceAirtableIds: _deviceAirtableIds,
+    sourceHospitalRecordId: _sourceHospitalRecordId,
     sourceSnapshot,
     ...data
   } = mappedCase;

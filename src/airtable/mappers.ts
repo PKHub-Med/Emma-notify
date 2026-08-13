@@ -25,7 +25,7 @@ export type MappedCase = {
   caseLocation: string | null;
   hospitalName: string | null;
   sourceHospitalRecordId: string | null;
-  deviceAirtableId: string | null;
+  deviceAirtableIds: string[];
   deviceName: string | null;
   manufacturer: string | null;
   model: string | null;
@@ -40,6 +40,9 @@ export type MappedCase = {
   inspectionDueDateRaw: string | null;
   inspectionScheduledDate: Date | null;
   inspectionBookingStatus: string | null;
+  inspectionPerformedAt: Date | null;
+  inspectionResult: string | null;
+  inspectionValidUntil: Date | null;
   sourceSnapshot: Record<string, string | null>;
   contactRecordIds: string[];
   invalidDueDate: boolean;
@@ -81,9 +84,7 @@ export function mapServiceOrder(record: AirtableRecord): MappedCase {
     sourceHospitalRecordId: toFirstLinkedRecordId(
       record.fields[SERVICE_ORDER_FIELDS.sourceHospitalLink],
     ),
-    deviceAirtableId: toFirstLinkedRecordId(
-      record.fields[SERVICE_ORDER_FIELDS.deviceLink],
-    ),
+    deviceAirtableIds: toLinkedRecordIds(record.fields[SERVICE_ORDER_FIELDS.deviceLink]),
     sourceCreatedAt: parseAirtableDate(record.createdTime),
     reportedAt: parseAirtableDate(record.fields[SERVICE_ORDER_FIELDS.reportedAt]),
     sourceModifiedAt: parseAirtableDate(
@@ -93,6 +94,9 @@ export function mapServiceOrder(record: AirtableRecord): MappedCase {
     inspectionDueDateRaw: null,
     inspectionScheduledDate: null,
     inspectionBookingStatus: null,
+    inspectionPerformedAt: null,
+    inspectionResult: null,
+    inspectionValidUntil: null,
     sourceSnapshot: { ...values },
     contactRecordIds: toLinkedRecordIds(
       record.fields[SERVICE_ORDER_FIELDS.contactLinks],
@@ -140,7 +144,7 @@ export function mapInspection(record: AirtableRecord): MappedCase {
     caseLocation: null,
     hospitalName: values.hospitalName,
     sourceHospitalRecordId: null,
-    deviceAirtableId: toFirstLinkedRecordId(record.fields[INSPECTION_FIELDS.deviceLink]),
+    deviceAirtableIds: toLinkedRecordIds(record.fields[INSPECTION_FIELDS.deviceLink]),
     deviceName: values.deviceName,
     manufacturer: values.manufacturer,
     model: values.model,
@@ -159,6 +163,11 @@ export function mapInspection(record: AirtableRecord): MappedCase {
       record.fields[INSPECTION_FIELDS.scheduledDate],
     ),
     inspectionBookingStatus: values.inspectionBookingStatus,
+    inspectionPerformedAt: parseAirtableDate(
+      record.fields[INSPECTION_FIELDS.performedAt],
+    ),
+    inspectionResult: toOptionalString(record.fields[INSPECTION_FIELDS.result]),
+    inspectionValidUntil: inspectionDueDate,
     sourceSnapshot: { ...values },
     contactRecordIds: toLinkedRecordIds(
       record.fields[INSPECTION_FIELDS.contactLinks],

@@ -360,7 +360,7 @@ function emptyPortalView(): HospitalPortalViewModel {
   return {
     hospital: { shortName: "Szpital", name: "Szpital", address: null },
     serviceProviderName: "Tiemed",
-    summary: { requiresAction: 0, repairs: 0, inspections: 0 },
+    summary: { requiresAction: 0, repairs: 0, inspections: 0, devices: 0 },
     initialCases: { items: [], nextCursor: null },
     focusedCase: null,
   };

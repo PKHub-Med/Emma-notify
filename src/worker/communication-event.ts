@@ -241,7 +241,9 @@ export function buildServiceOrderObservation(
       sourceHospitalRecordId: serviceOrder.sourceHospitalRecordId,
       contactRecordIds: serviceOrder.contactRecordIds,
       device: {
-        airtableRecordId: serviceOrder.deviceAirtableId,
+        airtableRecordId: serviceOrder.deviceAirtableIds.length === 1
+          ? serviceOrder.deviceAirtableIds[0]!
+          : null,
         name: serviceOrder.deviceName,
         manufacturer: serviceOrder.manufacturer,
         model: serviceOrder.model,

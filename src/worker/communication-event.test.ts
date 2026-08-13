@@ -141,7 +141,7 @@ function mappedServiceOrder(): MappedCase {
     caseLocation: null,
     hospitalName: "Szpital Testowy",
     sourceHospitalRecordId: "recHospital",
-    deviceAirtableId: "recDevice",
+    deviceAirtableIds: ["recDevice"],
     deviceName: "Aparat",
     manufacturer: "Producent",
     model: "Model",

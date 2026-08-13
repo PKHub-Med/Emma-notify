@@ -53,6 +53,7 @@ import {
   PrismaCommunicationAssetStatusStore,
 } from "../assets/preflight.js";
 import { createS3ObjectStorage } from "../assets/object-storage.js";
+import { PrismaDeviceSyncStore, runDeviceSync } from "./device-sync.js";
 
 const HEARTBEAT_INTERVAL_MS = 30_000;
 const DELIVERY_PLANNER_INTERVAL_MS = 15_000;
@@ -69,6 +70,7 @@ const baselineStore = new PrismaBaselineStore(prisma);
 const incrementalStore = new PrismaIncrementalStore(prisma);
 const taskSyncStore = new PrismaTaskSyncStore(prisma);
 const hospitalSyncStore = new PrismaHospitalSyncStore(prisma);
+const deviceSyncStore = new PrismaDeviceSyncStore(prisma);
 const communicationStore = new PrismaCommunicationEventStore(prisma);
 const recipientResolutionStore = new PrismaRecipientResolutionStore(prisma);
 const communicationDeliveryStore = new PrismaCommunicationDeliveryStore(prisma);
@@ -121,6 +123,8 @@ let taskTimer: NodeJS.Timeout | undefined;
 let taskReconcileTimer: NodeJS.Timeout | undefined;
 let reminderEligibilityTimer: NodeJS.Timeout | undefined;
 let hospitalTimer: NodeJS.Timeout | undefined;
+let deviceTimer: NodeJS.Timeout | undefined;
+let deviceReconcileTimer: NodeJS.Timeout | undefined;
 let recipientResolutionTimer: NodeJS.Timeout | undefined;
 let deliveryPlannerTimer: NodeJS.Timeout | undefined;
 let communicationEmailTimer: NodeJS.Timeout | undefined;
@@ -128,6 +132,7 @@ let assetProcessorTimer: NodeJS.Timeout | undefined;
 let incrementalRunning = false;
 let taskRunning = false;
 let hospitalRunning = false;
+let deviceRunning = false;
 let recipientResolutionRunning = false;
 let deliveryPlannerRunning = false;
 let communicationEmailRunning = false;
@@ -213,6 +218,12 @@ function startPollingLoops(): void {
   hospitalTimer = setInterval(() => {
     void pollHospitals();
   }, config.airtableHospitalPollSeconds * 1_000);
+  deviceTimer = setInterval(() => {
+    void pollDevices();
+  }, config.airtableDevicePollSeconds * 1_000);
+  deviceReconcileTimer = setInterval(() => {
+    void pollDevices("RECONCILE");
+  }, config.airtableDeviceReconcileSeconds * 1_000);
   recipientResolutionTimer = setInterval(() => {
     void pollRecipientResolution();
   }, config.airtablePollSeconds * 1_000);
@@ -230,6 +241,7 @@ function startPollingLoops(): void {
   void pollIncremental();
   void pollTasks().then(() => pollTasks("REMINDER_ELIGIBILITY"));
   void pollHospitals();
+  void pollDevices();
   void pollRecipientResolution();
   void pollDeliveryPlanner();
   if (config.communicationAssetsEnabled) void pollAssetProcessor();
@@ -277,6 +289,24 @@ async function pollHospitals(): Promise<void> {
     console.error("[hospital-sync] failed; next poll will retry");
   } finally {
     hospitalRunning = false;
+  }
+}
+
+async function pollDevices(requestedMode: "AUTO" | "RECONCILE" = "AUTO"): Promise<void> {
+  if (deviceRunning || shuttingDown) return;
+  deviceRunning = true;
+  try {
+    await runDeviceSync({
+      airtable,
+      store: deviceSyncStore,
+      requestedMode,
+      overlapSeconds: config.airtableSyncOverlapSeconds,
+      log: (message) => console.info(message),
+    });
+  } catch {
+    console.error("DEVICE_SYNC_FAILED mode=" + requestedMode);
+  } finally {
+    deviceRunning = false;
   }
 }
 
@@ -399,6 +429,8 @@ async function shutdown(signal: NodeJS.Signals): Promise<void> {
   if (taskReconcileTimer) clearInterval(taskReconcileTimer);
   if (reminderEligibilityTimer) clearInterval(reminderEligibilityTimer);
   if (hospitalTimer) clearInterval(hospitalTimer);
+  if (deviceTimer) clearInterval(deviceTimer);
+  if (deviceReconcileTimer) clearInterval(deviceReconcileTimer);
   if (recipientResolutionTimer) clearInterval(recipientResolutionTimer);
   if (deliveryPlannerTimer) clearInterval(deliveryPlannerTimer);
   if (communicationEmailTimer) clearInterval(communicationEmailTimer);
