@@ -20,7 +20,7 @@ describe("PortalAccessGrantService", () => {
     const store = new MemoryGrantStore([serviceDelivery("deliveryA")]);
     const result = await service(store).getOrCreatePortalAccessGrant("deliveryA", now);
     expect(store.grants).toHaveLength(1);
-    expect(result.url).toMatch(/^https:\/\/notify\.example\.org\/p\//);
+    expect(result.url).toMatch(/^https:\/\/notify\.example\.org\/d\//);
   });
 
   it("returns exactly the same grant and link on sender retry", async () => {
@@ -95,7 +95,7 @@ describe("PortalAccessGrantService", () => {
     const result = await service(store).getOrCreatePortalAccessGrant("deliveryA", now);
     const persisted = JSON.stringify(store.grants[0]);
     expect(persisted).not.toContain(result.url);
-    expect(persisted).not.toContain(result.url.split("/p/")[1]!);
+    expect(persisted).not.toContain(result.url.split("/d/")[1]!);
     expect(persisted).not.toContain("email");
   });
 
@@ -134,10 +134,14 @@ describe("PortalAccessGrantService", () => {
   it("does not allow entryContext to widen the signed hospital scope", async () => {
     const store = new MemoryGrantStore([taskDelivery("deliveryTask")]);
     const { grant, url } = await service(store).getOrCreatePortalAccessGrant("deliveryTask", now);
-    const token = url.split("/p/")[1]!;
+    const token = url.split("/d/")[1]!;
     expect(verifyPortalGrantToken(token, {
       ...grant,
       sourceHospitalRecordId: "recDifferentHospital",
+    }, secret)).toBe(false);
+    expect(verifyPortalGrantToken(token, {
+      ...grant,
+      entryContext: { ...grant.entryContext, sourceRecordId: "recDifferentCase" },
     }, secret)).toBe(false);
   });
 

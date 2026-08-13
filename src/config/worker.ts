@@ -8,6 +8,7 @@ import {
   accessLinkSigningSecretSchema,
   publicBaseUrlSchema,
 } from "./access-link.js";
+import { assetEnvironmentShape, mapAssetConfig, type AssetConfig } from "./assets.js";
 
 const strictBooleanString = z.preprocess(
   (value) => value === undefined
@@ -40,9 +41,10 @@ const workerEnvironmentSchema = z.object({
   ),
   COMMUNICATION_EMAILS_ENABLED: strictBooleanString,
   COMMUNICATION_SEND_NOT_BEFORE: z.string().default(""),
+  ...assetEnvironmentShape,
 });
 
-export type WorkerConfig = BaseConfig & {
+export type WorkerConfig = BaseConfig & AssetConfig & {
   airtableBaseId: string;
   airtablePat: string;
   airtablePollSeconds: number;
@@ -72,6 +74,7 @@ export function loadWorkerConfig(environment: NodeJS.ProcessEnv): WorkerConfig {
   }
 
   return {
+    ...mapAssetConfig(parsed.data),
     databaseUrl: parsed.data.DATABASE_URL,
     airtableBaseId: parsed.data.AIRTABLE_BASE_ID,
     airtablePat: parsed.data.AIRTABLE_PAT,

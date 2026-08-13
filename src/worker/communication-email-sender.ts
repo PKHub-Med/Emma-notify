@@ -23,6 +23,7 @@ import {
   reminderCancellationReason,
   type CurrentTaskState,
 } from "./communication-delivery.js";
+import type { CommunicationAssetPreflight } from "../assets/preflight.js";
 
 const MAX_ATTEMPTS = 4;
 const STALE_SENDING_MS = 5 * 60_000;
@@ -109,6 +110,7 @@ export type CommunicationEmailSenderConfig = {
   resendApiKey: string | null;
   replyTo: string;
   timeZone: string;
+  communicationAssetsEnabled?: boolean;
 };
 
 export class PrismaCommunicationEmailSendStore implements CommunicationEmailSendStore {
@@ -245,17 +247,22 @@ export class PrismaCommunicationEmailSendStore implements CommunicationEmailSend
   }
 
   async markSent(deliveryId: string, messageId: string, sentAt: Date): Promise<void> {
-    await this.prisma.communicationDelivery.updateMany({
-      where: { id: deliveryId, status: CommunicationDeliveryStatus.SENDING },
-      data: {
-        status: CommunicationDeliveryStatus.SENT,
-        sentAt,
-        resendMessageId: messageId,
-        failedAt: null,
-        nextRetryAt: null,
-        lastError: null,
-      },
-    });
+    await this.prisma.$transaction([
+      this.prisma.communicationDelivery.updateMany({
+        where: { id: deliveryId, status: CommunicationDeliveryStatus.SENDING },
+        data: {
+          status: CommunicationDeliveryStatus.SENT,
+          sentAt,
+          resendMessageId: messageId,
+          failedAt: null,
+          nextRetryAt: null,
+          lastError: null,
+        },
+      }),
+      this.prisma.communicationAsset.updateMany({
+        where: { deliveryId, exposedAt: null }, data: { exposedAt: sentAt },
+      }),
+    ]);
   }
 
   async markFailed(
@@ -264,7 +271,7 @@ export class PrismaCommunicationEmailSendStore implements CommunicationEmailSend
     failedAt: Date,
     nextRetryAt: Date | null,
   ): Promise<void> {
-    await this.prisma.communicationDelivery.updateMany({
+    const result = await this.prisma.communicationDelivery.updateMany({
       where: { id: deliveryId, status: CommunicationDeliveryStatus.SENDING },
       data: {
         status: CommunicationDeliveryStatus.FAILED,
@@ -273,6 +280,9 @@ export class PrismaCommunicationEmailSendStore implements CommunicationEmailSend
         lastError: reason,
       },
     });
+    if (result.count === 1 && nextRetryAt === null) {
+      await this.markOrphanCandidates(deliveryId, failedAt);
+    }
   }
 
   async cancel(
@@ -300,7 +310,35 @@ export class PrismaCommunicationEmailSendStore implements CommunicationEmailSend
         sendingStartedAt: cancelledAt,
       },
     });
+    if (result.count === 1) await this.markOrphanCandidates(deliveryId, cancelledAt);
     return result.count === 1;
+  }
+
+  private async markOrphanCandidates(deliveryId: string, at: Date): Promise<void> {
+    await this.prisma.storedFile.updateMany({
+      where: {
+        orphanedAt: null,
+        communicationAssets: {
+          some: { deliveryId },
+          none: {
+            OR: [
+              { exposedAt: { not: null } },
+              { delivery: { status: { in: [
+                CommunicationDeliveryStatus.SCHEDULED,
+                CommunicationDeliveryStatus.READY,
+                CommunicationDeliveryStatus.SENDING,
+                CommunicationDeliveryStatus.SENT,
+              ] } } },
+              { delivery: {
+                status: CommunicationDeliveryStatus.FAILED,
+                nextRetryAt: { not: null },
+              } },
+            ],
+          },
+        },
+      },
+      data: { orphanedAt: at },
+    });
   }
 }
 
@@ -310,6 +348,7 @@ export async function runCommunicationEmailSender(input: {
   grants: CommunicationPortalGrantProvider;
   unsubscribeGrants: CommunicationUnsubscribeGrantProvider;
   dataSource: CommunicationTemplateDataSource;
+  assetPreflight?: CommunicationAssetPreflight;
   config: CommunicationEmailSenderConfig;
   now?: () => Date;
   log?: (message: string) => void;
@@ -342,6 +381,7 @@ export async function sendCommunicationDelivery(input: {
   grants: CommunicationPortalGrantProvider;
   unsubscribeGrants: CommunicationUnsubscribeGrantProvider;
   dataSource: CommunicationTemplateDataSource;
+  assetPreflight?: CommunicationAssetPreflight;
   config: CommunicationEmailSenderConfig;
   candidate: CommunicationSendCandidate;
   now: Date;
@@ -412,6 +452,15 @@ export async function sendCommunicationDelivery(input: {
       );
       return "CANCELLED";
     }
+  }
+
+  if (input.config.communicationAssetsEnabled && input.assetPreflight) {
+    await input.assetPreflight.prepare({
+      id: input.candidate.id,
+      scenario: input.candidate.scenario,
+      sourceRecordId: input.candidate.event.sourceRecordId,
+      eventSnapshot: input.candidate.event.eventSnapshot,
+    });
   }
 
   if (!input.config.resendApiKey) return fail(input, "RESEND_API_KEY_MISSING", false, attempt);

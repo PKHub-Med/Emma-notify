@@ -88,7 +88,19 @@ describe("loadWorkerConfig", () => {
       communicationEmailsEnabled: false,
       communicationSendNotBefore: null,
       emailReplyTo: "serwis@tiemed.pl",
+      assetMaxDocumentSourceBytes: 52_428_800,
     });
+  });
+
+  it("validates a configurable document source limit", () => {
+    expect(loadWorkerConfig({
+      ...workerEnvironment,
+      ASSET_MAX_DOCUMENT_SOURCE_BYTES: "1048576",
+    }).assetMaxDocumentSourceBytes).toBe(1_048_576);
+    expect(() => loadWorkerConfig({
+      ...workerEnvironment,
+      ASSET_MAX_DOCUMENT_SOURCE_BYTES: "0",
+    })).toThrow(/ASSET_MAX_DOCUMENT_SOURCE_BYTES/);
   });
 
   it("keeps service-order, task and reminder polling frequencies independent", () => {

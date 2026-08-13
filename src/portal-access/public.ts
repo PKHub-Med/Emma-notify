@@ -49,6 +49,7 @@ export class PrismaPublicPortalAccessStore implements PublicPortalAccessStore {
 }
 
 export type PortalAuthorizationContext = {
+  communicationDeliveryId: string;
   sourceHospitalRecordId: string;
   entryContext: PortalEntryContext;
 };
@@ -82,7 +83,8 @@ export class PublicPortalAccessService {
     const parsed = parseAccessLinkToken(token);
     if (!parsed) return { outcome: "NOT_FOUND" };
     const grant = await this.store.findByPublicId(parsed.publicId);
-    if (!grant || !verifyPortalGrantToken(token, grant, this.signingSecret)) {
+    if (!grant || !isValidEntryContext(grant.entryContext) ||
+      !verifyPortalGrantToken(token, grant, this.signingSecret)) {
       return { outcome: "NOT_FOUND" };
     }
     if (grant.revokedAt || grant.expiresAt.getTime() <= now.getTime()) {
@@ -94,11 +96,19 @@ export class PublicPortalAccessService {
     return {
       outcome: "VALID",
       authorization: {
+        communicationDeliveryId: grant.communicationDeliveryId,
         sourceHospitalRecordId: grant.sourceHospitalRecordId,
         entryContext: grant.entryContext,
       },
     };
   }
+}
+
+function isValidEntryContext(value: unknown): value is PortalEntryContext {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const context = value as Record<string, unknown>;
+  return (context.type === "SERVICE_ORDER" || context.type === "TASK") &&
+    typeof context.sourceRecordId === "string" && context.sourceRecordId.trim().length > 0;
 }
 
 export function portalEntryPage(): string {

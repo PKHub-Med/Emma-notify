@@ -35,6 +35,20 @@ import {
 } from "../communication-unsubscribe/service.js";
 import { PrismaHospitalSyncStore, runHospitalSync } from "./hospital-sync.js";
 import { runReportedAtBackfill } from "./reported-at-backfill.js";
+import {
+  CommunicationAssetResolver,
+  PrismaCommunicationAssetRegistrationStore,
+} from "../assets/communication-assets.js";
+import {
+  AirtableAttachmentDownloadSource,
+  PrismaAssetProcessorStore,
+  runAssetProcessor,
+} from "../assets/processor.js";
+import {
+  BoundedCommunicationAssetPreflight,
+  PrismaCommunicationAssetStatusStore,
+} from "../assets/preflight.js";
+import { createS3ObjectStorage } from "../assets/object-storage.js";
 
 const HEARTBEAT_INTERVAL_MS = 30_000;
 const DELIVERY_PLANNER_INTERVAL_MS = 15_000;
@@ -76,6 +90,26 @@ const communicationUnsubscribeGrants = new CommunicationUnsubscribeGrantService(
   },
 );
 const communicationEmailProvider = createResendClient(config.resendApiKey);
+const assetStorage = config.communicationAssetsEnabled ? createS3ObjectStorage(config) : undefined;
+const assetResolver = config.communicationAssetsEnabled
+  ? new CommunicationAssetResolver(
+      airtable,
+      new PrismaCommunicationAssetRegistrationStore(prisma),
+      (message) => console.info(message),
+    )
+  : undefined;
+const assetPreflight = assetResolver
+  ? new BoundedCommunicationAssetPreflight(
+      assetResolver,
+      new PrismaCommunicationAssetStatusStore(prisma),
+      config.communicationAssetPrepTimeoutSeconds * 1_000,
+      { log: (message) => console.info(message) },
+    )
+  : undefined;
+const assetProcessorStore = config.communicationAssetsEnabled
+  ? new PrismaAssetProcessorStore(prisma) : undefined;
+const assetDownloadSource = config.communicationAssetsEnabled
+  ? new AirtableAttachmentDownloadSource(airtable) : undefined;
 let heartbeatTimer: NodeJS.Timeout | undefined;
 let incrementalTimer: NodeJS.Timeout | undefined;
 let taskTimer: NodeJS.Timeout | undefined;
@@ -85,12 +119,14 @@ let hospitalTimer: NodeJS.Timeout | undefined;
 let recipientResolutionTimer: NodeJS.Timeout | undefined;
 let deliveryPlannerTimer: NodeJS.Timeout | undefined;
 let communicationEmailTimer: NodeJS.Timeout | undefined;
+let assetProcessorTimer: NodeJS.Timeout | undefined;
 let incrementalRunning = false;
 let taskRunning = false;
 let hospitalRunning = false;
 let recipientResolutionRunning = false;
 let deliveryPlannerRunning = false;
 let communicationEmailRunning = false;
+let assetProcessorRunning = false;
 let shuttingDown = false;
 
 async function writeHeartbeat(): Promise<void> {
@@ -176,12 +212,46 @@ function startPollingLoops(): void {
   communicationEmailTimer = setInterval(() => {
     void pollCommunicationEmail();
   }, COMMUNICATION_EMAIL_INTERVAL_MS);
+  if (config.communicationAssetsEnabled) {
+    assetProcessorTimer = setInterval(() => {
+      void pollAssetProcessor();
+    }, config.assetProcessorSeconds * 1_000);
+  }
   void pollIncremental();
   void pollTasks().then(() => pollTasks("REMINDER_ELIGIBILITY"));
   void pollHospitals();
   void pollRecipientResolution();
   void pollDeliveryPlanner();
+  if (config.communicationAssetsEnabled) void pollAssetProcessor();
   void pollCommunicationEmail();
+}
+
+async function pollAssetProcessor(): Promise<void> {
+  if (assetProcessorRunning || shuttingDown || !assetProcessorStore ||
+    !assetDownloadSource || !assetStorage) return;
+  assetProcessorRunning = true;
+  try {
+    await runAssetProcessor({
+      store: assetProcessorStore,
+      source: assetDownloadSource,
+      storage: assetStorage,
+      config: {
+        maxSourceBytes: config.assetMaxImageSourceBytes,
+        maxDocumentSourceBytes: config.assetMaxDocumentSourceBytes,
+        maxImagePixels: config.assetMaxImagePixels,
+        portalMaxDimension: config.assetPortalMaxDimension,
+        thumbMaxDimension: config.assetThumbMaxDimension,
+        portalWebpQuality: config.assetPortalWebpQuality,
+        thumbWebpQuality: config.assetThumbWebpQuality,
+        concurrency: config.assetProcessorConcurrency,
+      },
+      log: (message) => console.info(message),
+    });
+  } catch {
+    console.error("COMMUNICATION_ASSET_PROCESSOR_FAILED status=FAILED errorCode=BATCH_ERROR");
+  } finally {
+    assetProcessorRunning = false;
+  }
 }
 
 async function pollHospitals(): Promise<void> {
@@ -212,6 +282,7 @@ async function pollCommunicationEmail(): Promise<void> {
       dataSource: communicationTemplateDataSource,
       config: {
         communicationEmailsEnabled: config.communicationEmailsEnabled,
+        communicationAssetsEnabled: config.communicationAssetsEnabled,
         communicationSendNotBefore: config.communicationSendNotBefore,
         mode: config.emailMode,
         testEmail: config.testEmail,
@@ -220,6 +291,7 @@ async function pollCommunicationEmail(): Promise<void> {
         replyTo: config.emailReplyTo,
         timeZone: config.communicationTimezone,
       },
+      ...(assetPreflight ? { assetPreflight } : {}),
       log: (message) => console.info(message),
     });
   } catch {
@@ -320,6 +392,7 @@ async function shutdown(signal: NodeJS.Signals): Promise<void> {
   if (recipientResolutionTimer) clearInterval(recipientResolutionTimer);
   if (deliveryPlannerTimer) clearInterval(deliveryPlannerTimer);
   if (communicationEmailTimer) clearInterval(communicationEmailTimer);
+  if (assetProcessorTimer) clearInterval(assetProcessorTimer);
   await prisma.$disconnect();
   console.info("[worker] Shutdown complete");
 }

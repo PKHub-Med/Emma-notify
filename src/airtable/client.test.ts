@@ -53,7 +53,7 @@ describe("AirtableClient", () => {
     expect(listUrl).toContain("filterByFormula=");
     expect(recordUrl).toContain("tblContacts/recContact");
     expect(recordUrl).toContain("returnFieldsByFieldId=true");
-    expect(recordUrl).not.toContain("fields%5B%5D");
+    expect(recordUrl).toContain("fields%5B%5D=fldEmail");
     expect(fetchFunction.mock.calls[0]?.[1]).toMatchObject({ method: "GET" });
     expect(fetchFunction.mock.calls[1]?.[1]).toMatchObject({ method: "GET" });
   });

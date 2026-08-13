@@ -19,6 +19,8 @@ import {
   HospitalPortalViewModelService,
   PrismaHospitalPortalStore,
 } from "../portal-access/view-model.js";
+import { createS3ObjectStorage } from "../assets/object-storage.js";
+import { PrismaPublicAssetStore, StoredPublicFileService } from "../assets/public-files.js";
 
 const config = loadApiConfig(process.env);
 const prisma = createPrismaClient(config.databaseUrl);
@@ -34,6 +36,13 @@ const unsubscribe = new PublicUnsubscribeService(
   new PrismaPublicUnsubscribeStore(prisma),
   config.accessLinkSigningSecret,
 );
+const publicFiles = config.communicationAssetsEnabled
+  ? new StoredPublicFileService(
+      new PrismaPublicAssetStore(prisma),
+      createS3ObjectStorage(config),
+      config.assetSignedUrlSeconds,
+    )
+  : undefined;
 const app = createApp(prisma, accessLinks, portalAccess, unsubscribe, {
   portalViews: new HospitalPortalViewModelService(
     new PrismaHospitalPortalStore(prisma),
@@ -41,6 +50,7 @@ const app = createApp(prisma, accessLinks, portalAccess, unsubscribe, {
     config.portalPageSize,
   ),
   serviceName: config.serviceName,
+  ...(publicFiles ? { publicFiles } : {}),
 });
 
 let server: Server | undefined;

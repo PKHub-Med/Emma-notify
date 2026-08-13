@@ -271,10 +271,91 @@ model CommunicationDelivery {
   communicationEventRecipient   CommunicationEventRecipient         @relation(fields: [communicationEventRecipientId], references: [id], onDelete: Cascade)
   portalAccessGrant             PortalAccessGrant?
   unsubscribeGrant             CommunicationUnsubscribeGrant?
+  assets                       CommunicationAsset[]
 
   @@unique([communicationEventId, communicationEventRecipientId])
   @@index([status, scheduledFor])
   @@index([scenario, status, scheduledFor])
+}
+
+enum AssetSourceProvider {
+  AIRTABLE
+}
+
+enum StoredFileKind {
+  IMAGE
+  DOCUMENT
+}
+
+enum AssetProcessingStatus {
+  PENDING
+  PROCESSING
+  READY
+  FAILED
+  REJECTED_TOO_LARGE
+  REJECTED_UNSUPPORTED
+}
+
+enum CommunicationAssetRole {
+  PHOTO
+  REPAIR_PROTOCOL
+  DIAGNOSTIC_PROTOCOL
+  INSPECTION_PROTOCOL
+  OTHER_DOCUMENT
+}
+
+model StoredFile {
+  id                       String                @id @default(cuid())
+  sourceProvider           AssetSourceProvider   @default(AIRTABLE)
+  sourceAttachmentId       String                @unique
+  sourceRecordId           String
+  sourceFieldId            String
+  sourceEntityType         CommunicationSourceEntityType
+  sourceHospitalRecordId   String
+  kind                     StoredFileKind
+  originalFileName         String
+  originalMimeType         String
+  originalSizeBytes        BigInt?
+  processingStatus         AssetProcessingStatus @default(PENDING)
+  portalObjectKey          String?
+  thumbnailObjectKey       String?
+  documentObjectKey        String?
+  portalSizeBytes          BigInt?
+  thumbnailSizeBytes       BigInt?
+  documentSizeBytes        BigInt?
+  width                    Int?
+  height                   Int?
+  attemptCount             Int                   @default(0)
+  lastErrorCode            String?
+  processingStartedAt      DateTime?
+  nextAttemptAt            DateTime?
+  processedAt              DateTime?
+  orphanedAt               DateTime?
+  createdAt                DateTime              @default(now())
+  updatedAt                DateTime              @updatedAt
+  communicationAssets      CommunicationAsset[]
+
+  @@index([processingStatus, createdAt])
+  @@index([processingStatus, processingStartedAt])
+  @@index([processingStatus, nextAttemptAt])
+  @@index([sourceHospitalRecordId])
+  @@index([orphanedAt])
+}
+
+model CommunicationAsset {
+  id             String                     @id @default(cuid())
+  deliveryId     String
+  storedFileId   String
+  role           CommunicationAssetRole
+  displayOrder   Int
+  createdAt      DateTime                   @default(now())
+  exposedAt      DateTime?
+  delivery       CommunicationDelivery      @relation(fields: [deliveryId], references: [id], onDelete: Cascade)
+  storedFile     StoredFile                 @relation(fields: [storedFileId], references: [id], onDelete: Restrict)
+
+  @@unique([deliveryId, storedFileId, role])
+  @@index([deliveryId, displayOrder])
+  @@index([storedFileId, exposedAt])
 }
 
 model CommunicationUnsubscribeGrant {

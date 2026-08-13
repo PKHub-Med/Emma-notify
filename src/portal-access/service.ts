@@ -170,7 +170,7 @@ export class PortalAccessGrantService {
 
   private result(grant: PortalAccessGrantRecord) {
     const token = signPortalGrantToken(grant, this.options.signingSecret);
-    return { grant, url: `${this.publicBaseUrl}/p/${token}` };
+    return { grant, url: `${this.publicBaseUrl}/d/${token}` };
   }
 }
 

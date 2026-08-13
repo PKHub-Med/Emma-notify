@@ -17,6 +17,7 @@ import {
   type PersistedCommunicationSendSnapshot,
 } from "./communication-email-sender.js";
 import type { CommunicationTemplateDataSource } from "./communication-template-data.js";
+import type { CommunicationAssetPreflight } from "../assets/preflight.js";
 
 const now = new Date("2026-08-15T10:00:00Z");
 const activation = new Date("2026-08-15T09:00:00Z");
@@ -28,6 +29,24 @@ describe("communication email activation and recipient safety", () => {
     expect(stats.candidates).toBe(0);
     expect(fixture.store.findCalls).toBe(0);
     expect(fixture.provider.requests).toHaveLength(0);
+  });
+
+  it("keeps asset discovery completely disabled by the default kill switch", async () => {
+    const fixture = setup();
+    const prepare = vi.fn();
+    await run(fixture, {}, [], now, { prepare });
+    expect(prepare).not.toHaveBeenCalled();
+    expect(fixture.provider.requests).toHaveLength(1);
+  });
+
+  it("runs bounded asset preflight before sending when explicitly enabled", async () => {
+    const fixture = setup();
+    const order: string[] = [];
+    const prepare = vi.fn(async () => { order.push("assets"); });
+    const originalSend = fixture.provider.send.bind(fixture.provider);
+    fixture.provider.send = async (request) => { order.push("email"); return originalSend(request); };
+    await run(fixture, { communicationAssetsEnabled: true }, [], now, { prepare });
+    expect(order).toEqual(["assets", "email"]);
   });
 
   it("fails closed without valid SEND_NOT_BEFORE and does not crash", async () => {
@@ -349,6 +368,7 @@ function run(
   configOverrides: Partial<CommunicationEmailSenderConfig> = {},
   logs: string[] = [],
   at = now,
+  assetPreflight?: CommunicationAssetPreflight,
 ) {
   return runCommunicationEmailSender({
     store: fixture.store,
@@ -356,6 +376,7 @@ function run(
     grants: fixture.grants,
     unsubscribeGrants: fixture.unsubscribeGrants,
     dataSource: fixture.dataSource,
+    ...(assetPreflight ? { assetPreflight } : {}),
     config: { ...config(), ...configOverrides },
     now: () => at,
     log: (message) => logs.push(message),

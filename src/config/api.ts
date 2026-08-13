@@ -5,15 +5,17 @@ import {
   type BaseConfig,
 } from "./base.js";
 import { accessLinkSigningSecretSchema } from "./access-link.js";
+import { assetEnvironmentShape, mapAssetConfig, type AssetConfig } from "./assets.js";
 
 const apiEnvironmentSchema = z.object({
   ...baseEnvironmentShape,
   PORT: z.coerce.number().int().positive().max(65_535).default(3000),
   ACCESS_LINK_SIGNING_SECRET: accessLinkSigningSecretSchema,
   PORTAL_PAGE_SIZE: z.coerce.number().int().positive().max(100).default(30),
+  ...assetEnvironmentShape,
 });
 
-export type ApiConfig = BaseConfig & {
+export type ApiConfig = BaseConfig & AssetConfig & {
   port: number;
   accessLinkSigningSecret: string;
   portalPageSize: number;
@@ -27,6 +29,7 @@ export function loadApiConfig(environment: NodeJS.ProcessEnv): ApiConfig {
   }
 
   return {
+    ...mapAssetConfig(parsed.data),
     databaseUrl: parsed.data.DATABASE_URL,
     port: parsed.data.PORT,
     accessLinkSigningSecret: parsed.data.ACCESS_LINK_SIGNING_SECRET,

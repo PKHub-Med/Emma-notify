@@ -18,6 +18,7 @@ describe("PublicPortalAccessService", () => {
     expect(result).toEqual({
       outcome: "VALID",
       authorization: {
+        communicationDeliveryId: "deliveryId",
         sourceHospitalRecordId: "recHospital",
         entryContext: grant.entryContext,
       },
@@ -76,6 +77,13 @@ describe("PublicPortalAccessService", () => {
     expect(await service(store).open("invalid", now)).toEqual({ outcome: "NOT_FOUND" });
     const unknown = record({ publicId: "unknownportalpublicid0001" });
     expect(await service(store).open(token(unknown), now)).toEqual({ outcome: "NOT_FOUND" });
+  });
+
+  it("rejects a legacy grant without a concrete context instead of widening to the hospital", async () => {
+    const grant = record({ entryContext: null as unknown as PublicPortalAccessGrant["entryContext"] });
+    const structurallyValidToken = `${grant.publicId}.${"A".repeat(43)}`;
+    expect(await service(new MemoryPublicPortalStore(grant)).open(structurallyValidToken, now))
+      .toEqual({ outcome: "NOT_FOUND" });
   });
 });
 

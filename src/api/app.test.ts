@@ -27,6 +27,7 @@ import {
   type HospitalPortalViewModel,
 } from "../portal-access/view-model.js";
 import type { PortalAuthorizationContext } from "../portal-access/public.js";
+import type { PublicFileService } from "../assets/public-files.js";
 
 const secret = "test-access-link-signing-secret-with-at-least-32-bytes";
 let server: Server | null = null;
@@ -80,6 +81,15 @@ describe("public API", () => {
     );
   });
 
+  it("serves a new context-scoped portal from /d/:token", async () => {
+    const grant = portalRecord();
+    const { baseUrl } = await startApp(new MemoryStore(null), grant);
+    const response = await fetch(`${baseUrl}/d/${signPortalGrantToken(grant, secret)}`);
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-security-policy")).toContain("script-src 'nonce-");
+    expect(await response.text()).toContain("portal szpitala");
+  });
+
   it("redirects expired portal tokens to /link-expired", async () => {
     const grant = portalRecord({ expiresAt: new Date(Date.now() - 1) });
     const { baseUrl } = await startApp(new MemoryStore(null), grant);
@@ -98,6 +108,55 @@ describe("public API", () => {
     const { baseUrl } = await startApp(new MemoryStore(null), portalRecord());
     const response = await fetch(`${baseUrl}/p/invalid`);
     expect(response.status).toBe(404);
+  });
+
+  it("redirects an authorized asset to a short-lived signed storage URL", async () => {
+    const grant = portalRecord();
+    const signedUrl = vi.fn().mockResolvedValue("https://storage.invalid/signed");
+    const { baseUrl } = await startApp(
+      new MemoryStore(null), grant, new MemoryUnsubscribeStore(null),
+      async () => emptyPortalView(), { publicFiles: { signedUrl } },
+    );
+    const response = await fetch(
+      `${baseUrl}/p/${signPortalGrantToken(grant, secret)}/files/asset-1?variant=thumb`,
+      { redirect: "manual" },
+    );
+    expect(response.status).toBe(302);
+    expect(response.headers.get("location")).toBe("https://storage.invalid/signed");
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(signedUrl).toHaveBeenCalledWith(
+      expect.objectContaining({
+        communicationDeliveryId: "deliveryId",
+        sourceHospitalRecordId: "recHospital",
+      }),
+      "asset-1",
+      "thumb",
+    );
+  });
+
+  it("does not resolve a file for an invalid portal token", async () => {
+    const signedUrl = vi.fn();
+    const { baseUrl } = await startApp(
+      new MemoryStore(null), portalRecord(), new MemoryUnsubscribeStore(null),
+      async () => emptyPortalView(), { publicFiles: { signedUrl } },
+    );
+    const response = await fetch(`${baseUrl}/p/invalid/files/asset-1?variant=portal`);
+    expect(response.status).toBe(404);
+    expect(signedUrl).not.toHaveBeenCalled();
+  });
+
+  it("does not resolve a file for an expired portal grant", async () => {
+    const grant = portalRecord({ expiresAt: new Date(Date.now() - 1) });
+    const signedUrl = vi.fn();
+    const { baseUrl } = await startApp(
+      new MemoryStore(null), grant, new MemoryUnsubscribeStore(null),
+      async () => emptyPortalView(), { publicFiles: { signedUrl } },
+    );
+    const response = await fetch(
+      `${baseUrl}/p/${signPortalGrantToken(grant, secret)}/files/asset-1?variant=portal`,
+    );
+    expect(response.status).toBe(404);
+    expect(signedUrl).not.toHaveBeenCalled();
   });
 
   it("does not let query parameters change portal hospital scope", async () => {
@@ -191,11 +250,11 @@ describe("public API", () => {
       } },
     );
     const token = signPortalGrantToken(grant, secret);
-    const response = await fetch(`${baseUrl}/p/${token}/data/cases?filter=REPAIR&cursor=secret-cursor`);
+    const response = await fetch(`${baseUrl}/p/${token}/data/cases?filter=REPAIR&q=Pompa&cursor=secret-cursor`);
     expect(response.status).toBe(400);
     expect(await response.json()).toEqual({ error: "INVALID_CURSOR" });
     expect(log).toHaveBeenCalledWith(
-      "PORTAL_DATA_REQUEST_FAILED endpoint=cases filter=REPAIR hasCursor=true status=400 errorCode=INVALID_CURSOR",
+      "PORTAL_DATA_REQUEST_FAILED endpoint=cases filter=REPAIR hasCursor=true hasQuery=true errorCode=INVALID_CURSOR status=400",
     );
     expect(log.mock.calls.flat().join(" ")).not.toContain(token);
     expect(log.mock.calls.flat().join(" ")).not.toContain("secret-cursor");
@@ -215,7 +274,7 @@ describe("public API", () => {
     expect(response.status).toBe(500);
     expect(await response.json()).toEqual({ error: "INTERNAL_ERROR" });
     expect(log).toHaveBeenCalledWith(
-      "PORTAL_DATA_REQUEST_FAILED endpoint=cases filter=ALL hasCursor=true status=500 errorCode=INTERNAL_ERROR",
+      "PORTAL_DATA_REQUEST_FAILED endpoint=cases filter=ALL hasCursor=true hasQuery=false errorCode=INTERNAL_ERROR status=500",
     );
     log.mockRestore();
   });
@@ -272,6 +331,7 @@ async function startApp(
     ) => Promise<{ items: []; nextCursor: string | null }>;
     getCase?: (authorization: PortalAuthorizationContext) => Promise<null>;
     getDevice?: (authorization: PortalAuthorizationContext) => Promise<null>;
+    publicFiles?: PublicFileService;
   } = {},
 ): Promise<{ baseUrl: string }> {
   const prisma = {
@@ -288,7 +348,7 @@ async function startApp(
       getCase: dataViews.getCase ?? (async () => null),
       listDevices: async () => ({ items: [], nextCursor: null }),
       getDevice: dataViews.getDevice ?? (async () => null),
-    } },
+    }, ...(dataViews.publicFiles ? { publicFiles: dataViews.publicFiles } : {}) },
   );
   server = app.listen(0, "127.0.0.1");
   await new Promise<void>((resolve) => server?.once("listening", resolve));

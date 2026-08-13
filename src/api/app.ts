@@ -22,6 +22,7 @@ import {
   unsubscribePage,
   type PublicUnsubscribeService,
 } from "../communication-unsubscribe/public.js";
+import type { PublicAssetVariant, PublicFileService } from "../assets/public-files.js";
 
 export function createApp(
   prisma: PrismaClient,
@@ -32,6 +33,7 @@ export function createApp(
     portalViews?: Pick<HospitalPortalViewModelService,
       "build" | "listCases" | "getCase" | "listDevices" | "getDevice">;
     serviceName?: string;
+    publicFiles?: PublicFileService;
   } = {},
 ): Express {
   const app = express();
@@ -57,11 +59,28 @@ export function createApp(
   });
 
   app.get("/d/:token", async (request, response) => {
-    response.set(PUBLIC_PAGE_HEADERS);
     try {
+      const portalResult = await portalAccess.open(request.params.token ?? "");
+      if (portalResult.outcome === "VALID") {
+        const view = await portalViews.build(portalResult.authorization);
+        const nonce = randomBytes(18).toString("base64url");
+        response.set(portalPageHeaders(nonce));
+        const dataBasePath = `/p/${encodeURIComponent(request.params.token ?? "")}`;
+        response.status(200).type("html").send(
+          renderHospitalPortal(view, nonce, new Date(), dataBasePath),
+        );
+        return;
+      }
+      if (portalResult.outcome === "INACTIVE") {
+        response.set(PUBLIC_PAGE_HEADERS);
+        response.redirect(302, "/link-expired");
+        return;
+      }
+      response.set(PUBLIC_PAGE_HEADERS);
       const result = await accessLinks.open(request.params.token ?? "");
       response.status(result.status).type("html").send(result.html);
     } catch {
+      response.set(PUBLIC_PAGE_HEADERS);
       response.status(500).type("html").send(notFoundPage().html);
     }
   });
@@ -95,12 +114,13 @@ export function createApp(
   app.get("/p/:token/data/cases", async (request, response) => {
     response.set(PORTAL_DATA_HEADERS);
     const filter = stringQuery(request.query.filter);
+    const query = stringQuery(request.query.q);
     const hasCursor = request.query.cursor !== undefined;
+    const hasQuery = Boolean(query?.trim());
     try {
       const authorization = await authorizePortalData(portalAccess, request.params.token ?? "");
       if (!authorization) { response.status(404).json({ error: "NOT_FOUND" }); return; }
       const cursor = cursorQuery(request.query.cursor);
-      const query = stringQuery(request.query.q);
       const limit = numberQuery(request.query.limit);
       const page = await portalViews.listCases(authorization, {
         ...(filter ? { filter } : {}), ...(query ? { query } : {}),
@@ -108,7 +128,7 @@ export function createApp(
       });
       response.status(200).json(page);
     } catch (error: unknown) {
-      sendPortalDataError(response, error, "cases", filter, hasCursor);
+      sendPortalDataError(response, error, "cases", filter, hasCursor, hasQuery);
     }
   });
 
@@ -121,18 +141,19 @@ export function createApp(
       if (!item) { response.status(404).json({ error: "NOT_FOUND" }); return; }
       response.status(200).json(item);
     } catch (error: unknown) {
-      sendPortalDataError(response, error, "case-detail", undefined, false);
+      sendPortalDataError(response, error, "case-detail", undefined, false, false);
     }
   });
 
   app.get("/p/:token/data/devices", async (request, response) => {
     response.set(PORTAL_DATA_HEADERS);
+    const query = stringQuery(request.query.q);
     const hasCursor = request.query.cursor !== undefined;
+    const hasQuery = Boolean(query?.trim());
     try {
       const authorization = await authorizePortalData(portalAccess, request.params.token ?? "");
       if (!authorization) { response.status(404).json({ error: "NOT_FOUND" }); return; }
       const cursor = cursorQuery(request.query.cursor);
-      const query = stringQuery(request.query.q);
       const limit = numberQuery(request.query.limit);
       const page = await portalViews.listDevices(authorization, {
         ...(query ? { query } : {}), ...(cursor ? { cursor } : {}),
@@ -140,7 +161,7 @@ export function createApp(
       });
       response.status(200).json(page);
     } catch (error: unknown) {
-      sendPortalDataError(response, error, "devices", undefined, hasCursor);
+      sendPortalDataError(response, error, "devices", undefined, hasCursor, hasQuery);
     }
   });
 
@@ -153,7 +174,7 @@ export function createApp(
       if (!item) { response.status(404).json({ error: "NOT_FOUND" }); return; }
       response.status(200).json(item);
     } catch (error: unknown) {
-      sendPortalDataError(response, error, "device-detail", undefined, false);
+      sendPortalDataError(response, error, "device-detail", undefined, false, false);
     }
   });
 
@@ -162,6 +183,35 @@ export function createApp(
     const authorization = await authorizePortalData(portalAccess, request.params.token ?? "");
     if (!authorization) { response.status(404).json({ error: "NOT_FOUND" }); return; }
     response.status(200).json({ items: [], nextCursor: null });
+  });
+
+  app.get("/p/:token/files/:assetId", async (request, response) => {
+    response.set(PORTAL_DATA_HEADERS);
+    try {
+      const authorization = await authorizePortalData(portalAccess, request.params.token ?? "");
+      if (!authorization || !options.publicFiles) {
+        response.status(404).json({ error: "NOT_FOUND" });
+        return;
+      }
+      const variant = fileVariant(request.query.variant);
+      if (!variant) {
+        response.status(400).json({ error: "INVALID_VARIANT" });
+        return;
+      }
+      const url = await options.publicFiles.signedUrl(
+        authorization,
+        request.params.assetId ?? "",
+        variant,
+      );
+      if (!url) {
+        response.status(404).json({ error: "NOT_FOUND" });
+        return;
+      }
+      response.redirect(302, url);
+    } catch {
+      console.error("PORTAL_FILE_REQUEST_FAILED endpoint=files status=500");
+      response.status(500).json({ error: "INTERNAL_ERROR" });
+    }
   });
 
   app.get("/link-expired", (_request, response) => {
@@ -185,6 +235,12 @@ export function createApp(
   });
 
   return app;
+}
+
+function fileVariant(value: unknown): PublicAssetVariant | null {
+  if (value === undefined) return "document";
+  if (value === "portal" || value === "thumb" || value === "document") return value;
+  return null;
 }
 
 const PORTAL_DATA_HEADERS = {
@@ -222,6 +278,7 @@ function sendPortalDataError(
   endpoint: string,
   filter: string | undefined,
   hasCursor: boolean,
+  hasQuery: boolean,
 ): void {
   const invalidCursor = error instanceof InvalidPortalCursorError;
   const status = invalidCursor ? 400 : 500;
@@ -230,7 +287,8 @@ function sendPortalDataError(
     filter?.toUpperCase() ?? "",
   ) ? filter!.toUpperCase() : "ALL";
   console.error(
-    `PORTAL_DATA_REQUEST_FAILED endpoint=${endpoint} filter=${safeFilter} hasCursor=${hasCursor} status=${status} errorCode=${errorCode}`,
+    `PORTAL_DATA_REQUEST_FAILED endpoint=${endpoint} filter=${safeFilter} ` +
+    `hasCursor=${hasCursor} hasQuery=${hasQuery} errorCode=${errorCode} status=${status}`,
   );
   response.status(status).json({ error: errorCode });
 }

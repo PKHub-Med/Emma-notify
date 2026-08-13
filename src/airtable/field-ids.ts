@@ -70,6 +70,13 @@ export const SERVICE_ORDER_FIELDS = {
   sourceHospitalLink: "fldXGnsGh3ok8WlMe",
 } as const;
 
+// Attachment fields are intentionally separate from SERVICE_ORDER_FIELD_IDS.
+// They are fetched only by the communication-asset resolver, never by normal sync.
+export const SERVICE_ORDER_ATTACHMENT_FIELDS = {
+  repairProtocol: "fldbh4MX5xR5zvHdg",
+  diagnosticProtocol: "fldYCKAp6TIRoa6RD",
+} as const;
+
 export const INSPECTION_FIELDS = {
   businessNumber: "fldKnHp3xigYDqo5U",
   clientOrderNumber: "fldfrwgpvohaKMlmR",
