@@ -5,7 +5,11 @@ import {
   CommunicationRecipientType,
   CommunicationScenario,
 } from "../generated/prisma/enums.js";
-import type { EmailProvider, ProviderEmailResult } from "../email/resend-client.js";
+import type {
+  EmailProvider,
+  ProviderEmailResult,
+  TemplateVariableValue,
+} from "../email/resend-client.js";
 import {
   assertTestRecipient,
   RecipientSafetyError,
@@ -24,6 +28,7 @@ import {
   type CurrentTaskState,
 } from "./communication-delivery.js";
 import type { CommunicationAssetPreflight } from "../assets/preflight.js";
+import { normalizeCommunicationTemplateVariables } from "./communication-template-registry.js";
 
 const MAX_ATTEMPTS = 4;
 const STALE_SENDING_MS = 5 * 60_000;
@@ -32,7 +37,7 @@ const CANDIDATE_LIMIT = 10;
 
 export type PersistedCommunicationSendSnapshot = {
   templateId: string;
-  variables: Record<string, string>;
+  variables: Record<string, TemplateVariableValue>;
   portalGrantPublicId: string;
   unsubscribeGrantPublicId: string;
   preparedAt: string;
@@ -533,6 +538,17 @@ export async function sendCommunicationDelivery(input: {
     return fail(input, "SEND_SNAPSHOT_UNSUBSCRIBE_GRANT_MISMATCH", false, attempt);
   }
 
+  let variables: Record<string, TemplateVariableValue>;
+  try {
+    variables = normalizeCommunicationTemplateVariables(snapshot.templateId, {
+      ...snapshot.variables,
+      EMMA_SECURE_URL: grantResult.url,
+      EMMA_UNSUBSCRIBE_URL: unsubscribeResult.url,
+    });
+  } catch {
+    return fail(input, "TEMPLATE_VARIABLES_INVALID", false, attempt);
+  }
+
   try {
     // Resend receives ordinary JavaScript Unicode strings end-to-end. Never transcode
     // template variables through binary/latin1 buffers or charset-repair hacks.
@@ -541,11 +557,7 @@ export async function sendCommunicationDelivery(input: {
       replyTo: input.config.replyTo,
       template: {
         id: snapshot.templateId,
-        variables: {
-          ...snapshot.variables,
-          EMMA_SECURE_URL: grantResult.url,
-          EMMA_UNSUBSCRIBE_URL: unsubscribeResult.url,
-        },
+        variables,
       },
       idempotencyKey: communicationIdempotencyKey(input.candidate.id),
     });
@@ -662,8 +674,9 @@ function parseSendSnapshot(value: unknown): PersistedCommunicationSendSnapshot |
       typeof snapshot.variables !== "object" || snapshot.variables === null ||
       Array.isArray(snapshot.variables)) return null;
   const variables = Object.fromEntries(
-    Object.entries(snapshot.variables).filter((entry): entry is [string, string] =>
-      typeof entry[1] === "string"),
+    Object.entries(snapshot.variables).filter((entry): entry is [string, TemplateVariableValue] =>
+      typeof entry[1] === "string" ||
+      typeof entry[1] === "number" && Number.isFinite(entry[1])),
   );
   return {
     templateId: snapshot.templateId,

@@ -7,6 +7,7 @@ import {
 } from "../airtable/field-ids.js";
 import type { AirtableIncrementalSource } from "../airtable/types.js";
 import { toOptionalString } from "../airtable/values.js";
+import type { TemplateVariableValue } from "../email/resend-client.js";
 import { parseLocalDate } from "./communication-time.js";
 import { templateAliasForScenario } from "./communication-template-registry.js";
 
@@ -67,7 +68,7 @@ export class PrismaCommunicationTemplateDataSource implements CommunicationTempl
 
 export type CommunicationTemplatePayload = {
   templateId: string;
-  variables: Record<string, string>;
+  variables: Record<string, TemplateVariableValue>;
 };
 
 export class CommunicationTemplateDataError extends Error {
@@ -140,7 +141,7 @@ export async function buildCommunicationTemplatePayload(input: {
     ...common,
     VISIT_DATE: visitDate,
     DEPARTMENT: display(snapshot.department ?? snapshot.caseLocation ?? snapshot.hospitalName, "—"),
-    DEVICE_COUNT: String(inspections.length),
+    DEVICE_COUNT: inspections.length,
     DEVICES_ROWS: deviceRows(inspections),
   };
   if (input.delivery.scenario === CommunicationScenario.INSPECTION_DATE_CONFIRMED) {

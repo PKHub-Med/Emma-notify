@@ -1,5 +1,7 @@
 import { Resend } from "resend";
 
+export type TemplateVariableValue = string | number;
+
 export type ProviderEmailRequest = {
   from?: string;
   to: string;
@@ -7,7 +9,7 @@ export type ProviderEmailRequest = {
   subject?: string;
   template: {
     id: string;
-    variables: Record<string, string>;
+    variables: Record<string, TemplateVariableValue>;
   };
   idempotencyKey: string;
 };

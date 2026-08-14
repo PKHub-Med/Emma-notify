@@ -192,6 +192,51 @@ describe("final reminder validation", () => {
 });
 
 describe("claim, JIT grant and deterministic retry", () => {
+  it("normalizes a legacy numeric-string DEVICE_COUNT before the Resend request", async () => {
+    const fixture = setup({
+      scenario: CommunicationScenario.INSPECTION_DATE_CONFIRMED,
+      eventSnapshot: {
+        ...reminderSnapshot(),
+        linkedInspectionRecordIds: Array.from({ length: 15 }, (_, index) => `inspection-${index}`),
+      },
+      sendSnapshot: {
+        templateId: "emma-inspection-confirmed",
+        variables: {
+          SERVICE_NAME: "Tiemed",
+          SENT_AT: "15.08.2026, 12:00",
+          VISIT_DATE: "21.08.2026",
+          DEPARTMENT: "Serwis",
+          DEVICE_COUNT: "15",
+          DEVICES_ROWS: "<tr></tr>",
+        },
+        portalGrantPublicId: "grant-public-id",
+        unsubscribeGrantPublicId: "unsubscribe-public-id",
+        preparedAt: now.toISOString(),
+      },
+    });
+    await run(fixture);
+    const variables = fixture.provider.requests[0]!.template.variables;
+    expect(typeof variables.DEVICE_COUNT).toBe("number");
+    expect(variables.DEVICE_COUNT).toBe(15);
+  });
+
+  it("does not call Resend when DEVICE_COUNT is not a finite number", async () => {
+    const fixture = setup({
+      scenario: CommunicationScenario.INSPECTION_DATE_CONFIRMED,
+      eventSnapshot: reminderSnapshot(),
+      sendSnapshot: {
+        templateId: "emma-inspection-confirmed",
+        variables: { DEVICE_COUNT: "not-a-number" },
+        portalGrantPublicId: "grant-public-id",
+        unsubscribeGrantPublicId: "unsubscribe-public-id",
+        preparedAt: now.toISOString(),
+      },
+    });
+    await run(fixture);
+    expect(fixture.provider.requests).toHaveLength(0);
+    expect(fixture.store.lastError).toBe("TEMPLATE_VARIABLES_INVALID");
+  });
+
   it("preserves exact Unicode through builder, sendSnapshot and Resend request", async () => {
     const expected = ["Damian · Tiemed", "Michał Kowalski", "Urządzenie", "Przegląd", "Oczekiwanie na części", "Łódź", "Żółty", "Nr zlecenia klienta"];
     for (const value of expected) {

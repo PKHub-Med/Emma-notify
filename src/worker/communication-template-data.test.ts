@@ -34,6 +34,38 @@ describe("published communication template registry", () => {
     expect(payload.variables.EMMA_SECURE_URL).toBe(secureUrl);
     expect(payload.variables.EMMA_UNSUBSCRIBE_URL).toBe(unsubscribeUrl);
   });
+
+  it("keeps DEVICE_COUNT numeric for the inspection templates", async () => {
+    const dataSource: CommunicationTemplateDataSource = {
+      async getEmployees() { return []; },
+      async getInspections() {
+        return Array.from({ length: 15 }, (_, index) =>
+          inspection(`inspection-${index}`, "SPRAWNY"));
+      },
+    };
+    for (const scenario of [
+      CommunicationScenario.INSPECTION_DATE_CONFIRMED,
+      CommunicationScenario.INSPECTION_DATE_PROPOSED,
+      CommunicationScenario.INSPECTION_REMINDER,
+    ]) {
+      const payload = await buildCommunicationTemplatePayload({
+        delivery: {
+          id: "delivery",
+          scenario,
+          sourceRecordId: "source",
+          eventSnapshot: taskSnapshot(),
+        },
+        dataSource,
+        secureUrl,
+        unsubscribeUrl,
+        preparedAt,
+        timeZone: "Europe/Warsaw",
+      });
+      expect(typeof payload.variables.DEVICE_COUNT).toBe("number");
+      expect(payload.variables.DEVICE_COUNT).toBe(15);
+      expect(payload.variables.DEVICE_COUNT).not.toBe("15");
+    }
+  });
 });
 
 describe("dynamic HTML and Unicode", () => {
