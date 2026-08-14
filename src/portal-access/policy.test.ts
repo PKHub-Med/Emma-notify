@@ -44,6 +44,29 @@ describe("PortalAccessPolicy", () => {
     expect(sql).not.toContain("TIEMED_FALLBACK");
   });
 
+  it("unlocks a Repair only from its canonical direct SERVICE_ORDER event", () => {
+    const sql = visibleCaseSql({
+      hospitalId: "hospital-A", accessLevel: PortalAccessLevel.COMMUNICATION,
+    }, "SERVICE_ORDER").strings.join("?");
+    expect(sql).toContain('communication_event."sourceEntityType" = \'SERVICE_ORDER\'');
+    expect(sql).toContain('communication_event."sourceRecordId" = c."airtableRecordId"');
+    expect(sql).not.toContain("linkedServiceOrderRecordIds");
+    expect(sql).not.toContain("'TASK'");
+  });
+
+  it("unlocks only linked Inspections for the four canonical TASK inspection scenarios", () => {
+    const sql = visibleCaseSql({
+      hospitalId: "hospital-A", accessLevel: PortalAccessLevel.COMMUNICATION,
+    }, "INSPECTION").strings.join("?");
+    expect(sql).toContain('communication_event."sourceEntityType" = \'TASK\'');
+    expect(sql).toContain("'INSPECTION_DATE_PROPOSED'");
+    expect(sql).toContain("'INSPECTION_DATE_CONFIRMED'");
+    expect(sql).toContain("'INSPECTION_REMINDER'");
+    expect(sql).toContain("'INSPECTION_COMPLETED'");
+    expect(sql).toContain("linkedInspectionRecordIds");
+    expect(sql).not.toContain("linkedServiceOrderRecordIds");
+  });
+
   it("derives COMMUNICATION Devices only through visible Cases", () => {
     const sql = visibleDeviceSql({
       hospitalId: "hospital-A", accessLevel: PortalAccessLevel.COMMUNICATION,
@@ -52,6 +75,7 @@ describe("PortalAccessPolicy", () => {
     expect(sql).toContain('c."sourceHospitalRecordId" =');
     expect(sql).toContain("'SENT'");
     expect(sql).toContain("'CLIENT'");
+    expect(sql).not.toContain("linkedServiceOrderRecordIds");
   });
 
   it("keeps FULL predicates hospital-scoped by returning no access restriction fragment", () => {

@@ -36,15 +36,17 @@ export function visibleCaseSql(
   if (access.accessLevel === PortalAccessLevel.FULL) return Prisma.empty;
   const sourceMatch = caseType === "SERVICE_ORDER"
     ? Prisma.sql`(
-        (communication_event."sourceEntityType" = 'SERVICE_ORDER'
-          AND communication_event."sourceRecordId" = c."airtableRecordId")
-        OR
-        (communication_event."sourceEntityType" = 'TASK'
-          AND COALESCE(communication_event."eventSnapshot"->'linkedServiceOrderRecordIds', '[]'::jsonb)
-            ? c."airtableRecordId")
+        communication_event."sourceEntityType" = 'SERVICE_ORDER'
+        AND communication_event."sourceRecordId" = c."airtableRecordId"
       )`
     : Prisma.sql`(
         communication_event."sourceEntityType" = 'TASK'
+        AND communication_event.scenario IN (
+          'INSPECTION_DATE_PROPOSED',
+          'INSPECTION_DATE_CONFIRMED',
+          'INSPECTION_REMINDER',
+          'INSPECTION_COMPLETED'
+        )
         AND COALESCE(communication_event."eventSnapshot"->'linkedInspectionRecordIds', '[]'::jsonb)
           ? c."airtableRecordId"
       )`;
