@@ -6,6 +6,7 @@ import {
   CommunicationAssetRole,
   CommunicationScenario,
   CommunicationSourceEntityType,
+  PortalAccessLevel,
   StoredFileKind,
 } from "../generated/prisma/enums.js";
 import { SERVICE_ORDER_ATTACHMENT_FIELDS } from "../airtable/field-ids.js";
@@ -287,9 +288,12 @@ describe("bounded preflight and public access", () => {
     await expect(service.signedUrl(authorization, "asset-1", "document")).resolves.toBeNull();
   });
 
-  it("builds a database predicate that cannot cross delivery or hospital scope", async () => {
+  it("builds a COMMUNICATION predicate for exposed SENT CLIENT assets in the Hospital", async () => {
     const findFirst = vi.fn().mockResolvedValue(null);
-    const store = new PrismaPublicAssetStore({ communicationAsset: { findFirst } } as never);
+    const store = new PrismaPublicAssetStore(
+      { communicationAsset: { findFirst } } as never,
+      { resolve: async (hospitalId) => ({ hospitalId, accessLevel: PortalAccessLevel.COMMUNICATION }) },
+    );
     await store.findAuthorized("asset-B", {
       communicationDeliveryId: "delivery-A",
       sourceHospitalRecordId: "hospital-A",
@@ -298,10 +302,46 @@ describe("bounded preflight and public access", () => {
     expect(findFirst).toHaveBeenCalledWith(expect.objectContaining({
       where: expect.objectContaining({
         id: "asset-B",
-        deliveryId: "delivery-A",
         exposedAt: { not: null },
+        delivery: expect.objectContaining({
+          status: "SENT",
+          communicationEventRecipient: { recipientType: "CLIENT" },
+        }),
         storedFile: expect.objectContaining({ sourceHospitalRecordId: "hospital-A" }),
       }),
+    }));
+  });
+
+  it("does not classify SENT TIEMED_FALLBACK assets as COMMUNICATION-visible", async () => {
+    const findFirst = vi.fn().mockResolvedValue(null);
+    const store = new PrismaPublicAssetStore(
+      { communicationAsset: { findFirst } } as never,
+      { resolve: async (hospitalId) => ({ hospitalId, accessLevel: PortalAccessLevel.COMMUNICATION }) },
+    );
+    await store.findAuthorized("asset-fallback", {
+      communicationDeliveryId: "delivery-A", sourceHospitalRecordId: "hospital-A",
+      entryContext: { type: "SERVICE_ORDER", sourceRecordId: "recOrder-A" },
+    });
+    const where = findFirst.mock.calls[0]![0].where;
+    expect(where.delivery.communicationEventRecipient.recipientType).toBe("CLIENT");
+    expect(JSON.stringify(where)).not.toContain("TIEMED_FALLBACK");
+  });
+
+  it("allows FULL to query any READY non-orphan asset in its Hospital only", async () => {
+    const findFirst = vi.fn().mockResolvedValue(null);
+    const store = new PrismaPublicAssetStore(
+      { communicationAsset: { findFirst } } as never,
+      { resolve: async (hospitalId) => ({ hospitalId, accessLevel: PortalAccessLevel.FULL }) },
+    );
+    await store.findAuthorized("asset-full", {
+      communicationDeliveryId: "delivery-A", sourceHospitalRecordId: "hospital-A",
+      entryContext: { type: "SERVICE_ORDER", sourceRecordId: "recOrder-A" },
+    });
+    const where = findFirst.mock.calls[0]![0].where;
+    expect(where.exposedAt).toBeUndefined();
+    expect(where.delivery).toBeUndefined();
+    expect(where.storedFile).toEqual(expect.objectContaining({
+      sourceHospitalRecordId: "hospital-A", processingStatus: "READY", orphanedAt: null,
     }));
   });
 });

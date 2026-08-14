@@ -25,6 +25,8 @@ import {
   decodePortalCaseCursor,
   encodePortalCaseCursor,
   type HospitalPortalViewModel,
+  type PortalCaseListItem,
+  type PortalDeviceDetail,
 } from "../portal-access/view-model.js";
 import type { PortalAuthorizationContext } from "../portal-access/public.js";
 import type { PublicFileService } from "../assets/public-files.js";
@@ -208,6 +210,68 @@ describe("public API", () => {
     expect(scopes).toEqual(["hospital-A", "hospital-A", "hospital-A"]);
   });
 
+  it("keeps the public sourceRecordId contract from Device detail to Case detail", async () => {
+    const grant = portalRecord({
+      sourceHospitalRecordId: "hospital-H1",
+      entryContext: {
+        type: "SERVICE_ORDER", sourceRecordId: "entry-repair",
+        scenario: CommunicationScenario.REPAIR_RECEIVED,
+      },
+    });
+    const item = portalCase("history-repair", "24676");
+    const device: PortalDeviceDetail = {
+      sourceRecordId: "device-H1", deviceName: "Device", manufacturer: null,
+      model: null, serialNumber: null, inventoryNumber: null,
+      currentStatus: "Aktywne", validUntil: null, inspectionPerformedAt: null,
+      inspectionResult: null, cases: { items: [item], nextCursor: null }, lockedCaseCount: 0,
+    };
+    const requestedCaseIds: string[] = [];
+    const requestedHospitalIds: string[] = [];
+    const { baseUrl } = await startApp(
+      new MemoryStore(null), grant, new MemoryUnsubscribeStore(null),
+      async () => emptyPortalView(),
+      {
+        getDevice: async () => device,
+        getCase: async (authorization, id) => {
+          requestedHospitalIds.push(authorization.sourceHospitalRecordId);
+          requestedCaseIds.push(id);
+          return id === item.sourceRecordId ? item : null;
+        },
+      },
+    );
+    const token = signPortalGrantToken(grant, secret);
+    const deviceResponse = await fetch(`${baseUrl}/p/${token}/data/devices/device-H1`);
+    const payload = await deviceResponse.json() as PortalDeviceDetail;
+    const publicCaseId = payload.cases.items[0]!.sourceRecordId;
+    const caseResponse = await fetch(`${baseUrl}/p/${token}/data/cases/${publicCaseId}`);
+
+    expect(deviceResponse.status).toBe(200);
+    expect(publicCaseId).toBe("history-repair");
+    expect(caseResponse.status).toBe(200);
+    expect(requestedCaseIds).toEqual(["history-repair"]);
+    expect(requestedHospitalIds).toEqual(["hospital-H1"]);
+  });
+
+  it("returns controlled 404 and safe CASE_DETAIL log for an invalid Case ID", async () => {
+    const grant = portalRecord();
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const { baseUrl } = await startApp(
+      new MemoryStore(null), grant, new MemoryUnsubscribeStore(null),
+      async () => emptyPortalView(),
+      { getCase: async () => null },
+    );
+    const token = signPortalGrantToken(grant, secret);
+    const response = await fetch(`${baseUrl}/p/${token}/data/cases/not-a-case`);
+
+    expect(response.status).toBe(404);
+    expect(await response.json()).toEqual({ error: "NOT_FOUND" });
+    expect(log).toHaveBeenCalledWith(
+      "PORTAL_DATA_REQUEST_FAILED endpoint=CASE_DETAIL hasCaseId=true errorCode=NOT_FOUND status=404",
+    );
+    expect(log.mock.calls.flat().join(" ")).not.toContain(token);
+    log.mockRestore();
+  });
+
   it("passes the returned cursor with the same filter and search to page two", async () => {
     const grant = portalRecord({ sourceHospitalRecordId: "hospital-A" });
     const cursor = encodePortalCaseCursor({
@@ -329,8 +393,14 @@ async function startApp(
       authorization: PortalAuthorizationContext,
       options: { filter?: string; query?: string; cursor?: string; limit?: number },
     ) => Promise<{ items: []; nextCursor: string | null }>;
-    getCase?: (authorization: PortalAuthorizationContext) => Promise<null>;
-    getDevice?: (authorization: PortalAuthorizationContext) => Promise<null>;
+    getCase?: (
+      authorization: PortalAuthorizationContext,
+      id: string,
+    ) => Promise<PortalCaseListItem | null>;
+    getDevice?: (
+      authorization: PortalAuthorizationContext,
+      id: string,
+    ) => Promise<PortalDeviceDetail | null>;
     publicFiles?: PublicFileService;
   } = {},
 ): Promise<{ baseUrl: string }> {
@@ -356,11 +426,30 @@ async function startApp(
   return { baseUrl: `http://127.0.0.1:${address.port}` };
 }
 
+function portalCase(sourceRecordId: string, caseNumber: string): PortalCaseListItem {
+  return {
+    type: "REPAIR", sourceRecordId, deviceId: "device-H1", devices: [],
+    deviceName: "Device", manufacturer: null, model: null,
+    manufacturerModel: null, serialNumber: null, inventoryNumber: null,
+    caseNumber, clientOrderNumber: null, currentStatus: "Diagnostyka",
+    lastChangedAt: null, requiresAction: false, reportedAt: null,
+    inspectionPerformedAt: null, validUntil: null, description: null,
+    history: [], documents: [], photos: [],
+  };
+}
+
 function emptyPortalView(): HospitalPortalViewModel {
   return {
     hospital: { shortName: "Szpital", name: "Szpital", address: null },
     serviceProviderName: "Tiemed",
     summary: { requiresAction: 0, repairs: 0, inspections: 0, devices: 0 },
+    accessLevel: "COMMUNICATION",
+    teaser: {
+      totalDevices: 0, visibleDevices: 0, lockedDevices: 0,
+      totalRepairs: 0, visibleRepairs: 0, lockedRepairs: 0,
+      totalInspections: 0, visibleInspections: 0, lockedInspections: 0,
+    },
+    upgradeUrl: "mailto:serwis@tiemed.pl",
     initialCases: { items: [], nextCursor: null },
     focusedCase: null,
   };

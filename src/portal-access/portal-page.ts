@@ -23,6 +23,10 @@ export function renderHospitalPortal(
 <style>${PORTAL_STYLES}</style>
 </head>
 <body>
+<header class="mobile-header">
+  <div><strong>Emma</strong><span>${escapeHtml(view.hospital.shortName || view.hospital.name)}</span></div>
+  <small>Serwis: ${escapeHtml(view.serviceProviderName)}</small>
+</header>
 <div class="app">
   <aside class="sidebar">
     <div class="brand">
@@ -41,17 +45,21 @@ export function renderHospitalPortal(
   </aside>
   <main class="content"><div class="workspace">
     ${summaryScreen(view)}
-    ${devicesScreen()}
-    ${repairsScreen()}
-    ${inspectionsScreen()}
-    ${documentsScreen()}
+    ${devicesScreen(view)}
+    ${repairsScreen(view)}
+    ${inspectionsScreen(view)}
+    ${documentsScreen(view)}
     ${deviceCardScreen()}
     ${caseCardScreen()}
   </div></main>
 </div>
-<div class="modal" id="historyModal" role="dialog" aria-modal="true" aria-labelledby="historyTitle">
-  <div class="modal-card"><h2 id="historyTitle">Dane historyczne</h2><p>Pełne dane historyczne spoza bieżących spraw są dostępne w rozszerzonej wersji Emma. Aby uzyskać dostęp, skontaktuj się z Emma Med.</p><div class="modal-actions"><button class="btn-secondary" data-close-history>Zamknij</button><button class="btn-primary" data-close-history>Skontaktuj się z Emma</button></div></div>
-</div>
+<nav class="mobile-nav" aria-label="Główna nawigacja mobilna">
+  ${navButton("summary", "Podsumowanie", summaryIcon(), true)}
+  ${navButton("devices", "Urządzenia", deviceIcon())}
+  ${navButton("repairs", "Naprawy", repairIcon())}
+  ${navButton("inspections", "Przeglądy", inspectionIcon())}
+  ${navButton("documents", "Dokumenty", documentIcon())}
+</nav>
 <script nonce="${escapeHtml(scriptNonce)}">
 const portalModel=${modelJson};
 const todayWarsaw=${JSON.stringify(todayWarsaw)};
@@ -78,46 +86,46 @@ function summaryScreen(view: HospitalPortalViewModel): string {
       ${summaryCard("repair", "Naprawy", view.summary.repairs, "Wszystkie sprawy naprawcze, w tym wymagające akcji i zakończone.")}
       ${summaryCard("inspection", "Przeglądy", view.summary.inspections, "Wszystkie przeglądy: planowane, wykonane, aktualne i po terminie.")}
     </div>
+    ${upgradeTeaser(view, "summary")}
     <section class="panel"><div class="filter-state"><div><h2>Lista zadań</h2><p id="filterLabel">Wszystkie sprawy — najświeższa zmiana na górze.</p></div><button class="clear-filter" id="clearFilter">Pokaż wszystkie</button></div>
       ${searchBar("summarySearch", "Szukaj po urządzeniu, Numerze Sprawy, numerze klienta, numerze seryjnym, inwentarzowym lub statusie…")}
       <div class="task-list" id="taskList">${view.initialCases.items.map(summaryRow).join("")}</div>
       ${emptyState("summaryEmpty", "Brak spraw dostępnych w tym widoku.", view.initialCases.items.length === 0)}
       ${pagingControls("summary", view.initialCases.nextCursor !== null)}
-      ${historyButton()}
     </section>
   </section>`;
 }
 
-function devicesScreen(): string {
+function devicesScreen(view: HospitalPortalViewModel): string {
   return `<section class="screen" id="devices"><div class="page-head"><div class="kicker">Urządzenia</div><h1>Urządzenia</h1><p>Lista urządzeń powiązanych ze sprawami dostępnymi w tym widoku. Kliknięcie otwiera kartę urządzenia.</p></div>
     <div class="panel">${searchBar("deviceSearch", "Szukaj po nazwie urządzenia, producencie, modelu, numerze seryjnym lub inwentarzowym…")}
       <div class="task-list" id="deviceRows"></div>
-      ${emptyState("deviceNoResults", "Brak urządzeń pasujących do wyszukiwania.", false)}${pagingControls("devices", false)}${historyButton()}
-    </div></section>`;
+      ${emptyState("deviceNoResults", "Brak urządzeń pasujących do wyszukiwania.", false)}${pagingControls("devices", false)}
+    </div>${upgradeTeaser(view, "devices")}</section>`;
 }
 
-function repairsScreen(): string {
+function repairsScreen(view: HospitalPortalViewModel): string {
   return `<section class="screen" id="repairs"><div class="page-head"><div class="kicker">Naprawy</div><h1>Naprawy</h1><p>Lista napraw urządzeń powiązanych ze sprawami dostępnymi w tym widoku. Kliknięcie otwiera kartę sprawy.</p></div>
     <div class="panel">${searchBar("repairSearch", "Szukaj po urządzeniu, Numerze Sprawy, numerze klienta, SN, numerze inwentarzowym lub statusie…")}
       <div class="task-list repair-list" id="repairRows"></div>
-      ${emptyState("repairNoResults", "Brak napraw pasujących do wyszukiwania.", false)}${pagingControls("repairs", false)}${historyButton()}
-    </div></section>`;
+      ${emptyState("repairNoResults", "Brak napraw pasujących do wyszukiwania.", false)}${pagingControls("repairs", false)}
+    </div>${upgradeTeaser(view, "repairs")}</section>`;
 }
 
-function inspectionsScreen(): string {
+function inspectionsScreen(view: HospitalPortalViewModel): string {
   return `<section class="screen" id="inspections"><div class="page-head"><div class="kicker">Przeglądy</div><h1>Przeglądy</h1><p>Przeglądy urządzeń powiązanych z dostępnymi sprawami. Kliknięcie otwiera kartę sprawy.</p></div>
     <div class="panel">${searchBar("inspectionSearch", "Szukaj po urządzeniu, Numerze Sprawy, numerze klienta, SN, dacie przeglądu lub statusie…")}
       <div class="task-list" id="inspectionRows"></div>
-      ${emptyState("inspectionNoResults", "Brak przeglądów pasujących do wyszukiwania.", false)}${pagingControls("inspections", false)}${historyButton()}
-    </div></section>`;
+      ${emptyState("inspectionNoResults", "Brak przeglądów pasujących do wyszukiwania.", false)}${pagingControls("inspections", false)}
+    </div>${upgradeTeaser(view, "inspections")}</section>`;
 }
 
-function documentsScreen(): string {
+function documentsScreen(view: HospitalPortalViewModel): string {
   return `<section class="screen" id="documents"><div class="page-head"><div class="kicker">Dokumenty</div><h1>Dokumenty</h1><p>Wyszukuj dokumenty po urządzeniu, producencie, modelu, numerze seryjnym albo nazwie pliku.</p></div>
     <div class="panel" style="padding:15px"><div class="document-tools"><input id="documentSearch" type="search" placeholder="Szukaj dokumentu, urządzenia, producenta, modelu lub numeru seryjnego…" aria-label="Szukaj dokumentów"><select id="documentField"><option value="all">Wszystkie pola</option><option value="device">Nazwa urządzenia</option><option value="maker">Producent</option><option value="model">Model</option><option value="serial">Numer seryjny</option><option value="document">Nazwa dokumentu</option></select></div>
       <table class="documents-table"><thead><tr><th>Dokument</th><th>Urządzenie</th><th>Producent</th><th>Model</th><th>Numer seryjny</th><th>Sprawa</th></tr></thead><tbody id="documentsBody"></tbody></table>
-      ${emptyState("documentNoResults", "Brak dokumentów w tym widoku.", true)}${historyButton("bottom-history")}
-    </div></section>`;
+      ${emptyState("documentNoResults", "Brak dokumentów w tym widoku.", true)}
+    </div>${upgradeTeaser(view, "documents")}</section>`;
 }
 
 function deviceCardScreen(): string {
@@ -162,8 +170,18 @@ function searchBar(id: string, placeholder: string): string {
   return `<div class="search-bar"><input id="${id}" type="search" placeholder="${placeholder}" aria-label="${placeholder}"></div>`;
 }
 
-function historyButton(wrapper = "history-row"): string {
-  return `<div class="${wrapper}"><button class="history-btn" data-open-history>Załaduj dane historyczne</button></div>`;
+function upgradeTeaser(view: HospitalPortalViewModel, context: "summary" | "devices" | "repairs" | "inspections" | "documents"): string {
+  if (view.accessLevel !== "COMMUNICATION") return "";
+  const locked = context === "devices" ? view.teaser.lockedDevices
+    : context === "repairs" ? view.teaser.lockedRepairs
+    : context === "inspections" ? view.teaser.lockedInspections : null;
+  const message = locked === null
+    ? `Pełna Emma obejmuje kartotekę ${view.teaser.totalDevices} urządzeń, ${view.teaser.totalRepairs} napraw i ${view.teaser.totalInspections} przeglądów w Twoim szpitalu.`
+    : locked > 0
+      ? `Emma ma informacje o jeszcze ${locked} ${context === "devices" ? "urządzeniach" : context === "repairs" ? "naprawach" : "przeglądach"}.`
+      : "W tym widoku widzisz wszystkie dostępne obecnie dane.";
+  const title = context === "documents" ? "Pełna dokumentacja" : "Pełna Emma";
+  return `<aside class="upgrade-teaser"><div><strong>${title}</strong><p>${escapeHtml(message)}</p></div><a href="${escapeAttr(view.upgradeUrl)}" rel="nofollow">Odblokuj pełną Emmę</a></aside>`;
 }
 
 function pagingControls(name: string, visible: boolean): string {
@@ -222,7 +240,7 @@ function documentIcon() { return `<svg viewBox="0 0 24 24"><path d="M8 3h7l5 5v1
 
 const PORTAL_SCRIPT = String.raw`
 const screens=[...document.querySelectorAll('.screen')];
-const navButtons=[...document.querySelectorAll('.nav button')];
+const navButtons=[...document.querySelectorAll('.nav button,.mobile-nav button')];
 const caseCache=new Map();
 if(portalModel.focusedCase)caseCache.set(portalModel.focusedCase.sourceRecordId,portalModel.focusedCase);
 for(const item of portalModel.initialCases.items)caseCache.set(item.sourceRecordId,item);
@@ -263,11 +281,10 @@ debounceSearch('summarySearch',query=>{lists.summary.query=query;loadCases('summ
 async function openCase(id){const active=document.querySelector('.screen.active');if(active&&active.id!=='caseCard')lastScreen=active.id;const detail=document.getElementById('caseDetail');detail.replaceChildren(node('div','portal-loading','Ładowanie…'));showScreen('caseCard');try{const item=portalModel.focusedCase?.sourceRecordId===id?portalModel.focusedCase:await api('cases/'+encodeURIComponent(id));caseCache.set(id,item);currentCase=item;renderCase(item)}catch{detail.replaceChildren(node('div','portal-error','Nie udało się pobrać danych. Spróbuj ponownie.'))}}
 function renderCase(item){document.getElementById('casePageTitle').textContent='Numer Sprawy: '+text(item.caseNumber);const deviceButton=document.getElementById('caseScreenDeviceLink');deviceButton.hidden=!item.deviceId;deviceButton.textContent=item.deviceId?item.deviceName+' → karta urządzenia':'Przejdź do karty urządzenia';const detail=document.getElementById('caseDetail');detail.replaceChildren();const header=node('div','case-header-line');append(header,node('span','case-kind',item.type==='REPAIR'?'Naprawa':'Przegląd'),node('span','case-service-inline','Serwis: '+portalModel.serviceProviderName));const hero=node('div','case-hero');const titleLine=node('div','hero-title-line');const inline=node('div','inline-status case-main-status');append(inline,node('label','','AKTUALNY STATUS'),status(item.currentStatus));append(titleLine,node('h2','',item.deviceName),inline);const grid=node('div','meta-grid case-meta-grid');append(grid,meta('Numer Sprawy',item.caseNumber),meta('Numer zlecenia klienta',text(item.clientOrderNumber,'brak numeru')),meta('Numer seryjny',item.serialNumber),meta('Nr inwentarzowy',item.inventoryNumber));if(item.type==='REPAIR')append(grid,meta('Data zgłoszenia',formatDateTime(item.reportedAt)));else append(grid,meta('Data wykonania przeglądu',formatDate(item.inspectionPerformedAt)),meta('Ważny do',formatDate(item.validUntil)));const description=meta(item.type==='REPAIR'?'Usterka / opis':'Uwagi / opis',item.description);description.style.marginTop='9px';append(hero,titleLine,grid,description);if(item.devices?.length>1){const deviceSection=node('div','section');deviceSection.append(node('h3','','Urządzenia w sprawie'));for(const device of item.devices){const row=node('div','list-row');append(row,node('b','',device.deviceName),node('span','',deviceMeta(device)));deviceSection.append(row)}hero.append(deviceSection)}append(detail,header,hero);if(item.history?.length){const section=node('div','section');append(section,node('h3','','Historia zmian'),node('p','history-order-note','Najstarsza zmiana jest na górze, najnowsza na dole.'));const timeline=node('div','case-history');for(const event of item.history){const row=node('div','case-history-item');const rail=node('div','case-history-rail');rail.append(node('div','case-history-dot'));const card=node('div','case-history-card');append(card,node('b','',event.title),node('p','',text(event.description,'')));append(row,node('div','case-history-date',formatDateTime(event.changedAt)),rail,card);timeline.append(row)}section.append(timeline);detail.append(section)}}
 async function openDevice(id){const active=document.querySelector('.screen.active');lastScreen=active&&active.id==='caseCard'?'caseCard':'devices';const detail=document.getElementById('deviceDetail');detail.replaceChildren(node('div','portal-loading','Ładowanie…'));showScreen('deviceCard');try{const item=await api('devices/'+encodeURIComponent(id));renderDevice(item)}catch{detail.replaceChildren(node('div','portal-error','Nie udało się pobrać danych. Spróbuj ponownie.'))}}
-function renderDevice(item){document.getElementById('devicePageTitle').textContent=item.deviceName;const detail=document.getElementById('deviceDetail');detail.replaceChildren();const hero=node('div','device-hero');const titleLine=node('div','hero-title-line');const inline=node('div','inline-status');append(inline,node('label','','STATUS URZĄDZENIA'),status(item.currentStatus));append(titleLine,node('h2','',item.deviceName),inline);const grid=node('div','meta-grid');append(grid,meta('Nr inwentarzowy',item.inventoryNumber),meta('Numer seryjny',item.serialNumber),meta('Producent / model',[item.manufacturer,item.model].filter(Boolean).join(' · ')||null),meta('Ostatni przegląd',formatDate(item.inspectionPerformedAt)),meta('Wynik przeglądu',item.inspectionResult));const health=inspectionHealth(item.validUntil);const inspection=node('div','device-card-inspection');const left=node('div');append(left,node('div','label','Ważność przeglądu'),node('strong','','Ważny do: '+formatDate(item.validUntil)));const right=node('div');append(right,node('span','inspection-state '+health.state,health.label),node('span','inspection-date',health.detail));append(inspection,left,right);append(hero,titleLine,grid,inspection);detail.append(hero);for(const type of ['REPAIR','INSPECTION']){const section=node('div','section');append(section,node('h3','',type==='REPAIR'?'Naprawy':'Przeglądy'));const list=node('div','case-list');const cases=item.cases.items.filter(value=>value.type===type);if(cases.length)for(const value of cases)list.append(caseLink(value));else list.append(emptyMini(type==='REPAIR'?'Brak napraw':'Brak przeglądów','Brak danych w tym widoku.'));section.append(list);detail.append(section)}}
+function renderDevice(item){document.getElementById('devicePageTitle').textContent=item.deviceName;const detail=document.getElementById('deviceDetail');detail.replaceChildren();const hero=node('div','device-hero');const titleLine=node('div','hero-title-line');const inline=node('div','inline-status');append(inline,node('label','','STATUS URZĄDZENIA'),status(item.currentStatus));append(titleLine,node('h2','',item.deviceName),inline);const grid=node('div','meta-grid');append(grid,meta('Nr inwentarzowy',item.inventoryNumber),meta('Numer seryjny',item.serialNumber),meta('Producent / model',[item.manufacturer,item.model].filter(Boolean).join(' · ')||null),meta('Ostatni przegląd',formatDate(item.inspectionPerformedAt)),meta('Wynik przeglądu',item.inspectionResult));const health=inspectionHealth(item.validUntil);const inspection=node('div','device-card-inspection');const left=node('div');append(left,node('div','label','Ważność przeglądu'),node('strong','','Ważny do: '+formatDate(item.validUntil)));const right=node('div');append(right,node('span','inspection-state '+health.state,health.label),node('span','inspection-date',health.detail));append(inspection,left,right);append(hero,titleLine,grid,inspection);detail.append(hero);for(const type of ['REPAIR','INSPECTION']){const section=node('div','section');append(section,node('h3','',type==='REPAIR'?'Naprawy':'Przeglądy'));const list=node('div','case-list');const cases=item.cases.items.filter(value=>value.type===type);if(cases.length)for(const value of cases)list.append(caseLink(value));else list.append(emptyMini(type==='REPAIR'?'Brak napraw':'Brak przeglądów','Brak danych w tym widoku.'));section.append(list);detail.append(section)}if(item.lockedCaseCount>0){const teaser=node('aside','upgrade-teaser');const copy=node('div');append(copy,node('strong','','Pełna historia urządzenia'),node('p','','Emma posiada jeszcze '+item.lockedCaseCount+' wpisów historii tego urządzenia.'));const link=node('a','','Odblokuj pełną Emmę');link.href=portalModel.upgradeUrl;link.rel='nofollow';append(teaser,copy,link);detail.append(teaser)}}
 function caseLink(item){caseCache.set(item.sourceRecordId,item);const button=node('button','case-link');button.type='button';const info=node('span');append(info,node('b','','Numer Sprawy: '+text(item.caseNumber)),node('span','',item.currentStatus));append(button,info,node('span','arrow','›'));button.addEventListener('click',()=>openCase(item.sourceRecordId));return button}
 function emptyMini(title,description){const item=node('div','mini');append(item,node('b','',title),node('span','',description));return item}
 document.getElementById('caseBack').addEventListener('click',()=>showScreen(lastScreen||'summary'));document.getElementById('caseScreenDeviceLink').addEventListener('click',()=>{if(currentCase?.deviceId)openDevice(currentCase.deviceId)});
-const historyModal=document.getElementById('historyModal');document.querySelectorAll('[data-open-history]').forEach(button=>button.addEventListener('click',()=>historyModal.classList.add('show')));document.querySelectorAll('[data-close-history]').forEach(button=>button.addEventListener('click',()=>historyModal.classList.remove('show')));historyModal.addEventListener('click',event=>{if(event.target===historyModal)historyModal.classList.remove('show')});document.addEventListener('keydown',event=>{if(event.key==='Escape')historyModal.classList.remove('show')});
 document.querySelectorAll('#taskList .case-open').forEach((row,index)=>activate(row,()=>openCase(portalModel.initialCases.items[index].sourceRecordId)));
 if(portalModel.focusedCase)openCase(portalModel.focusedCase.sourceRecordId);
 `;

@@ -80,6 +80,7 @@ Skopiuj `.env.example` do `.env` i ustaw:
 | `TEST_EMAIL` | Adres testowy; obecnie tylko walidowany |
 | `PRODUCTION_EMAILS_ENABLED` | Flaga `true`/`false`; obecnie tylko walidowana |
 | `LINK_TTL_DAYS` | Ważność przyszłych linków w dniach; domyślnie `30` |
+| `PORTAL_UPGRADE_URL` | Opcjonalny bezpieczny link `https:` lub `mailto:` dla CTA pełnej wersji portalu; bez ENV używany jest kontakt mailowy Tiemed |
 
 API wymaga tylko `DATABASE_URL`; `PORT` jest opcjonalny i domyślnie wynosi `3000`. Pozostałe niesekretne ustawienia API mają wartości domyślne. API nie odczytuje zmiennych Airtable ani `DIGEST_QUIET_MINUTES`.
 

@@ -39,6 +39,17 @@ describe("loadApiConfig", () => {
       ACCESS_LINK_SIGNING_SECRET: "too-short",
     })).toThrow(/ACCESS_LINK_SIGNING_SECRET/);
   });
+
+  it("accepts only safe upgrade CTA protocols and defaults to backend fallback", () => {
+    const common = { DATABASE_URL: databaseUrl, ACCESS_LINK_SIGNING_SECRET: accessLinkSigningSecret };
+    expect(loadApiConfig(common).portalUpgradeUrl).toBeNull();
+    expect(loadApiConfig({ ...common, PORTAL_UPGRADE_URL: "mailto:serwis@example.org" }).portalUpgradeUrl)
+      .toBe("mailto:serwis@example.org");
+    expect(loadApiConfig({ ...common, PORTAL_UPGRADE_URL: "https://example.org/emma" }).portalUpgradeUrl)
+      .toBe("https://example.org/emma");
+    expect(() => loadApiConfig({ ...common, PORTAL_UPGRADE_URL: "javascript:alert(1)" }))
+      .toThrow(/PORTAL_UPGRADE_URL/);
+  });
 });
 
 describe("loadWorkerConfig", () => {

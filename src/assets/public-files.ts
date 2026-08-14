@@ -1,6 +1,13 @@
 import type { PrismaClient } from "../generated/prisma/client.js";
-import { AssetProcessingStatus, StoredFileKind } from "../generated/prisma/enums.js";
+import {
+  AssetProcessingStatus,
+  CommunicationDeliveryStatus,
+  CommunicationRecipientType,
+  PortalAccessLevel,
+  StoredFileKind,
+} from "../generated/prisma/enums.js";
 import type { PortalAuthorizationContext } from "../portal-access/public.js";
+import type { PortalAccessPolicy } from "../portal-access/policy.js";
 import type { ObjectStorage } from "./object-storage.js";
 
 export type PublicAssetVariant = "portal" | "thumb" | "document";
@@ -20,18 +27,36 @@ export interface PublicAssetStore {
 }
 
 export class PrismaPublicAssetStore implements PublicAssetStore {
-  constructor(private readonly prisma: PrismaClient) {}
+  constructor(
+    private readonly prisma: PrismaClient,
+    private readonly accessPolicy: PortalAccessPolicy,
+  ) {}
 
   async findAuthorized(assetId: string, authorization: PortalAuthorizationContext) {
+    const access = await this.accessPolicy.resolve(authorization.sourceHospitalRecordId);
+    const communicationOnly = access.accessLevel === PortalAccessLevel.COMMUNICATION;
     const asset = await this.prisma.communicationAsset.findFirst({
       where: {
         id: assetId,
-        deliveryId: authorization.communicationDeliveryId,
-        exposedAt: { not: null },
+        ...(communicationOnly ? {
+          exposedAt: { not: null },
+          delivery: {
+            status: CommunicationDeliveryStatus.SENT,
+            communicationEventRecipient: {
+              recipientType: CommunicationRecipientType.CLIENT,
+            },
+            communicationEvent: {
+              eventSnapshot: {
+                path: ["sourceHospitalRecordId"],
+                equals: access.hospitalId,
+              },
+            },
+          },
+        } : {}),
         storedFile: {
           processingStatus: AssetProcessingStatus.READY,
           orphanedAt: null,
-          sourceHospitalRecordId: authorization.sourceHospitalRecordId,
+          sourceHospitalRecordId: access.hospitalId,
         },
       },
       select: {

@@ -53,6 +53,20 @@ class MemoryStore implements DeviceSyncStore {
 }
 
 describe("Device current-state synchronization", () => {
+  it("has zero CommunicationEvent side effects in baseline and reconcile", async () => {
+    const source = new FakeAirtable();
+    const store = new MemoryStore();
+    source.records = [deviceRecord("recDevice", "USG")];
+
+    await run(source, store);
+    await runDeviceSync({
+      airtable: source, store, requestedMode: "RECONCILE", now: fixedNow,
+    });
+
+    expect(Object.keys(store)).not.toContain("communicationEvent");
+    expect(Object.keys(store)).not.toContain("communicationDelivery");
+  });
+
   it("creates one Device, then updates the same Airtable ID without duplication", async () => {
     const source = new FakeAirtable();
     const store = new MemoryStore();

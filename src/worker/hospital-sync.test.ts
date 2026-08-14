@@ -22,8 +22,10 @@ describe("Hospital -> Inspection canonical scope", () => {
       caseRow("4", "inspection-ambiguous", "H2"),
     ];
     const update = vi.fn(async () => ({}));
+    const createCommunicationEvent = vi.fn();
     const prisma = {
       trackedCase: { findMany: vi.fn(async () => rows), update },
+      communicationEvent: { create: createCommunicationEvent },
     } as unknown as PrismaClient;
     const log = vi.fn();
 
@@ -33,6 +35,7 @@ describe("Hospital -> Inspection canonical scope", () => {
       scanned: 4, repaired: 3, unchanged: 1, stillUnscoped: 2, ambiguous: 1,
     });
     expect(update).toHaveBeenCalledTimes(3);
+    expect(createCommunicationEvent).not.toHaveBeenCalled();
     expect(update).toHaveBeenCalledWith({
       where: { id: "1" }, data: { sourceHospitalRecordId: "H1" },
     });

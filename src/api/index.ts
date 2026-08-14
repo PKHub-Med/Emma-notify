@@ -21,9 +21,11 @@ import {
 } from "../portal-access/view-model.js";
 import { createS3ObjectStorage } from "../assets/object-storage.js";
 import { PrismaPublicAssetStore, StoredPublicFileService } from "../assets/public-files.js";
+import { PrismaPortalAccessPolicy } from "../portal-access/policy.js";
 
 const config = loadApiConfig(process.env);
 const prisma = createPrismaClient(config.databaseUrl);
+const portalAccessPolicy = new PrismaPortalAccessPolicy(prisma);
 const accessLinks = new PublicAccessLinkService(
   new PrismaPublicAccessLinkStore(prisma),
   config.accessLinkSigningSecret,
@@ -38,7 +40,7 @@ const unsubscribe = new PublicUnsubscribeService(
 );
 const publicFiles = config.communicationAssetsEnabled
   ? new StoredPublicFileService(
-      new PrismaPublicAssetStore(prisma),
+      new PrismaPublicAssetStore(prisma, portalAccessPolicy),
       createS3ObjectStorage(config),
       config.assetSignedUrlSeconds,
     )
@@ -48,6 +50,8 @@ const app = createApp(prisma, accessLinks, portalAccess, unsubscribe, {
     new PrismaHospitalPortalStore(prisma),
     config.serviceName,
     config.portalPageSize,
+    portalAccessPolicy,
+    config.portalUpgradeUrl ?? "mailto:serwis@tiemed.pl?subject=Emma%20FULL",
   ),
   serviceName: config.serviceName,
   ...(publicFiles ? { publicFiles } : {}),

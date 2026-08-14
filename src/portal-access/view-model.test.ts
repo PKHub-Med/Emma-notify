@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { CommunicationScenario } from "../generated/prisma/enums.js";
+import { CommunicationScenario, PortalAccessLevel } from "../generated/prisma/enums.js";
 import type { PrismaClient } from "../generated/prisma/client.js";
 import { renderHospitalPortal } from "./portal-page.js";
 import {
@@ -37,6 +37,7 @@ describe("paginated hospital portal", () => {
     expect(html).toContain("api('cases',{filter:state.filter,q:state.query,cursor})");
     expect(html).toContain("state.more.hidden=page.nextCursor===null");
     expect(html).toContain("Nie udało się pobrać danych. Spróbuj ponownie.");
+    expect(html).toContain("button.addEventListener('click',()=>openCase(item.sourceRecordId))");
   });
 
   it("returns consecutive cursor pages without duplicates", async () => {
@@ -145,10 +146,10 @@ describe("paginated hospital portal", () => {
     expect(queries[0]!.values.some((value) => value instanceof Date)).toBe(false);
   });
 
-  it("rejects an invalid cursor instead of restarting or throwing an uncontrolled error", () => {
+  it("rejects an invalid cursor instead of restarting or throwing an uncontrolled error", async () => {
     const service = new HospitalPortalViewModelService(memoryStore(65, 0), "Tiemed", 30);
-    expect(() => service.listCases(auth(), { cursor: "not+url/safe=" }))
-      .toThrow(InvalidPortalCursorError);
+    await expect(service.listCases(auth(), { cursor: "not+url/safe=" }))
+      .rejects.toThrow(InvalidPortalCursorError);
   });
 
   it("clamps a hostile requested limit to 100", async () => {
@@ -163,17 +164,17 @@ describe("paginated hospital portal", () => {
     expect(result.items.map((item) => item.sourceRecordId)).toEqual(["repair-1999"]);
   });
 
-  it("repair context exposes only its exact case", async () => {
+  it("uses entry context only for focus and allows another visible Hospital Case detail", async () => {
     const service = new HospitalPortalViewModelService(memoryStore(2000, 0), "Tiemed", 30);
     const authorization = auth("repair-1999");
     const view = await service.build(authorization);
-    expect(view.initialCases.items.map((item) => item.sourceRecordId)).toEqual(["repair-1999"]);
+    expect(view.initialCases.items).toHaveLength(30);
     expect(view.focusedCase?.sourceRecordId).toBe("repair-1999");
     expect((await service.getCase(authorization, "repair-1999"))?.caseNumber).toBe("1999");
-    expect(await service.getCase(authorization, "repair-1")).toBeNull();
+    expect((await service.getCase(authorization, "repair-1"))?.caseNumber).toBe("1");
   });
 
-  it("inspection-task context exposes only its linked inspections and repairs", async () => {
+  it("does not treat inspection-task entry context as access scope", async () => {
     const store = memoryStore(20, 10, { deviceId: "shared-device" }, {
       "task-T3": ["inspection-7", "inspection-8", "repair-10"],
     });
@@ -182,20 +183,19 @@ describe("paginated hospital portal", () => {
     const inspections = await service.listCases(authorization, { filter: "INSPECTION" });
     const repairs = await service.listCases(authorization, { filter: "REPAIR" });
     const devices = await service.listDevices(authorization, {});
-    expect(inspections.items.map((item) => item.sourceRecordId).sort()).toEqual([
-      "inspection-7", "inspection-8",
-    ]);
-    expect(repairs.items.map((item) => item.sourceRecordId)).toEqual(["repair-10"]);
-    expect(repairs.items.some((item) => item.sourceRecordId === "repair-11")).toBe(false);
+    expect(inspections.items).toHaveLength(10);
+    expect(repairs.items).toHaveLength(20);
+    expect(repairs.items.some((item) => item.sourceRecordId === "repair-11")).toBe(true);
     expect(devices.items.map((item) => item.sourceRecordId)).toEqual(["shared-device"]);
   });
 
-  it("builds task SQL from task references, hospital ownership and completed inspection statuses", async () => {
+  it("builds access SQL from hospital ownership, CLIENT delivery and stable Device ordering", async () => {
     const queries: Array<{ strings: readonly string[]; values: readonly unknown[] }> = [];
     const prisma = {
       $queryRaw: async (query: { strings: readonly string[]; values: readonly unknown[] }) => {
         queries.push(query);
-        return [];
+        return query.strings.join("?").includes('SELECT d."airtableRecordId" FROM "TrackedDevice"')
+          ? [{ airtableRecordId: "repair-only-device" }] : [];
       },
       trackedDevice: { findMany: async () => [] },
     } as unknown as PrismaClient;
@@ -207,20 +207,18 @@ describe("paginated hospital portal", () => {
     await store.pageDevices(scope, { query: null, cursor: null, limit: 30 });
     await store.findScopedDevice(scope, "repair-only-device", 30);
     const sql = queries[0]!.strings.join("?");
-    expect(sql).toContain('context_task."linkedInspectionRecordIds" ? c."airtableRecordId"');
-    expect(sql).toContain('context_task."linkedServiceOrderRecordIds" ? c."airtableRecordId"');
-    expect(sql).toContain('context_task."sourceHospitalRecordId" =');
-    expect(sql).toContain("'SPRAWNE', 'NIESPRAWNE', 'WARUNKOWO DOPUSZCZONE'");
+    expect(sql).toContain('c."sourceHospitalRecordId" =');
+    expect(sql).toContain("'SENT'");
+    expect(sql).toContain("'CLIENT'");
     expect(sql).toContain("WHEN 'NIESPRAWNE' THEN 3");
     expect(sql).toContain("WHEN 'WARUNKOWO DOPUSZCZONE' THEN 2");
-    expect(queries[0]!.values).toContain("task-T3");
     expect(queries[0]!.values).toContain("hospital-A");
     expect(queries[1]!.strings.join("?")).toContain('FROM "TrackedDevice" d');
     expect(queries[1]!.strings.join("?")).toContain('d."sourceHospitalRecordId" =');
     expect(queries[1]!.strings.join("?")).toContain('COALESCE(d."sourceModifiedAt", d."sourceCreatedAt"');
     expect(queries[1]!.strings.join("?")).not.toContain('d."updatedAt"');
-    expect(queries[2]!.strings.join("?")).toContain('c."inspectionPerformedAt" IS NOT NULL');
-    expect(queries[2]!.strings.join("?")).toContain('JOIN "TrackedCaseDevice"');
+    expect(queries[3]!.strings.join("?")).toContain('c."inspectionPerformedAt" IS NOT NULL');
+    expect(queries[3]!.strings.join("?")).toContain('JOIN "TrackedCaseDevice"');
   });
 
   it("returns every Device in a multi-device Case detail", async () => {
@@ -260,10 +258,12 @@ describe("paginated hospital portal", () => {
 
   it("shows Case H1 snapshot but does not expose current Device H2 data", async () => {
     let linkedDeviceWhere: unknown;
+    let caseLookupQuery: { strings: readonly string[]; values: readonly unknown[] } | null = null;
     const prisma = {
-      $queryRaw: async () => [{
-        type: "REPAIR", sourceRecordId: "repair-H1", sortKey: 1n,
-      }],
+      $queryRaw: async (query: { strings: readonly string[]; values: readonly unknown[] }) => {
+        caseLookupQuery = query;
+        return [{ type: "REPAIR", sourceRecordId: "repair-H1", sortKey: 1n }];
+      },
       trackedCase: { findMany: async () => [{
         id: "case-H1", airtableRecordId: "repair-H1", businessNumber: "R1",
         clientOrderNumber: null, emmaCustomerStatus: "Naprawa", hospitalName: null,
@@ -284,8 +284,13 @@ describe("paginated hospital portal", () => {
     } as unknown as PrismaClient;
     const store = new PrismaHospitalPortalStore(prisma);
     const item = await store.findScopedCase({
-      hospitalId: "H1", contextType: "REPAIR", contextId: "repair-H1",
+      hospitalId: "H1", contextType: "REPAIR", contextId: "different-entry-repair",
     }, "repair-H1");
+    const lookupSql = caseLookupQuery!.strings.join("?");
+    expect(lookupSql).toContain('c."sourceHospitalRecordId" =');
+    expect(caseLookupQuery!.values).toContain("H1");
+    expect(caseLookupQuery!.values).toContain("repair-H1");
+    expect(caseLookupQuery!.values).not.toContain("different-entry-repair");
     expect(linkedDeviceWhere).toMatchObject({ sourceHospitalRecordId: "H1" });
     expect(item?.devices[0]).toMatchObject({
       sourceRecordId: "device-now-H2",
@@ -306,19 +311,22 @@ describe("paginated hospital portal", () => {
         model: null, serialNumber: null, inventoryNumber: null, deviceStatus: null,
       }] : [] },
       $queryRaw: async (query: { strings: readonly string[]; values: readonly unknown[] }) => {
-        queries.push(query); return [];
+        queries.push(query);
+        return query.strings.join("?").includes('SELECT d."airtableRecordId"') && query.values.includes("H2")
+          ? [{ airtableRecordId: "device-H2" }] : [];
       },
     } as unknown as PrismaClient;
     const store = new PrismaHospitalPortalStore(prisma);
     expect(await store.findScopedDevice({
-      hospitalId: "H1", contextType: "REPAIR", contextId: "repair-H1",
+      hospitalId: "H1", accessLevel: PortalAccessLevel.FULL, contextType: "REPAIR", contextId: "repair-H1",
     }, "device-H2", 30)).toBeNull();
     expect(await store.findScopedDevice({
-      hospitalId: "H2", contextType: "REPAIR", contextId: "repair-H1",
+      hospitalId: "H2", accessLevel: PortalAccessLevel.FULL, contextType: "REPAIR", contextId: "repair-H1",
     }, "device-H2", 30)).not.toBeNull();
-    const historySql = queries.at(-1)!.strings.join("?");
+    const historyQuery = queries.find((query) => query.strings.join("?").includes('FROM "TrackedCaseDevice" case_device'))!;
+    const historySql = historyQuery.strings.join("?");
     expect(historySql).toContain('c."sourceHospitalRecordId" =');
-    expect(queries.at(-1)!.values).toContain("H2");
+    expect(historyQuery.values).toContain("H2");
     expect(historySql).toContain('FROM "TrackedCaseDevice" case_device');
   });
 
@@ -356,7 +364,12 @@ describe("paginated hospital portal", () => {
     let rawCalls = 0;
     let findManyCalls = 0;
     const prisma = {
-      $queryRaw: async () => rawCalls++ === 0 ? keys : [],
+      $queryRaw: async () => {
+        rawCalls += 1;
+        if (rawCalls === 1) return keys;
+        if (rawCalls === 2) return keys.slice(0, 30).map((key) => ({ airtableRecordId: key.sourceRecordId }));
+        return [];
+      },
       trackedDevice: {
         findMany: async () => {
           findManyCalls += 1;
@@ -374,12 +387,12 @@ describe("paginated hospital portal", () => {
     } as unknown as PrismaClient;
     const store = new PrismaHospitalPortalStore(prisma);
     const page = await store.pageDevices({
-      hospitalId: "hospital-A", contextType: "INSPECTION_TASK", contextId: "task-A",
+      hospitalId: "hospital-A", accessLevel: PortalAccessLevel.FULL, contextType: "INSPECTION_TASK", contextId: "task-A",
     }, { query: null, cursor: null, limit: 30 });
     expect(page.items).toHaveLength(30);
     expect(page.nextCursor).not.toBeNull();
     expect(findManyCalls).toBe(1);
-    expect(rawCalls).toBe(2);
+    expect(rawCalls).toBe(3);
   });
 
   it("keeps Device detail cases hospital-scoped even outside the entry context", async () => {
@@ -393,19 +406,21 @@ describe("paginated hospital portal", () => {
       },
       $queryRaw: async (query: { strings: readonly string[]; values: readonly unknown[] }) => {
         queries.push(query);
-        return [];
+        return query.strings.join("?").includes('SELECT d."airtableRecordId"')
+          ? [{ airtableRecordId: "device-A" }] : [];
       },
     } as unknown as PrismaClient;
     const store = new PrismaHospitalPortalStore(prisma);
     await store.findScopedDevice({
-      hospitalId: "hospital-A", contextType: "REPAIR", contextId: "repair-other",
+      hospitalId: "hospital-A", accessLevel: PortalAccessLevel.FULL, contextType: "REPAIR", contextId: "repair-other",
     }, "device-A", 30);
-    const detailCasesSql = queries[1]!.strings.join("?");
+    const detailCasesQuery = queries.find((query) => query.strings.join("?").includes('FROM "TrackedCaseDevice" case_device'))!;
+    const detailCasesSql = detailCasesQuery.strings.join("?");
     expect(detailCasesSql).toContain('c."sourceHospitalRecordId" =');
     expect(detailCasesSql).toContain('FROM "TrackedCaseDevice" case_device');
     expect(detailCasesSql).toContain('case_device."deviceAirtableId" =');
-    expect(queries[1]!.values).toContain("hospital-A");
-    expect(queries[1]!.values).toContain("device-A");
+    expect(detailCasesQuery.values).toContain("hospital-A");
+    expect(detailCasesQuery.values).toContain("device-A");
     expect(detailCasesSql).not.toContain('context_task."airtableRecordId"');
   });
 
@@ -458,13 +473,28 @@ describe("paginated hospital portal", () => {
     expect(html).not.toContain("<script>alert(1)</script>");
     expect(html.match(/class="summary-card"/g)).toHaveLength(3);
   });
+
+  it("renders the five-item mobile navigation and responsive access-safe teaser", async () => {
+    const view = await new HospitalPortalViewModelService(memoryStore(3, 2)).build(auth());
+    const html = renderHospitalPortal(view, "nonce");
+    const mobileNav = html.match(/<nav class="mobile-nav"[\s\S]*?<\/nav>/)?.[0] ?? "";
+    expect(mobileNav.match(/data-screen=/g)).toHaveLength(5);
+    expect(html).toContain("@media(max-width:768px)");
+    expect(html).toContain(".sidebar{display:none!important}");
+    expect(html).toContain("env(safe-area-inset-bottom)");
+    expect(html).toContain("grid-template-columns:repeat(5,minmax(0,1fr))");
+    expect(html).toContain("overflow-x:hidden");
+    expect(html).toContain("min-height:44px");
+    expect(html).toContain("Odblokuj pełną Emmę");
+    expect(html).not.toContain("historyModal");
+  });
 });
 
 function memoryStore(
   repairCount: number,
   inspectionCount: number,
   overrides: Partial<PortalCaseListItem> = {},
-  taskLinks: Record<string, string[]> = {},
+  _taskLinks: Record<string, string[]> = {},
 ): HospitalPortalStore & { seenScopes: string[] } {
   const repairs = Array.from({ length: repairCount }, (_, index) => caseItem("REPAIR", index, overrides));
   const inspections = Array.from({ length: inspectionCount }, (_, index) => caseItem("INSPECTION", index, overrides));
@@ -477,13 +507,7 @@ function memoryStore(
     seenScopes.push(hospital);
     return hospital === "hospital-A";
   };
-  const scoped = (scope: { contextType: "REPAIR" | "INSPECTION_TASK"; contextId: string }) => {
-    if (scope.contextType === "REPAIR") {
-      return all.filter((item) => item.type === "REPAIR" && item.sourceRecordId === scope.contextId);
-    }
-    const linkedIds = taskLinks[scope.contextId];
-    return linkedIds ? all.filter((item) => linkedIds.includes(item.sourceRecordId)) : all;
-  };
+  const scoped = (_scope: { contextType: "REPAIR" | "INSPECTION_TASK"; contextId: string }) => all;
   return {
     seenScopes,
     async findHospital(scope) { check(scope); return { shortName: "SZA", name: "Szpital A", address: null }; },
@@ -495,6 +519,18 @@ function memoryStore(
         inspections: items.filter((item) => item.type === "INSPECTION").length,
         devices: uniqueDevices(all).length,
         requiresAction: items.filter((item) => item.requiresAction).length,
+      };
+    },
+    async getTeaserCounts(scope) {
+      check(scope);
+      const visible = scoped(scope);
+      const visibleRepairs = visible.filter((item) => item.type === "REPAIR").length;
+      const visibleInspections = visible.filter((item) => item.type === "INSPECTION").length;
+      const visibleDevices = uniqueDevices(visible).length;
+      return {
+        totalDevices: visibleDevices, visibleDevices, lockedDevices: 0,
+        totalRepairs: visibleRepairs, visibleRepairs, lockedRepairs: 0,
+        totalInspections: visibleInspections, visibleInspections, lockedInspections: 0,
       };
     },
     async pageCases(scope, options) {
@@ -514,8 +550,11 @@ function memoryStore(
         : null;
       return { items, nextCursor: next };
     },
-    async findScopedCase(scope, id) { return check(scope) ? scoped(scope).find((item) => item.sourceRecordId === id) ?? null : null; },
-    async resolveFocusedCase(scope) { return check(scope) ? scoped(scope)[0] ?? null : null; },
+    async findScopedCase(scope, id) { return check(scope) ? all.find((item) => item.sourceRecordId === id) ?? null : null; },
+    async resolveFocusedCase(scope) {
+      if (!check(scope)) return null;
+      return all.find((item) => item.sourceRecordId === scope.contextId) ?? scoped(scope)[0] ?? null;
+    },
     async pageDevices(scope, options) {
       if (!check(scope)) return { items: [], nextCursor: null };
       const devices = uniqueDevices(all).filter((item) => !options.query || JSON.stringify(item).toLowerCase().includes(options.query.toLowerCase()));
@@ -535,7 +574,11 @@ function memoryStore(
     async findScopedDevice(scope, id, limit) {
       if (!check(scope) || id === "device-B") return null;
       const device = uniqueDevices(all).find((item) => item.sourceRecordId === id);
-      return device ? { ...device, cases: { items: all.filter((item) => item.deviceId === id).slice(0, limit), nextCursor: null } } : null;
+      return device ? {
+        ...device,
+        cases: { items: all.filter((item) => item.deviceId === id).slice(0, limit), nextCursor: null },
+        lockedCaseCount: 0,
+      } : null;
     },
   };
 }

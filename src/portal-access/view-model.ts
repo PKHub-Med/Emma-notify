@@ -2,6 +2,14 @@ import { Prisma, type PrismaClient } from "../generated/prisma/client.js";
 import { EventType } from "../generated/prisma/enums.js";
 import type { PortalAuthorizationContext } from "./public.js";
 import type { PortalEntryContext } from "./service.js";
+import {
+  DEFAULT_PORTAL_ACCESS_LEVEL,
+  PortalAccessLevel,
+  visibleCaseSql,
+  visibleDeviceSql,
+  type PortalAccessPolicy,
+  type ResolvedPortalAccess,
+} from "./policy.js";
 
 export type PortalCaseFilter = "ALL" | "ACTION" | "REPAIR" | "INSPECTION";
 
@@ -72,6 +80,7 @@ export type PortalDevice = {
 
 export type PortalDeviceDetail = PortalDevice & {
   cases: PortalPage<PortalCaseListItem>;
+  lockedCaseCount: number;
 };
 
 export type PortalPage<T> = {
@@ -83,12 +92,20 @@ export type HospitalPortalViewModel = {
   hospital: { shortName: string; name: string; address: string | null };
   serviceProviderName: string;
   summary: { requiresAction: number; repairs: number; inspections: number; devices: number };
+  accessLevel: PortalAccessLevel;
+  teaser: {
+    totalDevices: number; visibleDevices: number; lockedDevices: number;
+    totalRepairs: number; visibleRepairs: number; lockedRepairs: number;
+    totalInspections: number; visibleInspections: number; lockedInspections: number;
+  };
+  upgradeUrl: string;
   initialCases: PortalPage<PortalCaseListItem>;
   focusedCase: PortalCaseListItem | null;
 };
 
 export type PortalDataScope = {
   hospitalId: string;
+  accessLevel: PortalAccessLevel;
   contextType: "REPAIR" | "INSPECTION_TASK";
   contextId: string;
 };
@@ -133,6 +150,9 @@ type SummaryCountRow = {
   requiresAction: bigint;
 };
 
+type TotalCountRow = { repairs: bigint; inspections: bigint };
+type CountRow = { count: bigint };
+
 export type PortalDeviceCursorKey = { sourceRecordId: string; sortKey: bigint };
 
 type PageKey = PortalCaseCursorKey;
@@ -146,6 +166,7 @@ export class InvalidPortalCursorError extends Error {
 export interface HospitalPortalStore {
   findHospital(scope: string): Promise<StoredHospital | null>;
   getSummaryCounts(scope: PortalDataScope): Promise<HospitalPortalViewModel["summary"]>;
+  getTeaserCounts(scope: PortalDataScope): Promise<HospitalPortalViewModel["teaser"]>;
   pageCases(scope: PortalDataScope, options: {
     filter: PortalCaseFilter;
     query: string | null;
@@ -216,7 +237,7 @@ export class PrismaHospitalPortalStore implements HospitalPortalStore {
   }
 
   async getSummaryCounts(scope: PortalDataScope): Promise<HospitalPortalViewModel["summary"]> {
-    const [rows, devices] = await Promise.all([
+    const [rows, visibleDeviceRows] = await Promise.all([
       this.prisma.$queryRaw<SummaryCountRow[]>(Prisma.sql`
       WITH scoped AS (${scopedCasesSql(scope)})
       SELECT
@@ -225,16 +246,44 @@ export class PrismaHospitalPortalStore implements HospitalPortalStore {
         COUNT(*) FILTER (WHERE UPPER(TRIM(status)) IN ('OCZEKUJEMY NA DECYZJĘ', 'DO REALIZACJI')) AS "requiresAction"
       FROM scoped
     `),
-      this.prisma.trackedDevice.count({
-        where: { sourceHospitalRecordId: scope.hospitalId },
-      }),
+      this.prisma.$queryRaw<CountRow[]>(Prisma.sql`
+        SELECT COUNT(*) AS count FROM "TrackedDevice" d
+        WHERE d."sourceHospitalRecordId" = ${scope.hospitalId}
+          ${visibleDeviceSql(scope)}
+      `),
     ]);
     const row = rows[0];
     return {
       repairs: Number(row?.repairs ?? 0n),
       inspections: Number(row?.inspections ?? 0n),
       requiresAction: Number(row?.requiresAction ?? 0n),
-      devices,
+      devices: Number(visibleDeviceRows[0]?.count ?? 0n),
+    };
+  }
+
+  async getTeaserCounts(scope: PortalDataScope): Promise<HospitalPortalViewModel["teaser"]> {
+    const [visible, totals, totalDevices] = await Promise.all([
+      this.getSummaryCounts(scope),
+      this.prisma.$queryRaw<TotalCountRow[]>(Prisma.sql`
+        SELECT
+          COUNT(*) FILTER (WHERE c."caseType" = 'SERVICE_ORDER') AS repairs,
+          COUNT(*) FILTER (WHERE c."caseType" = 'INSPECTION') AS inspections
+        FROM "TrackedCase" c
+        WHERE c.active = true AND c."sourceHospitalRecordId" = ${scope.hospitalId}
+      `),
+      this.prisma.trackedDevice.count({
+        where: { sourceHospitalRecordId: scope.hospitalId },
+      }),
+    ]);
+    const totalRepairs = Number(totals[0]?.repairs ?? 0n);
+    const totalInspections = Number(totals[0]?.inspections ?? 0n);
+    return {
+      totalDevices, visibleDevices: visible.devices,
+      lockedDevices: Math.max(0, totalDevices - visible.devices),
+      totalRepairs, visibleRepairs: visible.repairs,
+      lockedRepairs: Math.max(0, totalRepairs - visible.repairs),
+      totalInspections, visibleInspections: visible.inspections,
+      lockedInspections: Math.max(0, totalInspections - visible.inspections),
     };
   }
 
@@ -263,7 +312,7 @@ export class PrismaHospitalPortalStore implements HospitalPortalStore {
         )`
       : Prisma.empty;
     const keys = await this.prisma.$queryRaw<PageKey[]>(Prisma.sql`
-      WITH scoped AS (${scopedCasesSql(scope, options.hospitalWideDevice)})
+      WITH scoped AS (${scopedCasesSql(scope)})
       SELECT type, "sourceRecordId", "sortKey"
       FROM scoped scoped_case
       WHERE 1=1 ${filterSql} ${searchSql} ${deviceSql} ${cursorSql}
@@ -326,6 +375,7 @@ export class PrismaHospitalPortalStore implements HospitalPortalStore {
         FLOOR(EXTRACT(EPOCH FROM COALESCE(d."sourceModifiedAt", d."sourceCreatedAt", TIMESTAMP '1970-01-01')) * 1000)::bigint AS "sortKey"
       FROM "TrackedDevice" d
       WHERE d."sourceHospitalRecordId" = ${scope.hospitalId}
+        ${visibleDeviceSql(scope)}
         ${searchSql} ${cursorSql}
       ORDER BY "sortKey" DESC, "sourceRecordId" DESC
       LIMIT ${options.limit + 1}
@@ -348,12 +398,38 @@ export class PrismaHospitalPortalStore implements HospitalPortalStore {
   ): Promise<PortalDeviceDetail | null> {
     const device = await this.loadDevice(scope, sourceRecordId);
     if (!device) return null;
+    const cases = await this.pageCases(scope, {
+      filter: "ALL", query: null, cursor, limit, deviceId: sourceRecordId,
+    });
+    const counts = await this.deviceCaseCounts(scope, sourceRecordId);
     return {
       ...device,
-      cases: await this.pageCases(scope, {
-        filter: "ALL", query: null, cursor, limit, deviceId: sourceRecordId,
-        hospitalWideDevice: true,
-      }),
+      cases,
+      lockedCaseCount: Math.max(0, counts.total - counts.visible),
+    };
+  }
+
+  private async deviceCaseCounts(
+    scope: PortalDataScope,
+    sourceRecordId: string,
+  ): Promise<{ total: number; visible: number }> {
+    const [totalRows, visibleRows] = await Promise.all([
+      this.prisma.$queryRaw<CountRow[]>(Prisma.sql`
+        SELECT COUNT(*) AS count FROM "TrackedCase" c
+        JOIN "TrackedCaseDevice" cd ON cd."trackedCaseId" = c.id
+        WHERE c.active = true AND c."sourceHospitalRecordId" = ${scope.hospitalId}
+          AND cd."deviceAirtableId" = ${sourceRecordId}
+      `),
+      this.prisma.$queryRaw<CountRow[]>(Prisma.sql`
+        WITH scoped AS (${scopedCasesSql(scope)})
+        SELECT COUNT(*) AS count FROM scoped
+        JOIN "TrackedCaseDevice" cd ON cd."trackedCaseId" = scoped."trackedCaseId"
+        WHERE cd."deviceAirtableId" = ${sourceRecordId}
+      `),
+    ]);
+    return {
+      total: Number(totalRows[0]?.count ?? 0n),
+      visible: Number(visibleRows[0]?.count ?? 0n),
     };
   }
 
@@ -366,9 +442,17 @@ export class PrismaHospitalPortalStore implements HospitalPortalStore {
     sourceRecordIds: readonly string[],
   ): Promise<PortalDevice[]> {
     if (sourceRecordIds.length === 0) return [];
+    const authorizedRows = await this.prisma.$queryRaw<Array<{ airtableRecordId: string }>>(Prisma.sql`
+      SELECT d."airtableRecordId" FROM "TrackedDevice" d
+      WHERE d."sourceHospitalRecordId" = ${scope.hospitalId}
+        AND d."airtableRecordId" IN (${Prisma.join(sourceRecordIds)})
+        ${visibleDeviceSql(scope)}
+    `);
+    const authorizedIds = authorizedRows.map((row) => row.airtableRecordId);
+    if (authorizedIds.length === 0) return [];
     const devices = await this.prisma.trackedDevice.findMany({
       where: {
-        airtableRecordId: { in: [...sourceRecordIds] },
+        airtableRecordId: { in: authorizedIds },
         sourceHospitalRecordId: scope.hospitalId,
       },
       select: {
@@ -389,15 +473,16 @@ export class PrismaHospitalPortalStore implements HospitalPortalStore {
       JOIN "TrackedCaseDevice" cd ON cd."trackedCaseId" = c.id
       WHERE c."caseType" = 'INSPECTION' AND c.active = true
         AND c."sourceHospitalRecordId" = ${scope.hospitalId}
+        ${visibleCaseSql(scope, "INSPECTION")}
         AND c."inspectionPerformedAt" IS NOT NULL
-        AND cd."deviceAirtableId" IN (${Prisma.join(sourceRecordIds)})
+        AND cd."deviceAirtableId" IN (${Prisma.join(authorizedIds)})
       ORDER BY cd."deviceAirtableId", c."inspectionPerformedAt" DESC,
         c."sourceModifiedAt" DESC NULLS LAST, c."airtableRecordId" DESC
     `);
     const inspectionsByDevice = new Map(inspections.map((item) =>
       [item.deviceAirtableId, item]));
     const devicesById = new Map(devices.map((device) => [device.airtableRecordId, device]));
-    return sourceRecordIds.flatMap((sourceRecordId) => {
+    return authorizedIds.flatMap((sourceRecordId) => {
       const device = devicesById.get(sourceRecordId);
       if (!device) return [];
       const inspection = inspectionsByDevice.get(sourceRecordId);
@@ -498,15 +583,22 @@ export class HospitalPortalViewModelService {
     private readonly store: HospitalPortalStore,
     private readonly serviceProviderName = "Tiemed",
     pageSize = 30,
+    private readonly accessPolicy: PortalAccessPolicy = {
+      async resolve(hospitalId) {
+        return { hospitalId, accessLevel: DEFAULT_PORTAL_ACCESS_LEVEL };
+      },
+    },
+    private readonly upgradeUrl = "mailto:serwis@tiemed.pl?subject=Emma%20FULL",
   ) {
     this.pageSize = clampLimit(pageSize, 30);
   }
 
   async build(authorization: PortalAuthorizationContext): Promise<HospitalPortalViewModel> {
-    const scope = portalDataScope(authorization);
-    const [hospital, summary, initialCases, focusedCase] = await Promise.all([
+    const scope = await this.resolveScope(authorization);
+    const [hospital, summary, teaser, initialCases, focusedCase] = await Promise.all([
       this.store.findHospital(scope.hospitalId),
       this.store.getSummaryCounts(scope),
+      this.store.getTeaserCounts(scope),
       this.store.pageCases(scope, { filter: "ALL", query: null, cursor: null, limit: this.pageSize }),
       this.store.resolveFocusedCase(scope),
     ]);
@@ -517,18 +609,19 @@ export class HospitalPortalViewModelService {
         address: hospital?.address ?? null,
       },
       serviceProviderName: this.serviceProviderName,
-      summary,
+      summary, teaser, accessLevel: scope.accessLevel,
+      upgradeUrl: this.upgradeUrl,
       initialCases,
       focusedCase,
     };
   }
 
-  listCases(authorization: PortalAuthorizationContext, options: {
+  async listCases(authorization: PortalAuthorizationContext, options: {
     filter?: string; query?: string; cursor?: string; limit?: number;
   }): Promise<PortalPage<PortalCaseListItem>> {
     const cursor = options.cursor || null;
     if (cursor) decodePortalCaseCursor(cursor);
-    return this.store.pageCases(portalDataScope(authorization), {
+    return this.store.pageCases(await this.resolveScope(authorization), {
       filter: parseFilter(options.filter),
       query: normalizeSearch(options.query),
       cursor,
@@ -536,54 +629,43 @@ export class HospitalPortalViewModelService {
     });
   }
 
-  getCase(authorization: PortalAuthorizationContext, id: string): Promise<PortalCaseListItem | null> {
-    return this.store.findScopedCase(portalDataScope(authorization), id);
+  async getCase(authorization: PortalAuthorizationContext, id: string): Promise<PortalCaseListItem | null> {
+    return this.store.findScopedCase(await this.resolveScope(authorization), id);
   }
 
-  listDevices(authorization: PortalAuthorizationContext, options: {
+  async listDevices(authorization: PortalAuthorizationContext, options: {
     query?: string; cursor?: string; limit?: number;
   }): Promise<PortalPage<PortalDevice>> {
     const cursor = options.cursor || null;
     if (cursor) decodePortalDeviceCursor(cursor);
-    return this.store.pageDevices(portalDataScope(authorization), {
+    return this.store.pageDevices(await this.resolveScope(authorization), {
       query: normalizeSearch(options.query), cursor,
       limit: clampLimit(options.limit, this.pageSize),
     });
   }
 
-  getDevice(authorization: PortalAuthorizationContext, id: string, options: {
+  async getDevice(authorization: PortalAuthorizationContext, id: string, options: {
     cursor?: string; limit?: number;
   } = {}): Promise<PortalDeviceDetail | null> {
     const cursor = options.cursor || null;
     if (cursor) decodePortalCaseCursor(cursor);
     return this.store.findScopedDevice(
-      portalDataScope(authorization),
+      await this.resolveScope(authorization),
       id,
       clampLimit(options.limit, this.pageSize),
       cursor,
     );
   }
+
+  private async resolveScope(
+    authorization: PortalAuthorizationContext,
+  ): Promise<PortalDataScope> {
+    const access = await this.accessPolicy.resolve(authorization.sourceHospitalRecordId);
+    return portalDataScope(authorization, access);
+  }
 }
 
-function scopedCasesSql(scope: PortalDataScope, hospitalWideDevice = false): Prisma.Sql {
-  const repairScope = hospitalWideDevice
-    ? Prisma.empty
-    : scope.contextType === "REPAIR"
-    ? Prisma.sql`AND c."airtableRecordId" = ${scope.contextId}`
-    : Prisma.sql`AND EXISTS (SELECT 1 FROM "TrackedTask" context_task
-        WHERE context_task."airtableRecordId" = ${scope.contextId}
-          AND context_task."sourceHospitalRecordId" = ${scope.hospitalId}
-          AND context_task."linkedServiceOrderRecordIds" ? c."airtableRecordId")`;
-  const inspectionScope = hospitalWideDevice
-    ? Prisma.empty
-    : scope.contextType === "REPAIR"
-    ? Prisma.sql`AND false`
-    : Prisma.sql`AND EXISTS (SELECT 1 FROM "TrackedTask" context_task
-        WHERE context_task."airtableRecordId" = ${scope.contextId}
-          AND context_task."sourceHospitalRecordId" = ${scope.hospitalId}
-          AND context_task."linkedInspectionRecordIds" ? c."airtableRecordId")
-      AND UPPER(TRIM(COALESCE(c."currentStatus", ''))) IN
-        ('SPRAWNE', 'NIESPRAWNE', 'WARUNKOWO DOPUSZCZONE')`;
+function scopedCasesSql(scope: PortalDataScope): Prisma.Sql {
   return Prisma.sql`
     SELECT 'REPAIR'::text AS type, c.id AS "trackedCaseId",
       c."airtableRecordId" AS "sourceRecordId", c."deviceName", c.manufacturer, c.model,
@@ -595,7 +677,8 @@ function scopedCasesSql(scope: PortalDataScope, hospitalWideDevice = false): Pri
       NULL::timestamp AS "validUntil", c."businessNumber", c."clientOrderNumber"
     FROM "TrackedCase" c
     WHERE c."caseType" = 'SERVICE_ORDER' AND c.active = true
-      AND c."sourceHospitalRecordId" = ${scope.hospitalId} ${repairScope}
+      AND c."sourceHospitalRecordId" = ${scope.hospitalId}
+      ${visibleCaseSql(scope, "SERVICE_ORDER")}
     UNION ALL
     SELECT 'INSPECTION'::text AS type, c.id AS "trackedCaseId",
       c."airtableRecordId" AS "sourceRecordId", c."deviceName", c.manufacturer, c.model,
@@ -615,13 +698,21 @@ function scopedCasesSql(scope: PortalDataScope, hospitalWideDevice = false): Pri
       c."inspectionValidUntil" AS "validUntil", c."businessNumber", c."clientOrderNumber"
     FROM "TrackedCase" c
     WHERE c."caseType" = 'INSPECTION' AND c.active = true
-      AND c."sourceHospitalRecordId" = ${scope.hospitalId} ${inspectionScope}
+      AND c."sourceHospitalRecordId" = ${scope.hospitalId}
+      ${visibleCaseSql(scope, "INSPECTION")}
   `;
 }
 
-export function portalDataScope(authorization: PortalAuthorizationContext): PortalDataScope {
-  return {
+export function portalDataScope(
+  authorization: PortalAuthorizationContext,
+  access: ResolvedPortalAccess = {
     hospitalId: authorization.sourceHospitalRecordId,
+    accessLevel: DEFAULT_PORTAL_ACCESS_LEVEL,
+  },
+): PortalDataScope {
+  return {
+    hospitalId: access.hospitalId,
+    accessLevel: access.accessLevel,
     contextType: authorization.entryContext.type === "SERVICE_ORDER" ? "REPAIR" : "INSPECTION_TASK",
     contextId: authorization.entryContext.sourceRecordId,
   };

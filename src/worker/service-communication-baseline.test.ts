@@ -118,6 +118,12 @@ describe("service-order communication baseline", () => {
       allowEvent: await fixture.communication.isBaselineCompleted("SERVICE_ORDER"),
       detectedAt,
     });
+    await observeCommunication({
+      store: fixture.communication,
+      observation: buildServiceOrderObservation(newOrder, detectedAt),
+      allowEvent: await fixture.communication.isBaselineCompleted("SERVICE_ORDER"),
+      detectedAt,
+    });
 
     expect(fixture.communication.events).toHaveLength(1);
   });

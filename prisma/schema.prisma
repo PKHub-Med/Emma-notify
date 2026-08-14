@@ -107,6 +107,11 @@ enum CommunicationDeliveryCancelReason {
   MISSING_HOSPITAL_SCOPE_LEGACY
 }
 
+enum PortalAccessLevel {
+  COMMUNICATION
+  FULL
+}
+
 model TrackedCase {
   id                  String          @id @default(cuid())
   caseType            CaseType
@@ -229,6 +234,17 @@ model TrackedHospital {
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
   lastSeenAt        DateTime @default(now())
+}
+
+model HospitalPortalEntitlement {
+  id                     String            @id @default(cuid())
+  sourceHospitalRecordId String            @unique
+  accessLevel            PortalAccessLevel @default(COMMUNICATION)
+  enabledAt              DateTime          @default(now())
+  createdAt              DateTime          @default(now())
+  updatedAt              DateTime          @updatedAt
+
+  @@index([accessLevel])
 }
 
 model CommunicationCursor {

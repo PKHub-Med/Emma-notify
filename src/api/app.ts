@@ -134,14 +134,28 @@ export function createApp(
 
   app.get("/p/:token/data/cases/:caseId", async (request, response) => {
     response.set(PORTAL_DATA_HEADERS);
+    const hasCaseId = Boolean(request.params.caseId);
     try {
       const authorization = await authorizePortalData(portalAccess, request.params.token ?? "");
-      if (!authorization) { response.status(404).json({ error: "NOT_FOUND" }); return; }
+      if (!authorization) {
+        sendPortalDetailError(response, "CASE_DETAIL", hasCaseId, "NOT_FOUND", 404);
+        return;
+      }
       const item = await portalViews.getCase(authorization, request.params.caseId ?? "");
-      if (!item) { response.status(404).json({ error: "NOT_FOUND" }); return; }
+      if (!item) {
+        sendPortalDetailError(response, "CASE_DETAIL", hasCaseId, "NOT_FOUND", 404);
+        return;
+      }
       response.status(200).json(item);
     } catch (error: unknown) {
-      sendPortalDataError(response, error, "case-detail", undefined, false, false);
+      const invalidCursor = error instanceof InvalidPortalCursorError;
+      sendPortalDetailError(
+        response,
+        "CASE_DETAIL",
+        hasCaseId,
+        invalidCursor ? error.code : "INTERNAL_ERROR",
+        invalidCursor ? 400 : 500,
+      );
     }
   });
 
@@ -296,6 +310,20 @@ function sendPortalDataError(
   console.error(
     `PORTAL_DATA_REQUEST_FAILED endpoint=${endpoint} filter=${safeFilter} ` +
     `hasCursor=${hasCursor} hasQuery=${hasQuery} errorCode=${errorCode} status=${status}`,
+  );
+  response.status(status).json({ error: errorCode });
+}
+
+function sendPortalDetailError(
+  response: import("express").Response,
+  endpoint: "CASE_DETAIL",
+  hasCaseId: boolean,
+  errorCode: string,
+  status: number,
+): void {
+  console.error(
+    `PORTAL_DATA_REQUEST_FAILED endpoint=${endpoint} hasCaseId=${hasCaseId} ` +
+    `errorCode=${errorCode} status=${status}`,
   );
   response.status(status).json({ error: errorCode });
 }
