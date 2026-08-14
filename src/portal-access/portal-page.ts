@@ -86,11 +86,13 @@ function summaryScreen(view: HospitalPortalViewModel): string {
       ${summaryCard("repair", "Naprawy", view.summary.repairs, "Wszystkie sprawy naprawcze, w tym wymagające akcji i zakończone.")}
       ${summaryCard("inspection", "Przeglądy", view.summary.inspections, "Wszystkie przeglądy: planowane, wykonane, aktualne i po terminie.")}
     </div>
-    ${upgradeTeaser(view, "summary")}
+    ${isEmptyCommunication(view) ? "" : upgradeTeaser(view, "summary")}
     <section class="panel"><div class="filter-state"><div><h2>Lista zadań</h2><p id="filterLabel">Wszystkie sprawy — najświeższa zmiana na górze.</p></div><button class="clear-filter" id="clearFilter">Pokaż wszystkie</button></div>
       ${searchBar("summarySearch", "Szukaj po urządzeniu, Numerze Sprawy, numerze klienta, numerze seryjnym, inwentarzowym lub statusie…")}
       <div class="task-list" id="taskList">${view.initialCases.items.map(summaryRow).join("")}</div>
-      ${emptyState("summaryEmpty", "Brak spraw dostępnych w tym widoku.", view.initialCases.items.length === 0)}
+      ${isEmptyCommunication(view)
+        ? communicationEmptyState(view)
+        : emptyState("summaryEmpty", "Brak spraw dostępnych w tym widoku.", view.initialCases.items.length === 0)}
       ${pagingControls("summary", view.initialCases.nextCursor !== null)}
     </section>
   </section>`;
@@ -182,6 +184,29 @@ function upgradeTeaser(view: HospitalPortalViewModel, context: "summary" | "devi
       : "W tym widoku widzisz wszystkie dostępne obecnie dane.";
   const title = context === "documents" ? "Pełna dokumentacja" : "Pełna Emma";
   return `<aside class="upgrade-teaser"><div><strong>${title}</strong><p>${escapeHtml(message)}</p></div><a href="${escapeAttr(view.upgradeUrl)}" rel="nofollow">Odblokuj pełną Emmę</a></aside>`;
+}
+
+function isEmptyCommunication(view: HospitalPortalViewModel): boolean {
+  return view.accessLevel === "COMMUNICATION"
+    && view.summary.repairs === 0
+    && view.summary.inspections === 0
+    && view.summary.devices === 0
+    && view.teaser.lockedRepairs + view.teaser.lockedInspections + view.teaser.lockedDevices > 0;
+}
+
+function communicationEmptyState(view: HospitalPortalViewModel): string {
+  return `<aside class="communication-empty" id="summaryEmpty">
+    <div class="communication-empty-icon" aria-hidden="true">${summaryIcon()}</div>
+    <div><h2>Nie masz obecnie udostępnionych spraw.</h2>
+      <p>Emma posiada pełną historię aparatury i serwisu Twojego szpitala.</p>
+      <ul aria-label="Dane dostępne w pełnej Emma">
+        <li><strong>${view.teaser.lockedDevices}</strong><span>urządzeń</span></li>
+        <li><strong>${view.teaser.lockedRepairs}</strong><span>napraw</span></li>
+        <li><strong>${view.teaser.lockedInspections}</strong><span>przeglądów</span></li>
+      </ul>
+      <a class="upgrade-cta" href="${escapeAttr(view.upgradeUrl)}" rel="nofollow">Odblokuj pełną Emmę</a>
+    </div>
+  </aside>`;
 }
 
 function pagingControls(name: string, visible: boolean): string {

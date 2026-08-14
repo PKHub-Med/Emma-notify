@@ -488,6 +488,33 @@ describe("paginated hospital portal", () => {
     expect(html).toContain("Odblokuj pełną Emmę");
     expect(html).not.toContain("historyModal");
   });
+
+  it("renders a high-contrast CTA with hover, focus and safe contact fallback", async () => {
+    const view = await new HospitalPortalViewModelService(memoryStore(1, 0)).build(auth());
+    const html = renderHospitalPortal(view, "nonce");
+    expect(html).toContain("background:var(--navy);color:#fff");
+    expect(html).toContain(".upgrade-teaser a:hover,.upgrade-cta:hover");
+    expect(html).toContain(".upgrade-teaser a:focus-visible,.upgrade-cta:focus-visible");
+    expect(html).toContain("min-height:44px");
+    expect(html).toContain('href="mailto:serwis@tiemed.pl?subject=Emma%20FULL"');
+    expect(html).not.toContain("var(--blue)");
+  });
+
+  it("explains an empty COMMUNICATION portal without exposing locked records", async () => {
+    const view = await new HospitalPortalViewModelService(memoryStore(0, 0)).build(auth());
+    view.teaser = {
+      totalDevices: 347, visibleDevices: 0, lockedDevices: 347,
+      totalRepairs: 1_975, visibleRepairs: 0, lockedRepairs: 1_975,
+      totalInspections: 1_240, visibleInspections: 0, lockedInspections: 1_240,
+    };
+    const html = renderHospitalPortal(view, "nonce");
+    expect(html).toContain("Nie masz obecnie udostępnionych spraw.");
+    expect(html).toContain("Emma posiada pełną historię aparatury i serwisu Twojego szpitala.");
+    expect(html).toContain("<strong>347</strong><span>urządzeń</span>");
+    expect(html).toContain("<strong>1975</strong><span>napraw</span>");
+    expect(html).toContain("<strong>1240</strong><span>przeglądów</span>");
+    expect(html).not.toContain("Brak spraw dostępnych w tym widoku.");
+  });
 });
 
 function memoryStore(
