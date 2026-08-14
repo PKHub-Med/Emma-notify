@@ -54,6 +54,10 @@ import {
 } from "../assets/preflight.js";
 import { createS3ObjectStorage } from "../assets/object-storage.js";
 import { PrismaDeviceSyncStore, runDeviceSync } from "./device-sync.js";
+import {
+  PrismaCaseHospitalScopeRepairStore,
+  runCaseHospitalScopeRepair,
+} from "./case-hospital-scope-repair.js";
 
 const HEARTBEAT_INTERVAL_MS = 30_000;
 const DELIVERY_PLANNER_INTERVAL_MS = 15_000;
@@ -71,6 +75,7 @@ const incrementalStore = new PrismaIncrementalStore(prisma);
 const taskSyncStore = new PrismaTaskSyncStore(prisma);
 const hospitalSyncStore = new PrismaHospitalSyncStore(prisma);
 const deviceSyncStore = new PrismaDeviceSyncStore(prisma);
+const caseHospitalScopeRepairStore = new PrismaCaseHospitalScopeRepairStore(prisma);
 const communicationStore = new PrismaCommunicationEventStore(prisma);
 const recipientResolutionStore = new PrismaRecipientResolutionStore(prisma);
 const communicationDeliveryStore = new PrismaCommunicationDeliveryStore(prisma);
@@ -185,6 +190,16 @@ async function start(): Promise<void> {
       store: baselineStore,
       log: (message) => console.info(message),
     });
+    try {
+      await runCaseHospitalScopeRepair({
+        store: caseHospitalScopeRepairStore,
+        airtable,
+        log: (message) => console.info(message),
+      });
+    } catch {
+      console.error("[case-hospital-scope-repair] failed; retry on next restart");
+      throw new Error("Case hospital scope repair failed");
+    }
     await runServiceCommunicationBaseline({
       airtable,
       caseStore: incrementalStore,

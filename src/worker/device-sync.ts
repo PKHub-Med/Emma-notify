@@ -1,5 +1,5 @@
 import { Prisma, type PrismaClient } from "../generated/prisma/client.js";
-import { CaseType, SyncEntityType, SyncStatus } from "../generated/prisma/enums.js";
+import { SyncEntityType, SyncStatus } from "../generated/prisma/enums.js";
 import { isDeepStrictEqual } from "node:util";
 import {
   AIRTABLE_TABLE_IDS,
@@ -13,7 +13,6 @@ import type {
   AirtableRecord,
   AirtableRequestMetrics,
 } from "../airtable/types.js";
-import { synchronizeCaseDeviceRelations } from "./baseline-store.js";
 
 export type DeviceSyncMode = "BASELINE" | "INCREMENTAL" | "RECONCILE";
 
@@ -76,27 +75,6 @@ export class PrismaDeviceSyncStore implements DeviceSyncStore {
           where: { airtableRecordId: device.airtableRecordId },
           create: { ...device, sourceSnapshot: snapshot, firstSeenAt: seenAt, lastSeenAt: seenAt },
           update: { ...device, sourceSnapshot: snapshot, lastSeenAt: seenAt },
-        });
-      }
-      const affectedCases = await transaction.trackedCase.findMany({
-        where: { devices: { some: { deviceAirtableId: device.airtableRecordId } } },
-        select: {
-          id: true,
-          caseType: true,
-          airtableRecordId: true,
-          sourceHospitalRecordId: true,
-          devices: { select: { deviceAirtableId: true } },
-        },
-      });
-      for (const trackedCase of affectedCases) {
-        await synchronizeCaseDeviceRelations(transaction, {
-          trackedCaseId: trackedCase.id,
-          caseType: trackedCase.caseType,
-          sourceRecordId: trackedCase.airtableRecordId,
-          directHospitalRecordId: trackedCase.caseType === CaseType.INSPECTION
-            ? null
-            : trackedCase.sourceHospitalRecordId,
-          deviceAirtableIds: trackedCase.devices.map((item) => item.deviceAirtableId),
         });
       }
     });

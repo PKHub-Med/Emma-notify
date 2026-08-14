@@ -258,6 +258,70 @@ describe("paginated hospital portal", () => {
     expect(item?.deviceId).toBeNull();
   });
 
+  it("shows Case H1 snapshot but does not expose current Device H2 data", async () => {
+    let linkedDeviceWhere: unknown;
+    const prisma = {
+      $queryRaw: async () => [{
+        type: "REPAIR", sourceRecordId: "repair-H1", sortKey: 1n,
+      }],
+      trackedCase: { findMany: async () => [{
+        id: "case-H1", airtableRecordId: "repair-H1", businessNumber: "R1",
+        clientOrderNumber: null, emmaCustomerStatus: "Naprawa", hospitalName: null,
+        deviceName: "Snapshot H1", manufacturer: "Snapshot maker", model: "S1",
+        serialNumber: "SN-HIST", inventoryNumber: "INV-HIST", currentStatus: null,
+        faultDescription: null, sourceCreatedAt: null, reportedAt: null,
+        sourceModifiedAt: null, inspectionDueDate: null, inspectionPerformedAt: null,
+        inspectionResult: null, inspectionValidUntil: null, events: [],
+      }] },
+      trackedTask: { findMany: async () => [] },
+      trackedCaseDevice: { findMany: async () => [{
+        trackedCaseId: "case-H1", deviceAirtableId: "device-now-H2",
+      }] },
+      trackedDevice: { findMany: async ({ where }: { where: unknown }) => {
+        linkedDeviceWhere = where;
+        return [];
+      } },
+    } as unknown as PrismaClient;
+    const store = new PrismaHospitalPortalStore(prisma);
+    const item = await store.findScopedCase({
+      hospitalId: "H1", contextType: "REPAIR", contextId: "repair-H1",
+    }, "repair-H1");
+    expect(linkedDeviceWhere).toMatchObject({ sourceHospitalRecordId: "H1" });
+    expect(item?.devices[0]).toMatchObject({
+      sourceRecordId: "device-now-H2",
+      deviceName: "Snapshot H1",
+      serialNumber: "SN-HIST",
+    });
+    expect(item?.deviceId).toBeNull();
+    expect(item?.devices[0]?.deviceName).not.toBe("Current H2");
+  });
+
+  it("denies Device H2 to H1 and scopes its history to H2 Cases", async () => {
+    const queries: Array<{ strings: readonly string[]; values: readonly unknown[] }> = [];
+    const prisma = {
+      trackedDevice: { findMany: async ({ where }: {
+        where: { sourceHospitalRecordId: string };
+      }) => where.sourceHospitalRecordId === "H2" ? [{
+        airtableRecordId: "device-H2", name: "Current H2", manufacturer: null,
+        model: null, serialNumber: null, inventoryNumber: null, deviceStatus: null,
+      }] : [] },
+      $queryRaw: async (query: { strings: readonly string[]; values: readonly unknown[] }) => {
+        queries.push(query); return [];
+      },
+    } as unknown as PrismaClient;
+    const store = new PrismaHospitalPortalStore(prisma);
+    expect(await store.findScopedDevice({
+      hospitalId: "H1", contextType: "REPAIR", contextId: "repair-H1",
+    }, "device-H2", 30)).toBeNull();
+    expect(await store.findScopedDevice({
+      hospitalId: "H2", contextType: "REPAIR", contextId: "repair-H1",
+    }, "device-H2", 30)).not.toBeNull();
+    const historySql = queries.at(-1)!.strings.join("?");
+    expect(historySql).toContain('c."sourceHospitalRecordId" =');
+    expect(queries.at(-1)!.values).toContain("H2");
+    expect(historySql).toContain('FROM "TrackedCaseDevice" case_device');
+  });
+
   it("filters Device detail and Case search through every junction link", async () => {
     const queries: Array<{ strings: readonly string[]; values: readonly unknown[] }> = [];
     const prisma = { $queryRaw: async (query: { strings: readonly string[]; values: readonly unknown[] }) => {

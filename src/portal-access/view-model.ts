@@ -54,6 +54,7 @@ export type PortalCaseDevice = {
   model: string | null;
   serialNumber: string | null;
   inventoryNumber: string | null;
+  currentDeviceAccessible?: boolean;
 };
 
 export type PortalDevice = {
@@ -247,7 +248,7 @@ export class PrismaHospitalPortalStore implements HospitalPortalStore {
   }): Promise<PortalPage<PortalCaseListItem>> {
     const cursor = decodePortalCaseCursor(options.cursor);
     const filterSql = caseFilterSql(options.filter);
-    const searchSql = searchFilterSql(options.query);
+    const searchSql = searchFilterSql(options.query, scope.hospitalId);
     const deviceSql = options.deviceId
       ? Prisma.sql`AND EXISTS (SELECT 1 FROM "TrackedCaseDevice" case_device
           WHERE case_device."trackedCaseId" = scoped_case."trackedCaseId"
@@ -446,24 +447,30 @@ export class PrismaHospitalPortalStore implements HospitalPortalStore {
     });
     const linkedDeviceIds = [...new Set(caseDeviceLinks.map((link) => link.deviceAirtableId))];
     const linkedDevices = linkedDeviceIds.length === 0 ? [] : await this.prisma.trackedDevice.findMany({
-      where: { airtableRecordId: { in: linkedDeviceIds } },
+      where: {
+        airtableRecordId: { in: linkedDeviceIds },
+        sourceHospitalRecordId: scope.hospitalId,
+      },
       select: {
         airtableRecordId: true, name: true, manufacturer: true, model: true,
         serialNumber: true, inventoryNumber: true,
       },
     });
     const linkedDeviceById = new Map(linkedDevices.map((device) => [device.airtableRecordId, device]));
+    const caseRowById = new Map(rows.map((row) => [row.id, row]));
     const devicesByCase = new Map<string, PortalCaseDevice[]>();
     for (const link of caseDeviceLinks) {
       const device = linkedDeviceById.get(link.deviceAirtableId);
+      const caseSnapshot = caseRowById.get(link.trackedCaseId);
       const items = devicesByCase.get(link.trackedCaseId) ?? [];
       items.push({
         sourceRecordId: link.deviceAirtableId,
-        deviceName: device?.name || "Urządzenie medyczne",
-        manufacturer: device?.manufacturer ?? null,
-        model: device?.model ?? null,
-        serialNumber: device?.serialNumber ?? null,
-        inventoryNumber: device?.inventoryNumber ?? null,
+        deviceName: device?.name || caseSnapshot?.deviceName || "Urządzenie medyczne",
+        manufacturer: device?.manufacturer ?? caseSnapshot?.manufacturer ?? null,
+        model: device?.model ?? caseSnapshot?.model ?? null,
+        serialNumber: device?.serialNumber ?? caseSnapshot?.serialNumber ?? null,
+        inventoryNumber: device?.inventoryNumber ?? caseSnapshot?.inventoryNumber ?? null,
+        currentDeviceAccessible: Boolean(device),
       });
       devicesByCase.set(link.trackedCaseId, items);
     }
@@ -627,7 +634,7 @@ function caseFilterSql(filter: PortalCaseFilter): Prisma.Sql {
   return Prisma.empty;
 }
 
-function searchFilterSql(query: string | null): Prisma.Sql {
+function searchFilterSql(query: string | null, hospitalId: string): Prisma.Sql {
   if (!query) return Prisma.empty;
   const pattern = `%${query.replaceAll("\\", "\\\\").replaceAll("%", "\\%").replaceAll("_", "\\_")}%`;
   return Prisma.sql`AND (
@@ -637,6 +644,7 @@ function searchFilterSql(query: string | null): Prisma.Sql {
       JOIN "TrackedDevice" search_device
         ON search_device."airtableRecordId" = search_link."deviceAirtableId"
       WHERE search_link."trackedCaseId" = scoped_case."trackedCaseId"
+        AND search_device."sourceHospitalRecordId" = ${hospitalId}
         AND CONCAT_WS(' ', search_device.name, search_device.manufacturer, search_device.model,
           search_device."serialNumber", search_device."inventoryNumber") ILIKE ${pattern} ESCAPE '\\'
     )
@@ -662,10 +670,16 @@ function mapCase(
     description: changeDescription(event.oldValue, event.newValue),
     changedAt: event.detectedAt,
   }));
+  const publicDevices = devices.map(({
+    currentDeviceAccessible: _currentDeviceAccessible,
+    ...device
+  }) => device);
   return {
     type, sourceRecordId: stored.airtableRecordId,
-    deviceId: devices.length === 1 ? devices[0]!.sourceRecordId : null,
-    devices,
+    deviceId: devices.length === 1 && devices[0]!.currentDeviceAccessible !== false
+      ? devices[0]!.sourceRecordId
+      : null,
+    devices: publicDevices,
     deviceName: devices.length === 1
       ? devices[0]!.deviceName
       : devices.length > 1 ? `${devices.length} urządzenia` : stored.deviceName || "Urządzenie medyczne",

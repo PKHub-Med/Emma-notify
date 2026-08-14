@@ -206,11 +206,16 @@ export class PrismaIncrementalStore implements IncrementalStore {
     });
     await synchronizeCaseDeviceRelations(transaction, {
       trackedCaseId: command.trackedCaseId,
-      caseType: command.mappedCase.caseType,
-      sourceRecordId: command.mappedCase.airtableRecordId,
-      directHospitalRecordId: command.mappedCase.sourceHospitalRecordId,
       deviceAirtableIds: command.mappedCase.deviceAirtableIds,
     });
+    if (command.mappedCase.caseType === "SERVICE_ORDER") {
+      await transaction.trackedCase.update({
+        where: { id: command.trackedCaseId },
+        data: {
+          sourceHospitalRecordId: command.mappedCase.sourceHospitalRecordId,
+        },
+      });
+    }
 
     const recipients = await transaction.caseRecipient.findMany({
       where: {
