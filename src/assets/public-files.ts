@@ -19,11 +19,30 @@ export type PublicAssetObject = {
   documentObjectKey: string | null;
 };
 
+export type PublicAssetDenialReason =
+  | "ASSET_NOT_FOUND"
+  | "GRANT_DELIVERY_MISMATCH"
+  | "HOSPITAL_SCOPE_MISMATCH"
+  | "NOT_EXPOSED"
+  | "NOT_READY"
+  | "ORPHANED"
+  | "ACCESS_POLICY_DENIED"
+  | "VARIANT_NOT_FOUND"
+  | "FILE_SERVICE_UNAVAILABLE";
+
+export type PublicAssetAuthorization =
+  | { asset: PublicAssetObject; reason: null }
+  | { asset: null; reason: PublicAssetDenialReason };
+
 export interface PublicAssetStore {
   findAuthorized(
     assetId: string,
     authorization: PortalAuthorizationContext,
   ): Promise<PublicAssetObject | null>;
+  authorize?(
+    assetId: string,
+    authorization: PortalAuthorizationContext,
+  ): Promise<PublicAssetAuthorization>;
 }
 
 export type PublicAssetAccessScope = {
@@ -76,19 +95,31 @@ export class PrismaPublicAssetStore implements PublicAssetStore {
   ) {}
 
   async findAuthorized(assetId: string, authorization: PortalAuthorizationContext) {
+    return (await this.authorize(assetId, authorization)).asset;
+  }
+
+  async authorize(
+    assetId: string,
+    authorization: PortalAuthorizationContext,
+  ): Promise<PublicAssetAuthorization> {
     const access = await this.accessPolicy.resolve(authorization.sourceHospitalRecordId);
-    const asset = await this.prisma.communicationAsset.findFirst({
-      where: {
-        id: assetId,
-        ...publicAssetAccessWhere({
-          hospitalId: access.hospitalId,
-          accessLevel: access.accessLevel,
-          communicationDeliveryId: authorization.communicationDeliveryId,
-        }),
-      },
+    const asset = await this.prisma.communicationAsset.findUnique({
+      where: { id: assetId },
       select: {
+        deliveryId: true,
+        exposedAt: true,
+        delivery: {
+          select: {
+            status: true,
+            communicationEventRecipient: { select: { recipientType: true } },
+            communicationEvent: { select: { eventSnapshot: true } },
+          },
+        },
         storedFile: {
           select: {
+            processingStatus: true,
+            orphanedAt: true,
+            sourceHospitalRecordId: true,
             kind: true,
             portalObjectKey: true,
             thumbnailObjectKey: true,
@@ -97,7 +128,34 @@ export class PrismaPublicAssetStore implements PublicAssetStore {
         },
       },
     });
-    return asset?.storedFile ?? null;
+    if (!asset) return { asset: null, reason: "ASSET_NOT_FOUND" };
+    if (asset.storedFile.sourceHospitalRecordId !== access.hospitalId) {
+      return { asset: null, reason: "HOSPITAL_SCOPE_MISMATCH" };
+    }
+    if (asset.storedFile.processingStatus !== AssetProcessingStatus.READY) {
+      return { asset: null, reason: "NOT_READY" };
+    }
+    if (asset.storedFile.orphanedAt !== null) {
+      return { asset: null, reason: "ORPHANED" };
+    }
+    if (access.accessLevel === PortalAccessLevel.COMMUNICATION) {
+      if (asset.exposedAt === null) return { asset: null, reason: "NOT_EXPOSED" };
+      const eventHospital = snapshotHospital(asset.delivery.communicationEvent.eventSnapshot);
+      if (eventHospital !== access.hospitalId) {
+        return { asset: null, reason: "HOSPITAL_SCOPE_MISMATCH" };
+      }
+      const sent = asset.delivery.status === CommunicationDeliveryStatus.SENT;
+      const exactGrantDelivery = asset.deliveryId === authorization.communicationDeliveryId;
+      const clientHistory = asset.delivery.communicationEventRecipient.recipientType ===
+        CommunicationRecipientType.CLIENT;
+      if (!sent) return { asset: null, reason: "ACCESS_POLICY_DENIED" };
+      if (!exactGrantDelivery && !clientHistory) {
+        return { asset: null, reason: "GRANT_DELIVERY_MISMATCH" };
+      }
+    }
+    const { processingStatus: _processingStatus, orphanedAt: _orphanedAt,
+      sourceHospitalRecordId: _sourceHospitalRecordId, ...publicAsset } = asset.storedFile;
+    return { asset: publicAsset, reason: null };
   }
 }
 
@@ -107,6 +165,11 @@ export interface PublicFileService {
     assetId: string,
     variant: PublicAssetVariant,
   ): Promise<string | null>;
+  resolve?(
+    authorization: PortalAuthorizationContext,
+    assetId: string,
+    variant: PublicAssetVariant,
+  ): Promise<{ url: string | null; reason: PublicAssetDenialReason | null }>;
 }
 
 export class StoredPublicFileService implements PublicFileService {
@@ -121,11 +184,26 @@ export class StoredPublicFileService implements PublicFileService {
     assetId: string,
     variant: PublicAssetVariant,
   ): Promise<string | null> {
-    const asset = await this.store.findAuthorized(assetId, authorization);
-    if (!asset) return null;
+    return (await this.resolve(authorization, assetId, variant)).url;
+  }
+
+  async resolve(
+    authorization: PortalAuthorizationContext,
+    assetId: string,
+    variant: PublicAssetVariant,
+  ): Promise<{ url: string | null; reason: PublicAssetDenialReason | null }> {
+    const authorizationResult = this.store.authorize
+      ? await this.store.authorize(assetId, authorization)
+      : { asset: await this.store.findAuthorized(assetId, authorization), reason: "ACCESS_POLICY_DENIED" as const };
+    const asset = authorizationResult.asset;
+    if (!asset) return { url: null, reason: authorizationResult.reason };
     const key = selectKey(asset, variant);
-    if (!key) return null;
-    return this.storage.getSignedDownloadUrl(key, this.signedUrlSeconds);
+    if (!key) return { url: null, reason: "VARIANT_NOT_FOUND" };
+    if (!await this.storage.headObject(key)) return { url: null, reason: "VARIANT_NOT_FOUND" };
+    return {
+      url: await this.storage.getSignedDownloadUrl(key, this.signedUrlSeconds),
+      reason: null,
+    };
   }
 }
 
@@ -136,4 +214,10 @@ function selectKey(asset: PublicAssetObject, variant: PublicAssetVariant): strin
     return null;
   }
   return variant === "document" ? asset.documentObjectKey : null;
+}
+
+function snapshotHospital(snapshot: unknown): string | null {
+  if (typeof snapshot !== "object" || snapshot === null || Array.isArray(snapshot)) return null;
+  const value = (snapshot as Record<string, unknown>).sourceHospitalRecordId;
+  return typeof value === "string" && value.trim() ? value.trim() : null;
 }

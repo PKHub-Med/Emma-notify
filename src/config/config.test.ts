@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { loadApiConfig } from "./api.js";
 import { loadWorkerConfig } from "./worker.js";
+import { hasAssetStorageConfig } from "./assets.js";
 
 const databaseUrl = "postgresql://user:password@localhost:5432/emma_notify";
 const accessLinkSigningSecret = "test-access-link-signing-secret-32-bytes-minimum";
@@ -14,6 +15,29 @@ const workerEnvironment = {
 };
 
 describe("loadApiConfig", () => {
+  it("can serve existing assets from configured storage independently of worker processing", () => {
+    const config = loadApiConfig({
+      DATABASE_URL: databaseUrl,
+      ACCESS_LINK_SIGNING_SECRET: accessLinkSigningSecret,
+      COMMUNICATION_ASSETS_ENABLED: "false",
+      RAILWAY_STORAGE_ENDPOINT: "https://storage.example.test",
+      RAILWAY_STORAGE_BUCKET: "private-assets",
+      RAILWAY_STORAGE_ACCESS_KEY_ID: "access-key",
+      RAILWAY_STORAGE_SECRET_ACCESS_KEY: "secret-key",
+    });
+    expect(config.communicationAssetsEnabled).toBe(false);
+    expect(hasAssetStorageConfig(config)).toBe(true);
+  });
+
+  it("does not initialize asset serving when storage configuration is incomplete", () => {
+    const config = loadApiConfig({
+      DATABASE_URL: databaseUrl,
+      ACCESS_LINK_SIGNING_SECRET: accessLinkSigningSecret,
+      RAILWAY_STORAGE_ENDPOINT: "https://storage.example.test",
+    });
+    expect(hasAssetStorageConfig(config)).toBe(false);
+  });
+
   it("accepts API environment without Airtable variables", () => {
     const config = loadApiConfig({
       DATABASE_URL: databaseUrl,

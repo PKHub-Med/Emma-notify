@@ -162,6 +162,27 @@ describe("public API", () => {
     expect(signedUrl).not.toHaveBeenCalled();
   });
 
+  it("logs a safe structured reason when an authorized file request is denied", async () => {
+    const grant = portalRecord();
+    const log = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const publicFiles: PublicFileService = {
+      signedUrl: async () => null,
+      resolve: async () => ({ url: null, reason: "NOT_EXPOSED" }),
+    };
+    const { baseUrl } = await startApp(
+      new MemoryStore(null), grant, new MemoryUnsubscribeStore(null),
+      async () => emptyPortalView(), { publicFiles },
+    );
+    const token = signPortalGrantToken(grant, secret);
+    const response = await fetch(`${baseUrl}/p/${token}/files/asset-1?variant=document`);
+    expect(response.status).toBe(404);
+    expect(log).toHaveBeenCalledWith(
+      "PORTAL_FILE_REQUEST_DENIED hasAssetId=true variant=document reason=NOT_EXPOSED status=404",
+    );
+    expect(log.mock.calls.flat().join(" ")).not.toContain(token);
+    log.mockRestore();
+  });
+
   it("does not let query parameters change portal hospital scope", async () => {
     const grant = portalRecord({ sourceHospitalRecordId: "hospital-A" });
     let authorization: PortalAuthorizationContext | null = null;

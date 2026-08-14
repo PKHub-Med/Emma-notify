@@ -218,20 +218,40 @@ export function createApp(
     try {
       const authorization = await authorizePortalData(portalAccess, request.params.token ?? "");
       if (!authorization || !options.publicFiles) {
+        logPortalFileDenied(
+          Boolean(request.params.assetId),
+          fileVariant(request.query.variant) ?? "document",
+          authorization ? "FILE_SERVICE_UNAVAILABLE" : "ACCESS_POLICY_DENIED",
+        );
         response.status(404).json({ error: "NOT_FOUND" });
         return;
       }
       const variant = fileVariant(request.query.variant);
       if (!variant) {
+        logPortalFileDenied(Boolean(request.params.assetId), "document", "VARIANT_NOT_FOUND", 400);
         response.status(400).json({ error: "INVALID_VARIANT" });
         return;
       }
-      const url = await options.publicFiles.signedUrl(
-        authorization,
-        request.params.assetId ?? "",
-        variant,
-      );
+      const resolution = options.publicFiles.resolve
+        ? await options.publicFiles.resolve(
+            authorization,
+            request.params.assetId ?? "",
+            variant,
+          )
+        : {
+            url: await options.publicFiles.signedUrl(
+              authorization,
+              request.params.assetId ?? "",
+              variant,
+            ),
+            reason: "ACCESS_POLICY_DENIED" as const,
+          };
+      const { url } = resolution;
       if (!url) {
+        logPortalFileDenied(
+          Boolean(request.params.assetId), variant,
+          resolution.reason ?? "ACCESS_POLICY_DENIED",
+        );
         response.status(404).json({ error: "NOT_FOUND" });
         return;
       }
@@ -269,6 +289,18 @@ function fileVariant(value: unknown): PublicAssetVariant | null {
   if (value === undefined) return "document";
   if (value === "portal" || value === "thumb" || value === "document") return value;
   return null;
+}
+
+function logPortalFileDenied(
+  hasAssetId: boolean,
+  variant: PublicAssetVariant,
+  reason: import("../assets/public-files.js").PublicAssetDenialReason,
+  status = 404,
+): void {
+  console.warn(
+    `PORTAL_FILE_REQUEST_DENIED hasAssetId=${hasAssetId} variant=${variant} ` +
+    `reason=${reason} status=${status}`,
+  );
 }
 
 const PORTAL_DATA_HEADERS = {

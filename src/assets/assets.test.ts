@@ -33,6 +33,7 @@ import {
 import {
   PrismaPublicAssetStore,
   StoredPublicFileService,
+  publicAssetAccessWhere,
   type PublicAssetStore,
 } from "./public-files.js";
 
@@ -367,6 +368,7 @@ describe("bounded preflight and public access", () => {
       documentObjectKey: null,
     });
     const storage = new MemoryObjectStorage();
+    await storage.putObject("private/thumb.webp", new Uint8Array([1]), "image/webp");
     const service = new StoredPublicFileService(
       { findAuthorized } as PublicAssetStore, storage, 300,
     );
@@ -382,47 +384,27 @@ describe("bounded preflight and public access", () => {
   });
 
   it("builds COMMUNICATION asset visibility as exact grant delivery OR SENT CLIENT history", async () => {
-    const findFirst = vi.fn().mockResolvedValue(null);
-    const store = new PrismaPublicAssetStore(
-      { communicationAsset: { findFirst } } as never,
-      { resolve: async (hospitalId) => ({ hospitalId, accessLevel: PortalAccessLevel.COMMUNICATION }) },
-    );
-    await store.findAuthorized("asset-B", {
+    const where = publicAssetAccessWhere({
+      hospitalId: "hospital-A",
+      accessLevel: PortalAccessLevel.COMMUNICATION,
       communicationDeliveryId: "delivery-A",
-      sourceHospitalRecordId: "hospital-A",
-      entryContext: { type: "SERVICE_ORDER", sourceRecordId: "recOrder-A" },
     });
-    expect(findFirst).toHaveBeenCalledWith(expect.objectContaining({
-      where: expect.objectContaining({
-        id: "asset-B",
-        exposedAt: { not: null },
-        OR: [
-          expect.objectContaining({
-            deliveryId: "delivery-A",
-            delivery: expect.objectContaining({ status: "SENT" }),
-          }),
-          expect.objectContaining({
-            delivery: expect.objectContaining({
-              status: "SENT",
-              communicationEventRecipient: { recipientType: "CLIENT" },
-            }),
-          }),
-        ],
-        storedFile: expect.objectContaining({ sourceHospitalRecordId: "hospital-A" }),
-      }),
-    }));
+    expect(where).toMatchObject({
+      exposedAt: { not: null },
+      OR: [
+        { deliveryId: "delivery-A", delivery: { status: "SENT" } },
+        { delivery: { status: "SENT", communicationEventRecipient: { recipientType: "CLIENT" } } },
+      ],
+      storedFile: { sourceHospitalRecordId: "hospital-A" },
+    });
   });
 
   it("scopes a fallback asset to the exact delivery of the current grant", async () => {
-    const findFirst = vi.fn().mockImplementation(async ({ where }) =>
-      where.OR[0].deliveryId === "delivery-A" ? {
-        storedFile: {
-          kind: StoredFileKind.DOCUMENT, portalObjectKey: null,
-          thumbnailObjectKey: null, documentObjectKey: "hospital-A/protocol.pdf",
-        },
-      } : null);
+    const findUnique = vi.fn().mockResolvedValue(databaseAsset({
+      deliveryId: "delivery-A", recipientType: "TIEMED_FALLBACK",
+    }));
     const store = new PrismaPublicAssetStore(
-      { communicationAsset: { findFirst } } as never,
+      { communicationAsset: { findUnique } } as never,
       { resolve: async (hospitalId) => ({ hospitalId, accessLevel: PortalAccessLevel.COMMUNICATION }) },
     );
     const grantA = {
@@ -438,38 +420,36 @@ describe("bounded preflight and public access", () => {
     await expect(store.findAuthorized("asset-fallback", {
       ...grantA, communicationDeliveryId: "delivery-unrelated",
     })).resolves.toBeNull();
-    const whereA = findFirst.mock.calls[0]![0].where;
-    const whereUnrelated = findFirst.mock.calls[1]![0].where;
-    expect(whereA.OR[0].deliveryId).toBe("delivery-A");
-    expect(whereA.OR[0].delivery).not.toHaveProperty("communicationEventRecipient");
-    expect(whereUnrelated.OR[0].deliveryId).toBe("delivery-unrelated");
-    expect(whereUnrelated.OR[1].delivery.communicationEventRecipient.recipientType).toBe("CLIENT");
+    await expect(store.authorize("asset-fallback", {
+      ...grantA, communicationDeliveryId: "delivery-unrelated",
+    })).resolves.toMatchObject({ asset: null, reason: "GRANT_DELIVERY_MISMATCH" });
+    expect(findUnique).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: "asset-fallback" },
+    }));
   });
 
   it("keeps SENT CLIENT assets available as Hospital communication history", async () => {
-    const findFirst = vi.fn().mockResolvedValue(null);
+    const findUnique = vi.fn().mockResolvedValue(databaseAsset({
+      deliveryId: "earlier-delivery", recipientType: "CLIENT",
+    }));
     const store = new PrismaPublicAssetStore(
-      { communicationAsset: { findFirst } } as never,
+      { communicationAsset: { findUnique } } as never,
       { resolve: async (hospitalId) => ({ hospitalId, accessLevel: PortalAccessLevel.COMMUNICATION }) },
     );
-    await store.findAuthorized("asset-client-history", {
+    await expect(store.findAuthorized("asset-client-history", {
       communicationDeliveryId: "later-unrelated-grant",
       sourceHospitalRecordId: "hospital-A",
       entryContext: {
         type: "SERVICE_ORDER", sourceRecordId: "recOrder-B",
         scenario: CommunicationScenario.REPAIR_RECEIVED,
       },
-    });
-    const historyBranch = findFirst.mock.calls[0]![0].where.OR[1];
-    expect(historyBranch.delivery.status).toBe("SENT");
-    expect(historyBranch.delivery.communicationEventRecipient.recipientType).toBe("CLIENT");
-    expect(historyBranch.delivery.communicationEvent.eventSnapshot.equals).toBe("hospital-A");
+    })).resolves.toMatchObject({ documentObjectKey: "hospital-A/protocol.pdf" });
   });
 
   it("does not authorize an H2 asset for an H1 portal token", async () => {
-    const findFirst = vi.fn().mockResolvedValue(null);
+    const findUnique = vi.fn().mockResolvedValue(databaseAsset({ hospitalId: "H2" }));
     const store = new PrismaPublicAssetStore(
-      { communicationAsset: { findFirst } } as never,
+      { communicationAsset: { findUnique } } as never,
       { resolve: async () => ({ hospitalId: "H1", accessLevel: PortalAccessLevel.COMMUNICATION }) },
     );
     await expect(store.findAuthorized("asset-from-H2", {
@@ -477,32 +457,117 @@ describe("bounded preflight and public access", () => {
       sourceHospitalRecordId: "H1",
       entryContext: { type: "SERVICE_ORDER", sourceRecordId: "repair-H1" },
     })).resolves.toBeNull();
-    expect(findFirst).toHaveBeenCalledWith(expect.objectContaining({
-      where: expect.objectContaining({
-        id: "asset-from-H2",
-        storedFile: expect.objectContaining({ sourceHospitalRecordId: "H1" }),
-      }),
-    }));
+    await expect(store.authorize("asset-from-H2", {
+      communicationDeliveryId: "delivery-H1", sourceHospitalRecordId: "H1",
+      entryContext: { type: "SERVICE_ORDER", sourceRecordId: "repair-H1" },
+    })).resolves.toMatchObject({ asset: null, reason: "HOSPITAL_SCOPE_MISMATCH" });
   });
 
   it("allows FULL to query any READY non-orphan asset in its Hospital only", async () => {
-    const findFirst = vi.fn().mockResolvedValue(null);
+    const findUnique = vi.fn().mockResolvedValue(databaseAsset({ exposedAt: null }));
     const store = new PrismaPublicAssetStore(
-      { communicationAsset: { findFirst } } as never,
+      { communicationAsset: { findUnique } } as never,
       { resolve: async (hospitalId) => ({ hospitalId, accessLevel: PortalAccessLevel.FULL }) },
     );
-    await store.findAuthorized("asset-full", {
+    await expect(store.findAuthorized("asset-full", {
       communicationDeliveryId: "delivery-A", sourceHospitalRecordId: "hospital-A",
       entryContext: { type: "SERVICE_ORDER", sourceRecordId: "recOrder-A" },
-    });
-    const where = findFirst.mock.calls[0]![0].where;
-    expect(where.exposedAt).toBeUndefined();
-    expect(where.delivery).toBeUndefined();
-    expect(where.storedFile).toEqual(expect.objectContaining({
-      sourceHospitalRecordId: "hospital-A", processingStatus: "READY", orphanedAt: null,
-    }));
+    })).resolves.toMatchObject({ documentObjectKey: "hospital-A/protocol.pdf" });
+  });
+
+  it("uses CommunicationAsset.id as the canonical public ID and rejects StoredFile.id", async () => {
+    const findUnique = vi.fn().mockImplementation(async ({ where }) =>
+      where.id === "communication-asset-id" ? databaseAsset({}) : null);
+    const store = new PrismaPublicAssetStore(
+      { communicationAsset: { findUnique } } as never,
+      { resolve: async () => ({ hospitalId: "hospital-A", accessLevel: PortalAccessLevel.COMMUNICATION }) },
+    );
+    const authorization = publicAuthorization();
+    await expect(store.findAuthorized("communication-asset-id", authorization)).resolves.not.toBeNull();
+    await expect(store.authorize("stored-file-id", authorization))
+      .resolves.toEqual({ asset: null, reason: "ASSET_NOT_FOUND" });
+  });
+
+  it.each([
+    ["not exposed", { exposedAt: null }, "NOT_EXPOSED"],
+    ["not ready", { processingStatus: AssetProcessingStatus.PROCESSING }, "NOT_READY"],
+    ["orphaned", { orphanedAt: new Date("2026-08-14T10:00:00Z") }, "ORPHANED"],
+  ] as const)("denies an asset that is %s", async (_label, overrides, reason) => {
+    const store = new PrismaPublicAssetStore(
+      { communicationAsset: { findUnique: async () => databaseAsset(overrides) } } as never,
+      { resolve: async () => ({ hospitalId: "hospital-A", accessLevel: PortalAccessLevel.COMMUNICATION }) },
+    );
+    await expect(store.authorize("asset-1", publicAuthorization()))
+      .resolves.toMatchObject({ asset: null, reason });
+  });
+
+  it("serves existing document, thumb and portal object variants after authorization", async () => {
+    const storage = new MemoryObjectStorage();
+    for (const [key, type] of [
+      ["private/document.pdf", "application/pdf"],
+      ["private/thumb.webp", "image/webp"],
+      ["private/portal.webp", "image/webp"],
+    ] as const) await storage.putObject(key, new Uint8Array([1]), type);
+    const documentService = new StoredPublicFileService({
+      findAuthorized: async () => null,
+      authorize: async () => ({ asset: {
+        kind: StoredFileKind.DOCUMENT, portalObjectKey: null,
+        thumbnailObjectKey: null, documentObjectKey: "private/document.pdf",
+      }, reason: null }),
+    }, storage, 300);
+    const imageService = new StoredPublicFileService({
+      findAuthorized: async () => null,
+      authorize: async () => ({ asset: {
+        kind: StoredFileKind.IMAGE, portalObjectKey: "private/portal.webp",
+        thumbnailObjectKey: "private/thumb.webp", documentObjectKey: null,
+      }, reason: null }),
+    }, storage, 300);
+    await expect(documentService.signedUrl(publicAuthorization(), "asset-doc", "document"))
+      .resolves.toBe("signed:private/document.pdf:300");
+    await expect(imageService.signedUrl(publicAuthorization(), "asset-image", "thumb"))
+      .resolves.toBe("signed:private/thumb.webp:300");
+    await expect(imageService.signedUrl(publicAuthorization(), "asset-image", "portal"))
+      .resolves.toBe("signed:private/portal.webp:300");
   });
 });
+
+function publicAuthorization() {
+  return {
+    communicationDeliveryId: "delivery-A",
+    sourceHospitalRecordId: "hospital-A",
+    entryContext: { type: "SERVICE_ORDER" as const, sourceRecordId: "recOrder-A" },
+  };
+}
+
+function databaseAsset(overrides: {
+  deliveryId?: string;
+  recipientType?: "CLIENT" | "TIEMED_FALLBACK";
+  hospitalId?: string;
+  exposedAt?: Date | null;
+  processingStatus?: AssetProcessingStatus;
+  orphanedAt?: Date | null;
+} = {}) {
+  const hospitalId = overrides.hospitalId ?? "hospital-A";
+  return {
+    deliveryId: overrides.deliveryId ?? "delivery-A",
+    exposedAt: overrides.exposedAt === undefined
+      ? new Date("2026-08-14T10:00:00Z") : overrides.exposedAt,
+    delivery: {
+      status: "SENT",
+      communicationEventRecipient: { recipientType: overrides.recipientType ?? "TIEMED_FALLBACK" },
+      communicationEvent: { eventSnapshot: { sourceHospitalRecordId: hospitalId } },
+    },
+    storedFile: {
+      processingStatus: overrides.processingStatus ?? AssetProcessingStatus.READY,
+      orphanedAt: overrides.orphanedAt ?? null,
+      sourceHospitalRecordId: hospitalId,
+      kind: StoredFileKind.DOCUMENT,
+      portalObjectKey: null,
+      thumbnailObjectKey: null,
+      documentObjectKey: "hospital-A/protocol.pdf",
+    },
+  };
+}
 
 function delivery(scenario: CommunicationScenario) {
   return {

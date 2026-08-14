@@ -75,6 +75,15 @@ export function mapAssetConfig(data: Record<keyof typeof assetEnvironmentShape, 
   return config;
 }
 
+export function hasAssetStorageConfig(config: Pick<AssetConfig,
+  "storageEndpoint" | "storageBucket" | "storageAccessKeyId" | "storageSecretAccessKey"
+>): boolean {
+  return Boolean(
+    config.storageEndpoint && config.storageBucket &&
+    config.storageAccessKeyId && config.storageSecretAccessKey,
+  );
+}
+
 function nullable(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }

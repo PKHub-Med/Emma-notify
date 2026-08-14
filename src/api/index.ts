@@ -22,6 +22,7 @@ import {
 import { createS3ObjectStorage } from "../assets/object-storage.js";
 import { PrismaPublicAssetStore, StoredPublicFileService } from "../assets/public-files.js";
 import { PrismaPortalAccessPolicy } from "../portal-access/policy.js";
+import { hasAssetStorageConfig } from "../config/assets.js";
 
 const config = loadApiConfig(process.env);
 const prisma = createPrismaClient(config.databaseUrl);
@@ -38,7 +39,9 @@ const unsubscribe = new PublicUnsubscribeService(
   new PrismaPublicUnsubscribeStore(prisma),
   config.accessLinkSigningSecret,
 );
-const publicFiles = config.communicationAssetsEnabled
+// Serving already processed files is independent from worker discovery/processing.
+// Storage availability plus portal authorization is the serving boundary.
+const publicFiles = hasAssetStorageConfig(config)
   ? new StoredPublicFileService(
       new PrismaPublicAssetStore(prisma, portalAccessPolicy),
       createS3ObjectStorage(config),
