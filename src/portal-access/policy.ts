@@ -10,6 +10,10 @@ export type ResolvedPortalAccess = {
   accessLevel: PortalAccessLevel;
 };
 
+export type PortalVisibilityScope = ResolvedPortalAccess & {
+  communicationDeliveryId?: string;
+};
+
 export interface PortalAccessPolicy {
   resolve(sourceHospitalRecordId: string): Promise<ResolvedPortalAccess>;
 }
@@ -30,7 +34,7 @@ export class PrismaPortalAccessPolicy implements PortalAccessPolicy {
 }
 
 export function visibleCaseSql(
-  access: ResolvedPortalAccess,
+  access: PortalVisibilityScope,
   caseType: "SERVICE_ORDER" | "INSPECTION",
 ): Prisma.Sql {
   if (access.accessLevel === PortalAccessLevel.FULL) return Prisma.empty;
@@ -50,21 +54,36 @@ export function visibleCaseSql(
         AND COALESCE(communication_event."eventSnapshot"->'linkedInspectionRecordIds', '[]'::jsonb)
           ? c."airtableRecordId"
       )`;
-  return Prisma.sql`AND EXISTS (
-    SELECT 1
-    FROM "CommunicationEvent" communication_event
-    JOIN "CommunicationDelivery" communication_delivery
-      ON communication_delivery."communicationEventId" = communication_event.id
-    JOIN "CommunicationEventRecipient" communication_recipient
-      ON communication_recipient.id = communication_delivery."communicationEventRecipientId"
-    WHERE communication_delivery.status = 'SENT'
-      AND communication_recipient."recipientType" = 'CLIENT'
-      AND communication_event."eventSnapshot"->>'sourceHospitalRecordId' = ${access.hospitalId}
-      AND ${sourceMatch}
+  const grantContext = access.communicationDeliveryId
+    ? Prisma.sql`OR EXISTS (
+        SELECT 1
+        FROM "CommunicationDelivery" grant_delivery
+        JOIN "CommunicationEvent" communication_event
+          ON communication_event.id = grant_delivery."communicationEventId"
+        WHERE grant_delivery.id = ${access.communicationDeliveryId}
+          AND grant_delivery.status = 'SENT'
+          AND communication_event."eventSnapshot"->>'sourceHospitalRecordId' = ${access.hospitalId}
+          AND ${sourceMatch}
+      )`
+    : Prisma.empty;
+  return Prisma.sql`AND (
+    EXISTS (
+      SELECT 1
+      FROM "CommunicationEvent" communication_event
+      JOIN "CommunicationDelivery" communication_delivery
+        ON communication_delivery."communicationEventId" = communication_event.id
+      JOIN "CommunicationEventRecipient" communication_recipient
+        ON communication_recipient.id = communication_delivery."communicationEventRecipientId"
+      WHERE communication_delivery.status = 'SENT'
+        AND communication_recipient."recipientType" = 'CLIENT'
+        AND communication_event."eventSnapshot"->>'sourceHospitalRecordId' = ${access.hospitalId}
+        AND ${sourceMatch}
+    )
+    ${grantContext}
   )`;
 }
 
-export function visibleDeviceSql(access: ResolvedPortalAccess): Prisma.Sql {
+export function visibleDeviceSql(access: PortalVisibilityScope): Prisma.Sql {
   if (access.accessLevel === PortalAccessLevel.FULL) return Prisma.empty;
   return Prisma.sql`AND EXISTS (
     SELECT 1

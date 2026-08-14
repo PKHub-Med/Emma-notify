@@ -106,6 +106,7 @@ export type HospitalPortalViewModel = {
 export type PortalDataScope = {
   hospitalId: string;
   accessLevel: PortalAccessLevel;
+  communicationDeliveryId: string;
   contextType: "REPAIR" | "INSPECTION_TASK";
   contextId: string;
 };
@@ -713,6 +714,7 @@ export function portalDataScope(
   return {
     hospitalId: access.hospitalId,
     accessLevel: access.accessLevel,
+    communicationDeliveryId: authorization.communicationDeliveryId,
     contextType: authorization.entryContext.type === "SERVICE_ORDER" ? "REPAIR" : "INSPECTION_TASK",
     contextId: authorization.entryContext.sourceRecordId,
   };

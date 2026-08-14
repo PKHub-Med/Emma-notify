@@ -40,18 +40,34 @@ export class PrismaPublicAssetStore implements PublicAssetStore {
         id: assetId,
         ...(communicationOnly ? {
           exposedAt: { not: null },
-          delivery: {
-            status: CommunicationDeliveryStatus.SENT,
-            communicationEventRecipient: {
-              recipientType: CommunicationRecipientType.CLIENT,
-            },
-            communicationEvent: {
-              eventSnapshot: {
-                path: ["sourceHospitalRecordId"],
-                equals: access.hospitalId,
+          OR: [
+            {
+              deliveryId: authorization.communicationDeliveryId,
+              delivery: {
+                status: CommunicationDeliveryStatus.SENT,
+                communicationEvent: {
+                  eventSnapshot: {
+                    path: ["sourceHospitalRecordId"],
+                    equals: access.hospitalId,
+                  },
+                },
               },
             },
-          },
+            {
+              delivery: {
+                status: CommunicationDeliveryStatus.SENT,
+                communicationEventRecipient: {
+                  recipientType: CommunicationRecipientType.CLIENT,
+                },
+                communicationEvent: {
+                  eventSnapshot: {
+                    path: ["sourceHospitalRecordId"],
+                    equals: access.hospitalId,
+                  },
+                },
+              },
+            },
+          ],
         } : {}),
         storedFile: {
           processingStatus: AssetProcessingStatus.READY,

@@ -288,7 +288,7 @@ describe("bounded preflight and public access", () => {
     await expect(service.signedUrl(authorization, "asset-1", "document")).resolves.toBeNull();
   });
 
-  it("builds a COMMUNICATION predicate for exposed SENT CLIENT assets in the Hospital", async () => {
+  it("builds COMMUNICATION asset visibility as exact grant delivery OR SENT CLIENT history", async () => {
     const findFirst = vi.fn().mockResolvedValue(null);
     const store = new PrismaPublicAssetStore(
       { communicationAsset: { findFirst } } as never,
@@ -303,28 +303,74 @@ describe("bounded preflight and public access", () => {
       where: expect.objectContaining({
         id: "asset-B",
         exposedAt: { not: null },
-        delivery: expect.objectContaining({
-          status: "SENT",
-          communicationEventRecipient: { recipientType: "CLIENT" },
-        }),
+        OR: [
+          expect.objectContaining({
+            deliveryId: "delivery-A",
+            delivery: expect.objectContaining({ status: "SENT" }),
+          }),
+          expect.objectContaining({
+            delivery: expect.objectContaining({
+              status: "SENT",
+              communicationEventRecipient: { recipientType: "CLIENT" },
+            }),
+          }),
+        ],
         storedFile: expect.objectContaining({ sourceHospitalRecordId: "hospital-A" }),
       }),
     }));
   });
 
-  it("does not classify SENT TIEMED_FALLBACK assets as COMMUNICATION-visible", async () => {
+  it("scopes a fallback asset to the exact delivery of the current grant", async () => {
+    const findFirst = vi.fn().mockImplementation(async ({ where }) =>
+      where.OR[0].deliveryId === "delivery-A" ? {
+        storedFile: {
+          kind: StoredFileKind.DOCUMENT, portalObjectKey: null,
+          thumbnailObjectKey: null, documentObjectKey: "hospital-A/protocol.pdf",
+        },
+      } : null);
+    const store = new PrismaPublicAssetStore(
+      { communicationAsset: { findFirst } } as never,
+      { resolve: async (hospitalId) => ({ hospitalId, accessLevel: PortalAccessLevel.COMMUNICATION }) },
+    );
+    const grantA = {
+      communicationDeliveryId: "delivery-A", sourceHospitalRecordId: "hospital-A",
+      entryContext: {
+        type: "SERVICE_ORDER" as const, sourceRecordId: "recOrder-A",
+        scenario: CommunicationScenario.REPAIR_RECEIVED,
+      },
+    };
+    await expect(store.findAuthorized("asset-fallback", grantA)).resolves.toMatchObject({
+      documentObjectKey: "hospital-A/protocol.pdf",
+    });
+    await expect(store.findAuthorized("asset-fallback", {
+      ...grantA, communicationDeliveryId: "delivery-unrelated",
+    })).resolves.toBeNull();
+    const whereA = findFirst.mock.calls[0]![0].where;
+    const whereUnrelated = findFirst.mock.calls[1]![0].where;
+    expect(whereA.OR[0].deliveryId).toBe("delivery-A");
+    expect(whereA.OR[0].delivery).not.toHaveProperty("communicationEventRecipient");
+    expect(whereUnrelated.OR[0].deliveryId).toBe("delivery-unrelated");
+    expect(whereUnrelated.OR[1].delivery.communicationEventRecipient.recipientType).toBe("CLIENT");
+  });
+
+  it("keeps SENT CLIENT assets available as Hospital communication history", async () => {
     const findFirst = vi.fn().mockResolvedValue(null);
     const store = new PrismaPublicAssetStore(
       { communicationAsset: { findFirst } } as never,
       { resolve: async (hospitalId) => ({ hospitalId, accessLevel: PortalAccessLevel.COMMUNICATION }) },
     );
-    await store.findAuthorized("asset-fallback", {
-      communicationDeliveryId: "delivery-A", sourceHospitalRecordId: "hospital-A",
-      entryContext: { type: "SERVICE_ORDER", sourceRecordId: "recOrder-A" },
+    await store.findAuthorized("asset-client-history", {
+      communicationDeliveryId: "later-unrelated-grant",
+      sourceHospitalRecordId: "hospital-A",
+      entryContext: {
+        type: "SERVICE_ORDER", sourceRecordId: "recOrder-B",
+        scenario: CommunicationScenario.REPAIR_RECEIVED,
+      },
     });
-    const where = findFirst.mock.calls[0]![0].where;
-    expect(where.delivery.communicationEventRecipient.recipientType).toBe("CLIENT");
-    expect(JSON.stringify(where)).not.toContain("TIEMED_FALLBACK");
+    const historyBranch = findFirst.mock.calls[0]![0].where.OR[1];
+    expect(historyBranch.delivery.status).toBe("SENT");
+    expect(historyBranch.delivery.communicationEventRecipient.recipientType).toBe("CLIENT");
+    expect(historyBranch.delivery.communicationEvent.eventSnapshot.equals).toBe("hospital-A");
   });
 
   it("allows FULL to query any READY non-orphan asset in its Hospital only", async () => {

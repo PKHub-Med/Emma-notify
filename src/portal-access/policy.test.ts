@@ -54,6 +54,21 @@ describe("PortalAccessPolicy", () => {
     expect(sql).not.toContain("'TASK'");
   });
 
+  it("unlocks a fallback Service Order only through its exact grant delivery", () => {
+    const fragment = visibleCaseSql({
+      hospitalId: "hospital-A", accessLevel: PortalAccessLevel.COMMUNICATION,
+      communicationDeliveryId: "delivery-fallback-R1",
+    }, "SERVICE_ORDER");
+    const sql = fragment.strings.join("?");
+    expect(sql).toContain('FROM "CommunicationDelivery" grant_delivery');
+    expect(sql).toContain("grant_delivery.id =");
+    expect(sql).toContain("grant_delivery.status = 'SENT'");
+    expect(fragment.values).toContain("delivery-fallback-R1");
+    const grantBranch = sql.slice(sql.indexOf('FROM "CommunicationDelivery" grant_delivery'));
+    expect(grantBranch).not.toContain('communication_recipient."recipientType"');
+    expect(sql).not.toContain("linkedServiceOrderRecordIds");
+  });
+
   it("unlocks only linked Inspections for the four canonical TASK inspection scenarios", () => {
     const sql = visibleCaseSql({
       hospitalId: "hospital-A", accessLevel: PortalAccessLevel.COMMUNICATION,
@@ -63,6 +78,17 @@ describe("PortalAccessPolicy", () => {
     expect(sql).toContain("'INSPECTION_DATE_CONFIRMED'");
     expect(sql).toContain("'INSPECTION_REMINDER'");
     expect(sql).toContain("'INSPECTION_COMPLETED'");
+    expect(sql).toContain("linkedInspectionRecordIds");
+    expect(sql).not.toContain("linkedServiceOrderRecordIds");
+  });
+
+  it("keeps a fallback inspection TASK grant limited to linkedInspectionRecordIds", () => {
+    const fragment = visibleCaseSql({
+      hospitalId: "hospital-A", accessLevel: PortalAccessLevel.COMMUNICATION,
+      communicationDeliveryId: "delivery-fallback-task",
+    }, "INSPECTION");
+    const sql = fragment.strings.join("?");
+    expect(fragment.values).toContain("delivery-fallback-task");
     expect(sql).toContain("linkedInspectionRecordIds");
     expect(sql).not.toContain("linkedServiceOrderRecordIds");
   });
