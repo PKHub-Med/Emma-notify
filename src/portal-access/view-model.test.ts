@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { CommunicationScenario, PortalAccessLevel } from "../generated/prisma/enums.js";
+import {
+  CommunicationAssetRole,
+  CommunicationScenario,
+  CommunicationSourceEntityType,
+  PortalAccessLevel,
+  StoredFileKind,
+} from "../generated/prisma/enums.js";
 import type { PrismaClient } from "../generated/prisma/client.js";
 import { renderHospitalPortal } from "./portal-page.js";
 import {
@@ -14,6 +20,7 @@ import {
   type PortalCaseFilter,
   type PortalCaseListItem,
   type PortalDevice,
+  type PortalDocument,
 } from "./view-model.js";
 
 describe("paginated hospital portal", () => {
@@ -244,6 +251,7 @@ describe("paginated hospital portal", () => {
         airtableRecordId: `device-${id}`, name: `Device ${id}`, manufacturer: "M",
         model: id, serialNumber: `SN-${id}`, inventoryNumber: null,
       })) },
+      communicationAsset: { findMany: async () => [] },
     } as unknown as PrismaClient;
     const item = await new PrismaHospitalPortalStore(prisma).findScopedCase({
       hospitalId: "hospital-A", contextType: "INSPECTION_TASK", contextId: "task-A",
@@ -281,6 +289,7 @@ describe("paginated hospital portal", () => {
         linkedDeviceWhere = where;
         return [];
       } },
+      communicationAsset: { findMany: async () => [] },
     } as unknown as PrismaClient;
     const store = new PrismaHospitalPortalStore(prisma);
     const item = await store.findScopedCase({
@@ -299,6 +308,81 @@ describe("paginated hospital portal", () => {
     });
     expect(item?.deviceId).toBeNull();
     expect(item?.devices[0]?.deviceName).not.toBe("Current H2");
+  });
+
+  it("uses the historical H1 Case snapshot for Documents tab, document and photo context after Device moves to H2", async () => {
+    const trackedDeviceQueries: unknown[] = [];
+    const caseRow = {
+      id: "case-H1", airtableRecordId: "repair-H1", businessNumber: "R-H1",
+      clientOrderNumber: null, emmaCustomerStatus: "Naprawa zakończona", hospitalName: "H1",
+      deviceName: "Device Old", manufacturer: "Old maker", model: "Old model",
+      serialNumber: "SN-OLD", inventoryNumber: "INV-OLD", currentStatus: null,
+      faultDescription: null, sourceCreatedAt: new Date("2025-01-01T00:00:00Z"),
+      reportedAt: new Date("2025-01-01T00:00:00Z"), sourceModifiedAt: null,
+      inspectionDueDate: null, inspectionPerformedAt: null, inspectionResult: null,
+      inspectionValidUntil: null, events: [],
+    };
+    const assetRows = [
+      {
+        id: "asset-doc-H1", role: CommunicationAssetRole.REPAIR_PROTOCOL,
+        displayOrder: 0, createdAt: new Date("2026-08-14T10:00:00Z"),
+        storedFile: {
+          id: "file-doc-H1", sourceRecordId: "repair-H1",
+          sourceEntityType: CommunicationSourceEntityType.SERVICE_ORDER,
+          kind: StoredFileKind.DOCUMENT, originalFileName: "repair.pdf",
+        },
+      },
+      {
+        id: "asset-photo-H1", role: CommunicationAssetRole.PHOTO,
+        displayOrder: 1, createdAt: new Date("2026-08-14T10:00:00Z"),
+        storedFile: {
+          id: "file-photo-H1", sourceRecordId: "repair-H1",
+          sourceEntityType: CommunicationSourceEntityType.SERVICE_ORDER,
+          kind: StoredFileKind.IMAGE, originalFileName: "repair.jpg",
+        },
+      },
+    ];
+    const prisma = {
+      $queryRaw: async () => [{ type: "REPAIR", sourceRecordId: "repair-H1", sortKey: 1n }],
+      trackedCase: { findMany: async () => [caseRow] },
+      trackedTask: { findMany: async () => [] },
+      trackedCaseDevice: { findMany: async () => [{
+        trackedCaseId: "case-H1", deviceAirtableId: "device-current-H2",
+      }] },
+      trackedDevice: { findMany: async ({ where }: { where: unknown }) => {
+        trackedDeviceQueries.push(where);
+        // The current record exists in H2 as Device Current / SN-NEW, so the H1-scoped lookup returns none.
+        return [];
+      } },
+      communicationAsset: { findMany: async () => assetRows },
+    } as unknown as PrismaClient;
+    const store = new PrismaHospitalPortalStore(prisma);
+    const scope = {
+      hospitalId: "H1", accessLevel: PortalAccessLevel.FULL,
+      communicationDeliveryId: "delivery-H1", contextType: "REPAIR" as const,
+      contextId: "repair-H1",
+    };
+
+    const documents = await store.listDocuments(scope, null);
+    expect(trackedDeviceQueries).toHaveLength(0);
+    const detail = await store.findScopedCase(scope, "repair-H1");
+
+    expect(documents).toHaveLength(1);
+    expect(documents[0]).toMatchObject({
+      deviceName: "Device Old", serialNumber: "SN-OLD", caseNumber: "R-H1",
+    });
+    expect(detail?.documents[0]).toMatchObject({
+      deviceName: "Device Old", serialNumber: "SN-OLD",
+    });
+    expect(detail?.photos[0]).toMatchObject({
+      deviceName: "Device Old", serialNumber: "SN-OLD",
+    });
+    expect(JSON.stringify({ documents, detail })).not.toContain("Device Current");
+    expect(JSON.stringify({ documents, detail })).not.toContain("SN-NEW");
+    expect(trackedDeviceQueries.length).toBeGreaterThan(0);
+    expect(trackedDeviceQueries).toEqual(expect.arrayContaining([
+      expect.objectContaining({ sourceHospitalRecordId: "H1" }),
+    ]));
   });
 
   it("denies Device H2 to H1 and scopes its history to H2 Cases", async () => {
@@ -489,6 +573,47 @@ describe("paginated hospital portal", () => {
     expect(html).not.toContain("historyModal");
   });
 
+  it("renders secure document/photo UI with lazy thumbs and an on-demand portal lightbox", async () => {
+    const store = memoryStore(1, 0);
+    const view = await new HospitalPortalViewModelService(store).build(auth());
+    const item = view.initialCases.items[0]!;
+    item.documents = [portalAsset("doc-1", "DOCUMENT", "Protokół naprawy")];
+    item.photos = [portalAsset("photo-1", "IMAGE", "Zdjęcie 1")];
+    view.focusedCase = item;
+    const html = renderHospitalPortal(view, "nonce", new Date(), "/p/token");
+    expect(html).toContain("id=\"photoLightbox\"");
+    expect(html).toContain("fileUrl(asset.id,'thumb')");
+    expect(html).toContain("fileUrl(asset.id,'portal')");
+    expect(html).toContain("image.loading='lazy'");
+    expect(html).toContain("photoLightboxImage.removeAttribute('src')");
+    expect(html).toContain("event.key==='Escape'");
+    expect(html).toContain("link.href=fileUrl(asset.id,'document')");
+    expect(html).toContain("link.target='_blank'");
+    expect(html).toContain("width:44px");
+    expect(html).toContain("grid-template-columns:repeat(2,minmax(0,1fr))");
+  });
+
+  it("loads the Documents tab from the server and renders the real empty state", async () => {
+    const base = memoryStore(0, 0);
+    const calls: Array<{ hospitalId: string; query: string | null }> = [];
+    const store: HospitalPortalStore = {
+      ...base,
+      async listDocuments(scope, query) {
+        calls.push({ hospitalId: scope.hospitalId, query });
+        return [portalAsset("doc-1", "DOCUMENT", "Dokument przeglądu")];
+      },
+    };
+    const service = new HospitalPortalViewModelService(store);
+    const page = await service.listDocuments(auth(), { query: "  pompa  " });
+    expect(page.items).toHaveLength(1);
+    expect(page.nextCursor).toBeNull();
+    expect(calls).toEqual([{ hospitalId: "hospital-A", query: "pompa" }]);
+    const html = renderHospitalPortal(await service.build(auth()), "nonce");
+    expect(html).toContain("api('documents',{q:documentsState.query})");
+    expect(html).toContain("Nie masz obecnie udostępnionych dokumentów.");
+    expect(html).not.toContain("Emma ma jeszcze 4 000 dokumentów");
+  });
+
   it("renders a high-contrast CTA with hover, focus and safe contact fallback", async () => {
     const view = await new HospitalPortalViewModelService(memoryStore(1, 0)).build(auth());
     const html = renderHospitalPortal(view, "nonce");
@@ -637,6 +762,30 @@ function uniqueDevices(items: PortalCaseListItem[]): PortalDevice[] {
     inspectionPerformedAt: item.inspectionPerformedAt,
     inspectionResult: null,
   }])).values()];
+}
+
+function portalAsset(
+  id: string,
+  kind: "DOCUMENT" | "IMAGE",
+  title: string,
+): PortalDocument {
+  return {
+    id,
+    fileName: kind === "DOCUMENT" ? "bezpieczna-nazwa.pdf" : "zdjecie.jpg",
+    title,
+    kind,
+    role: kind === "DOCUMENT" ? "OTHER_DOCUMENT" : "PHOTO",
+    documentType: title,
+    sourceRecordId: "repair-0",
+    caseType: "REPAIR",
+    deviceName: "Pompa",
+    manufacturer: "Producent",
+    model: "Model",
+    serialNumber: "SN-1",
+    caseNumber: "CASE-1",
+    caseDate: new Date("2026-08-13T00:00:00Z"),
+    createdAt: new Date("2026-08-14T10:00:00Z"),
+  };
 }
 
 function caseItem(

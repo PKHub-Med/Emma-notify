@@ -31,7 +31,7 @@ export function createApp(
   unsubscribe: PublicUnsubscribeService,
   options: {
     portalViews?: Pick<HospitalPortalViewModelService,
-      "build" | "listCases" | "getCase" | "listDevices" | "getDevice">;
+      "build" | "listCases" | "getCase" | "listDevices" | "getDevice" | "listDocuments">;
     serviceName?: string;
     publicFiles?: PublicFileService;
   } = {},
@@ -201,9 +201,16 @@ export function createApp(
 
   app.get("/p/:token/data/documents", async (request, response) => {
     response.set(PORTAL_DATA_HEADERS);
-    const authorization = await authorizePortalData(portalAccess, request.params.token ?? "");
-    if (!authorization) { response.status(404).json({ error: "NOT_FOUND" }); return; }
-    response.status(200).json({ items: [], nextCursor: null });
+    const query = stringQuery(request.query.q);
+    try {
+      const authorization = await authorizePortalData(portalAccess, request.params.token ?? "");
+      if (!authorization) { response.status(404).json({ error: "NOT_FOUND" }); return; }
+      response.status(200).json(await portalViews.listDocuments(authorization, {
+        ...(query ? { query } : {}),
+      }));
+    } catch (error: unknown) {
+      sendPortalDataError(response, error, "documents", undefined, false, Boolean(query?.trim()));
+    }
   });
 
   app.get("/p/:token/files/:assetId", async (request, response) => {

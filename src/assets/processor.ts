@@ -157,9 +157,14 @@ export class AirtableAttachmentDownloadSource implements AttachmentDownloadSourc
   constructor(private readonly airtable: AirtableIncrementalSource) {}
 
   async resolve(job: StoredFileJob): Promise<AirtableAttachment> {
-    if (job.sourceEntityType !== "SERVICE_ORDER") throw new Error("ASSET_SOURCE_ENTITY_UNSUPPORTED");
+    const tableId = job.sourceEntityType === "SERVICE_ORDER"
+      ? AIRTABLE_TABLE_IDS.serviceOrders
+      : job.sourceEntityType === "INSPECTION"
+        ? AIRTABLE_TABLE_IDS.inspections
+        : null;
+    if (!tableId) throw new Error("ASSET_SOURCE_ENTITY_UNSUPPORTED");
     const record = await this.airtable.fetchRecord(
-      AIRTABLE_TABLE_IDS.serviceOrders, job.sourceRecordId, [job.sourceFieldId],
+      tableId, job.sourceRecordId, [job.sourceFieldId],
     );
     const attachments = Array.isArray(record.fields[job.sourceFieldId])
       ? record.fields[job.sourceFieldId] as unknown[] : [];

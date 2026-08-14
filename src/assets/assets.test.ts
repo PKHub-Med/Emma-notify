@@ -9,13 +9,17 @@ import {
   PortalAccessLevel,
   StoredFileKind,
 } from "../generated/prisma/enums.js";
-import { SERVICE_ORDER_ATTACHMENT_FIELDS } from "../airtable/field-ids.js";
+import {
+  INSPECTION_ATTACHMENT_FIELDS,
+  SERVICE_ORDER_ATTACHMENT_FIELDS,
+} from "../airtable/field-ids.js";
 import {
   CommunicationAssetResolver,
   type CommunicationAssetRegistrationStore,
   type DiscoveredAsset,
 } from "./communication-assets.js";
 import {
+  AirtableAttachmentDownloadSource,
   runAssetProcessor,
   type AssetProcessorStore,
   type AttachmentDownloadSource,
@@ -45,7 +49,7 @@ describe("communication asset discovery", () => {
     expect(register).not.toHaveBeenCalled();
   });
 
-  it("fetches only confirmed repair protocol fields and registers attachment IDs", async () => {
+  it("discovers the two Repair PDFs and two Repair photos only for REPAIR_COMPLETED", async () => {
     let registered: readonly DiscoveredAsset[] = [];
     const fetchRecord = vi.fn().mockResolvedValue({
       id: "recOrder",
@@ -53,6 +57,8 @@ describe("communication asset discovery", () => {
       fields: {
         [SERVICE_ORDER_ATTACHMENT_FIELDS.repairProtocol]: [attachment("att-repair", "repair.pdf")],
         [SERVICE_ORDER_ATTACHMENT_FIELDS.diagnosticProtocol]: [attachment("att-diagnostic", "diag.pdf")],
+        [SERVICE_ORDER_ATTACHMENT_FIELDS.photo1]: [attachment("att-photo-1", "one.jpg", "image/jpeg")],
+        [SERVICE_ORDER_ATTACHMENT_FIELDS.photo2]: [attachment("att-photo-2", "two.png", "image/png")],
       },
     });
     const resolver = new CommunicationAssetResolver(
@@ -66,12 +72,77 @@ describe("communication asset discovery", () => {
     expect(fetchRecord).toHaveBeenCalledWith(
       expect.any(String),
       "recOrder",
-      [SERVICE_ORDER_ATTACHMENT_FIELDS.repairProtocol, SERVICE_ORDER_ATTACHMENT_FIELDS.diagnosticProtocol],
+      [
+        SERVICE_ORDER_ATTACHMENT_FIELDS.repairProtocol,
+        SERVICE_ORDER_ATTACHMENT_FIELDS.diagnosticProtocol,
+        SERVICE_ORDER_ATTACHMENT_FIELDS.photo1,
+        SERVICE_ORDER_ATTACHMENT_FIELDS.photo2,
+      ],
     );
     expect(registered.map((item) => [item.sourceAttachmentId, item.role])).toEqual([
       ["att-repair", CommunicationAssetRole.REPAIR_PROTOCOL],
       ["att-diagnostic", CommunicationAssetRole.DIAGNOSTIC_PROTOCOL],
+      ["att-photo-1", CommunicationAssetRole.PHOTO],
+      ["att-photo-2", CommunicationAssetRole.PHOTO],
     ]);
+    expect(registered.map((item) => item.kind)).toEqual([
+      StoredFileKind.DOCUMENT, StoredFileKind.DOCUMENT,
+      StoredFileKind.IMAGE, StoredFileKind.IMAGE,
+    ]);
+  });
+
+  it("associates every INSPECTION_COMPLETED document with its exact Inspection", async () => {
+    let registered: readonly DiscoveredAsset[] = [];
+    const fetchRecord = vi.fn().mockImplementation(async (_tableId, recordId) => ({
+      id: recordId,
+      createdTime: "2026-08-13T10:00:00Z",
+      fields: {
+        [INSPECTION_ATTACHMENT_FIELDS.documents]: [attachment(`att-${recordId}`, `${recordId}.pdf`)],
+      },
+    }));
+    const resolver = new CommunicationAssetResolver(
+      { fetchRecord } as never,
+      { register: async (_deliveryId, assets) => {
+        registered = assets;
+        return assets.map((_, index) => ({ storedFileId: `file-${index}`, reused: false, status: "PENDING" }));
+      } },
+    );
+    await resolver.resolve({
+      id: "delivery-inspection",
+      scenario: CommunicationScenario.INSPECTION_COMPLETED,
+      sourceRecordId: "recTask",
+      eventSnapshot: {
+        sourceHospitalRecordId: "recHospital",
+        linkedInspectionRecordIds: ["recI1", "recI2", "recI3"],
+        linkedServiceOrderRecordIds: ["recRepairMustNotBeFetched"],
+      },
+    });
+    expect(fetchRecord).toHaveBeenCalledTimes(3);
+    expect(fetchRecord.mock.calls.map((call) => call[1])).toEqual(["recI1", "recI2", "recI3"]);
+    expect(registered.map((item) => ({
+      sourceRecordId: item.sourceRecordId,
+      sourceEntityType: item.sourceEntityType,
+      role: item.role,
+      kind: item.kind,
+    }))).toEqual(["recI1", "recI2", "recI3"].map((sourceRecordId) => ({
+      sourceRecordId,
+      sourceEntityType: CommunicationSourceEntityType.INSPECTION,
+      role: CommunicationAssetRole.OTHER_DOCUMENT,
+      kind: StoredFileKind.DOCUMENT,
+    })));
+  });
+
+  it("registers zero assets when every allowed attachment field is empty", async () => {
+    const register = vi.fn().mockResolvedValue([]);
+    const resolver = new CommunicationAssetResolver(
+      { fetchRecord: vi.fn().mockResolvedValue({
+        id: "recOrder", createdTime: "2026-08-13T10:00:00Z", fields: {},
+      }) } as never,
+      { register },
+    );
+    await expect(resolver.resolve(delivery(CommunicationScenario.REPAIR_COMPLETED)))
+      .resolves.toEqual([]);
+    expect(register).toHaveBeenCalledWith("delivery-1", []);
   });
 
   it("deduplicates 100 polls and reuses one StoredFile across deliveries", async () => {
@@ -92,6 +163,28 @@ describe("communication asset discovery", () => {
 });
 
 describe("asset processor", () => {
+  it("refreshes an Inspection attachment URL from the Inspection table", async () => {
+    const fetchRecord = vi.fn().mockResolvedValue({
+      id: "recI1", createdTime: "2026-08-13T10:00:00Z",
+      fields: {
+        [INSPECTION_ATTACHMENT_FIELDS.documents]: [attachment("att-I1", "inspection.pdf")],
+      },
+    });
+    const source = new AirtableAttachmentDownloadSource({ fetchRecord } as never);
+    const resolved = await source.resolve({
+      ...imageJob(),
+      sourceAttachmentId: "att-I1",
+      sourceRecordId: "recI1",
+      sourceFieldId: INSPECTION_ATTACHMENT_FIELDS.documents,
+      sourceEntityType: CommunicationSourceEntityType.INSPECTION,
+      kind: StoredFileKind.DOCUMENT,
+    });
+    expect(resolved.id).toBe("att-I1");
+    expect(fetchRecord).toHaveBeenCalledWith(
+      expect.any(String), "recI1", [INSPECTION_ATTACHMENT_FIELDS.documents],
+    );
+  });
+
   it("stores only bounded WebP portal and thumbnail variants", async () => {
     const sourceImage = await sharp({
       create: { width: 4_032, height: 3_024, channels: 3, background: "#124578" },
@@ -373,6 +466,25 @@ describe("bounded preflight and public access", () => {
     expect(historyBranch.delivery.communicationEvent.eventSnapshot.equals).toBe("hospital-A");
   });
 
+  it("does not authorize an H2 asset for an H1 portal token", async () => {
+    const findFirst = vi.fn().mockResolvedValue(null);
+    const store = new PrismaPublicAssetStore(
+      { communicationAsset: { findFirst } } as never,
+      { resolve: async () => ({ hospitalId: "H1", accessLevel: PortalAccessLevel.COMMUNICATION }) },
+    );
+    await expect(store.findAuthorized("asset-from-H2", {
+      communicationDeliveryId: "delivery-H1",
+      sourceHospitalRecordId: "H1",
+      entryContext: { type: "SERVICE_ORDER", sourceRecordId: "repair-H1" },
+    })).resolves.toBeNull();
+    expect(findFirst).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({
+        id: "asset-from-H2",
+        storedFile: expect.objectContaining({ sourceHospitalRecordId: "H1" }),
+      }),
+    }));
+  });
+
   it("allows FULL to query any READY non-orphan asset in its Hospital only", async () => {
     const findFirst = vi.fn().mockResolvedValue(null);
     const store = new PrismaPublicAssetStore(
@@ -399,8 +511,8 @@ function delivery(scenario: CommunicationScenario) {
   };
 }
 
-function attachment(id: string, filename: string) {
-  return { id, url: "https://airtable.invalid/temporary", filename, type: "application/pdf", size: 100 };
+function attachment(id: string, filename: string, type = "application/pdf") {
+  return { id, url: "https://airtable.invalid/temporary", filename, type, size: 100 };
 }
 
 function imageJob(): StoredFileJob {

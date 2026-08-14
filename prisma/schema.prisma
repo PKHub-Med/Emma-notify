@@ -60,6 +60,7 @@ enum SyncStatus {
 enum CommunicationSourceEntityType {
   SERVICE_ORDER
   TASK
+  INSPECTION
 }
 
 enum CommunicationScenario {

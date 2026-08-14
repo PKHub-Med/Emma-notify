@@ -175,12 +175,17 @@ export class PortalAccessGrantService {
 }
 
 function buildEntryContext(delivery: PortalDeliverySource): PortalEntryContext {
+  const sourceType = delivery.event.sourceEntityType;
+  if (sourceType !== CommunicationSourceEntityType.SERVICE_ORDER &&
+    sourceType !== CommunicationSourceEntityType.TASK) {
+    throw new Error("PORTAL_ENTRY_SOURCE_UNSUPPORTED");
+  }
   const base = {
-    type: delivery.event.sourceEntityType,
+    type: sourceType,
     sourceRecordId: delivery.event.sourceRecordId,
     scenario: delivery.event.scenario,
   } as const;
-  if (delivery.event.sourceEntityType === CommunicationSourceEntityType.SERVICE_ORDER) {
+  if (sourceType === CommunicationSourceEntityType.SERVICE_ORDER) {
     return base;
   }
   return {

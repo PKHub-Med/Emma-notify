@@ -73,8 +73,15 @@ export const SERVICE_ORDER_FIELDS = {
 // Attachment fields are intentionally separate from SERVICE_ORDER_FIELD_IDS.
 // They are fetched only by the communication-asset resolver, never by normal sync.
 export const SERVICE_ORDER_ATTACHMENT_FIELDS = {
+  photo1: "fldvA1iALSQuFbtJi",
+  photo2: "fldKj0pQqI4ZG8LFl",
   repairProtocol: "fldbh4MX5xR5zvHdg",
   diagnosticProtocol: "fldYCKAp6TIRoa6RD",
+} as const;
+
+// Fetched only for a new INSPECTION_COMPLETED delivery, never by normal sync.
+export const INSPECTION_ATTACHMENT_FIELDS = {
+  documents: "fldJiKM6oBZplf1On",
 } as const;
 
 export const INSPECTION_FIELDS = {

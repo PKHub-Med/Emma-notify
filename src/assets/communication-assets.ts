@@ -5,7 +5,11 @@ import {
   CommunicationSourceEntityType,
   StoredFileKind,
 } from "../generated/prisma/enums.js";
-import { AIRTABLE_TABLE_IDS, SERVICE_ORDER_ATTACHMENT_FIELDS } from "../airtable/field-ids.js";
+import {
+  AIRTABLE_TABLE_IDS,
+  INSPECTION_ATTACHMENT_FIELDS,
+  SERVICE_ORDER_ATTACHMENT_FIELDS,
+} from "../airtable/field-ids.js";
 import type { AirtableIncrementalSource, AirtableRecord } from "../airtable/types.js";
 
 export type CommunicationAssetDelivery = {
@@ -100,12 +104,21 @@ export class PrismaCommunicationAssetRegistrationStore implements CommunicationA
   }
 }
 
-type AllowedField = { fieldId: string; role: CommunicationAssetRole };
+type AllowedField = {
+  fieldId: string;
+  role: CommunicationAssetRole;
+  kind: StoredFileKind;
+};
 
 const ASSET_FIELD_ALLOWLIST: Partial<Record<CommunicationScenario, readonly AllowedField[]>> = {
   [CommunicationScenario.REPAIR_COMPLETED]: [
-    { fieldId: SERVICE_ORDER_ATTACHMENT_FIELDS.repairProtocol, role: CommunicationAssetRole.REPAIR_PROTOCOL },
-    { fieldId: SERVICE_ORDER_ATTACHMENT_FIELDS.diagnosticProtocol, role: CommunicationAssetRole.DIAGNOSTIC_PROTOCOL },
+    { fieldId: SERVICE_ORDER_ATTACHMENT_FIELDS.repairProtocol, role: CommunicationAssetRole.REPAIR_PROTOCOL, kind: StoredFileKind.DOCUMENT },
+    { fieldId: SERVICE_ORDER_ATTACHMENT_FIELDS.diagnosticProtocol, role: CommunicationAssetRole.DIAGNOSTIC_PROTOCOL, kind: StoredFileKind.DOCUMENT },
+    { fieldId: SERVICE_ORDER_ATTACHMENT_FIELDS.photo1, role: CommunicationAssetRole.PHOTO, kind: StoredFileKind.IMAGE },
+    { fieldId: SERVICE_ORDER_ATTACHMENT_FIELDS.photo2, role: CommunicationAssetRole.PHOTO, kind: StoredFileKind.IMAGE },
+  ],
+  [CommunicationScenario.INSPECTION_COMPLETED]: [
+    { fieldId: INSPECTION_ATTACHMENT_FIELDS.documents, role: CommunicationAssetRole.OTHER_DOCUMENT, kind: StoredFileKind.DOCUMENT },
   ],
 };
 
@@ -121,12 +134,32 @@ export class CommunicationAssetResolver {
     if (fields.length === 0) return [];
     const sourceHospitalRecordId = snapshotString(delivery.eventSnapshot, "sourceHospitalRecordId");
     if (!sourceHospitalRecordId) throw new Error("ASSET_HOSPITAL_SCOPE_MISSING");
-    const record = await this.airtable.fetchRecord(
-      AIRTABLE_TABLE_IDS.serviceOrders,
-      delivery.sourceRecordId,
-      fields.map((field) => field.fieldId),
-    );
-    const discovered = discoverAttachments(record, fields, sourceHospitalRecordId);
+    const discovered: DiscoveredAsset[] = [];
+    if (delivery.scenario === CommunicationScenario.REPAIR_COMPLETED) {
+      const record = await this.airtable.fetchRecord(
+        AIRTABLE_TABLE_IDS.serviceOrders,
+        delivery.sourceRecordId,
+        fields.map((field) => field.fieldId),
+      );
+      discovered.push(...discoverAttachments(
+        record, fields, sourceHospitalRecordId, CommunicationSourceEntityType.SERVICE_ORDER,
+      ));
+    } else if (delivery.scenario === CommunicationScenario.INSPECTION_COMPLETED) {
+      const inspectionIds = snapshotStringArray(delivery.eventSnapshot, "linkedInspectionRecordIds");
+      for (const inspectionId of inspectionIds) {
+        const record = await this.airtable.fetchRecord(
+          AIRTABLE_TABLE_IDS.inspections,
+          inspectionId,
+          fields.map((field) => field.fieldId),
+        );
+        const inspectionAssets = discoverAttachments(
+          record, fields, sourceHospitalRecordId, CommunicationSourceEntityType.INSPECTION,
+        );
+        for (const asset of inspectionAssets) {
+          discovered.push({ ...asset, displayOrder: discovered.length });
+        }
+      }
+    }
     const registered = await this.store.register(delivery.id, discovered);
     registered.forEach((asset, index) => {
       const source = discovered[index]!;
@@ -144,6 +177,7 @@ export function discoverAttachments(
   record: AirtableRecord,
   fields: readonly AllowedField[],
   sourceHospitalRecordId: string,
+  sourceEntityType: CommunicationSourceEntityType = CommunicationSourceEntityType.SERVICE_ORDER,
 ): DiscoveredAsset[] {
   const result: DiscoveredAsset[] = [];
   for (const field of fields) {
@@ -156,9 +190,9 @@ export function discoverAttachments(
         sourceAttachmentId: attachment.id,
         sourceRecordId: record.id,
         sourceFieldId: field.fieldId,
-        sourceEntityType: CommunicationSourceEntityType.SERVICE_ORDER,
+        sourceEntityType,
         sourceHospitalRecordId,
-        kind: attachment.type.startsWith("image/") ? StoredFileKind.IMAGE : StoredFileKind.DOCUMENT,
+        kind: field.kind,
         role: field.role,
         displayOrder: result.length,
         originalFileName: attachment.filename,
@@ -189,6 +223,12 @@ export function parseAttachment(value: unknown): AirtableAttachment | null {
 function snapshotString(snapshot: unknown, key: string): string | null {
   return isObject(snapshot) && typeof snapshot[key] === "string" && snapshot[key].trim()
     ? snapshot[key].trim() : null;
+}
+
+function snapshotStringArray(snapshot: unknown, key: string): string[] {
+  if (!isObject(snapshot) || !Array.isArray(snapshot[key])) return [];
+  return [...new Set(snapshot[key].filter((value): value is string =>
+    typeof value === "string" && value.trim().length > 0).map((value) => value.trim()))];
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {

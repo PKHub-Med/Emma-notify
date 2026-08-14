@@ -1,4 +1,4 @@
-import type { PrismaClient } from "../generated/prisma/client.js";
+import { Prisma, type PrismaClient } from "../generated/prisma/client.js";
 import {
   AssetProcessingStatus,
   CommunicationDeliveryStatus,
@@ -26,6 +26,49 @@ export interface PublicAssetStore {
   ): Promise<PublicAssetObject | null>;
 }
 
+export type PublicAssetAccessScope = {
+  hospitalId: string;
+  accessLevel: PortalAccessLevel;
+  communicationDeliveryId: string;
+};
+
+/** One shared predicate for file redirects, case assets and the Documents tab. */
+export function publicAssetAccessWhere(
+  scope: PublicAssetAccessScope,
+): Prisma.CommunicationAssetWhereInput {
+  const communicationOnly = scope.accessLevel === PortalAccessLevel.COMMUNICATION;
+  return {
+    ...(communicationOnly ? {
+      exposedAt: { not: null },
+      OR: [
+        {
+          deliveryId: scope.communicationDeliveryId,
+          delivery: {
+            status: CommunicationDeliveryStatus.SENT,
+            communicationEvent: {
+              eventSnapshot: { path: ["sourceHospitalRecordId"], equals: scope.hospitalId },
+            },
+          },
+        },
+        {
+          delivery: {
+            status: CommunicationDeliveryStatus.SENT,
+            communicationEventRecipient: { recipientType: CommunicationRecipientType.CLIENT },
+            communicationEvent: {
+              eventSnapshot: { path: ["sourceHospitalRecordId"], equals: scope.hospitalId },
+            },
+          },
+        },
+      ],
+    } : {}),
+    storedFile: {
+      processingStatus: AssetProcessingStatus.READY,
+      orphanedAt: null,
+      sourceHospitalRecordId: scope.hospitalId,
+    },
+  };
+}
+
 export class PrismaPublicAssetStore implements PublicAssetStore {
   constructor(
     private readonly prisma: PrismaClient,
@@ -34,46 +77,14 @@ export class PrismaPublicAssetStore implements PublicAssetStore {
 
   async findAuthorized(assetId: string, authorization: PortalAuthorizationContext) {
     const access = await this.accessPolicy.resolve(authorization.sourceHospitalRecordId);
-    const communicationOnly = access.accessLevel === PortalAccessLevel.COMMUNICATION;
     const asset = await this.prisma.communicationAsset.findFirst({
       where: {
         id: assetId,
-        ...(communicationOnly ? {
-          exposedAt: { not: null },
-          OR: [
-            {
-              deliveryId: authorization.communicationDeliveryId,
-              delivery: {
-                status: CommunicationDeliveryStatus.SENT,
-                communicationEvent: {
-                  eventSnapshot: {
-                    path: ["sourceHospitalRecordId"],
-                    equals: access.hospitalId,
-                  },
-                },
-              },
-            },
-            {
-              delivery: {
-                status: CommunicationDeliveryStatus.SENT,
-                communicationEventRecipient: {
-                  recipientType: CommunicationRecipientType.CLIENT,
-                },
-                communicationEvent: {
-                  eventSnapshot: {
-                    path: ["sourceHospitalRecordId"],
-                    equals: access.hospitalId,
-                  },
-                },
-              },
-            },
-          ],
-        } : {}),
-        storedFile: {
-          processingStatus: AssetProcessingStatus.READY,
-          orphanedAt: null,
-          sourceHospitalRecordId: access.hospitalId,
-        },
+        ...publicAssetAccessWhere({
+          hospitalId: access.hospitalId,
+          accessLevel: access.accessLevel,
+          communicationDeliveryId: authorization.communicationDeliveryId,
+        }),
       },
       select: {
         storedFile: {

@@ -27,6 +27,7 @@ import {
   type HospitalPortalViewModel,
   type PortalCaseListItem,
   type PortalDeviceDetail,
+  type PortalDocument,
 } from "../portal-access/view-model.js";
 import type { PortalAuthorizationContext } from "../portal-access/public.js";
 import type { PublicFileService } from "../assets/public-files.js";
@@ -208,6 +209,24 @@ describe("public API", () => {
     expect((await fetch(`${baseUrl}/p/${token}/data/cases/case-B`)).status).toBe(404);
     expect((await fetch(`${baseUrl}/p/${token}/data/devices/device-B`)).status).toBe(404);
     expect(scopes).toEqual(["hospital-A", "hospital-A", "hospital-A"]);
+  });
+
+  it("serves Documents through the grant-scoped data endpoint and preserves server-side search", async () => {
+    const grant = portalRecord({ sourceHospitalRecordId: "hospital-A" });
+    const calls: Array<{ hospital: string; query?: string }> = [];
+    const { baseUrl } = await startApp(
+      new MemoryStore(null), grant, new MemoryUnsubscribeStore(null),
+      async () => emptyPortalView(),
+      { listDocuments: async (authorization, options) => {
+        calls.push({ hospital: authorization.sourceHospitalRecordId, query: options.query });
+        return { items: [], nextCursor: null };
+      } },
+    );
+    const token = signPortalGrantToken(grant, secret);
+    const response = await fetch(`${baseUrl}/p/${token}/data/documents?q=protokol&hospitalId=hospital-B`);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ items: [], nextCursor: null });
+    expect(calls).toEqual([{ hospital: "hospital-A", query: "protokol" }]);
   });
 
   it("keeps the public sourceRecordId contract from Device detail to Case detail", async () => {
@@ -401,6 +420,10 @@ async function startApp(
       authorization: PortalAuthorizationContext,
       id: string,
     ) => Promise<PortalDeviceDetail | null>;
+    listDocuments?: (
+      authorization: PortalAuthorizationContext,
+      options: { query?: string },
+    ) => Promise<{ items: PortalDocument[]; nextCursor: null }>;
     publicFiles?: PublicFileService;
   } = {},
 ): Promise<{ baseUrl: string }> {
@@ -418,6 +441,7 @@ async function startApp(
       getCase: dataViews.getCase ?? (async () => null),
       listDevices: async () => ({ items: [], nextCursor: null }),
       getDevice: dataViews.getDevice ?? (async () => null),
+      listDocuments: dataViews.listDocuments ?? (async () => ({ items: [], nextCursor: null })),
     }, ...(dataViews.publicFiles ? { publicFiles: dataViews.publicFiles } : {}) },
   );
   server = app.listen(0, "127.0.0.1");

@@ -1,5 +1,11 @@
 import { Prisma, type PrismaClient } from "../generated/prisma/client.js";
-import { EventType } from "../generated/prisma/enums.js";
+import {
+  CommunicationAssetRole,
+  CommunicationSourceEntityType,
+  EventType,
+  StoredFileKind,
+} from "../generated/prisma/enums.js";
+import { publicAssetAccessWhere } from "../assets/public-files.js";
 import type { PortalAuthorizationContext } from "./public.js";
 import type { PortalEntryContext } from "./service.js";
 import {
@@ -22,12 +28,19 @@ export type PortalHistoryItem = {
 export type PortalDocument = {
   id: string;
   fileName: string;
-  documentType: string | null;
+  title: string;
+  kind: "DOCUMENT" | "IMAGE";
+  role: string;
+  documentType: string;
+  sourceRecordId: string;
+  caseType: "REPAIR" | "INSPECTION";
   deviceName: string | null;
   manufacturer: string | null;
   model: string | null;
   serialNumber: string | null;
   caseNumber: string | null;
+  caseDate: Date | null;
+  createdAt: Date;
 };
 
 export type PortalCaseListItem = {
@@ -189,7 +202,33 @@ export interface HospitalPortalStore {
     limit: number,
     cursor?: string | null,
   ): Promise<PortalDeviceDetail | null>;
+  listDocuments?(scope: PortalDataScope, query: string | null): Promise<PortalDocument[]>;
 }
+
+type PortalAssetRow = {
+  id: string;
+  role: CommunicationAssetRole;
+  displayOrder: number;
+  createdAt: Date;
+  storedFile: {
+    id: string;
+    sourceRecordId: string;
+    sourceEntityType: CommunicationSourceEntityType;
+    kind: StoredFileKind;
+    originalFileName: string;
+  };
+};
+
+type PortalAssetCaseContext = {
+  type: "REPAIR" | "INSPECTION";
+  sourceRecordId: string;
+  deviceName: string;
+  manufacturer: string | null;
+  model: string | null;
+  serialNumber: string | null;
+  caseNumber: string | null;
+  caseDate: Date | null;
+};
 
 const CASE_SELECT = {
   id: true,
@@ -410,6 +449,35 @@ export class PrismaHospitalPortalStore implements HospitalPortalStore {
     };
   }
 
+  async listDocuments(scope: PortalDataScope, query: string | null): Promise<PortalDocument[]> {
+    const matchingCaseIds = query ? await this.searchCaseIds(scope, query) : [];
+    const searchWhere: Prisma.CommunicationAssetWhereInput = query ? {
+      OR: [
+        { storedFile: { originalFileName: { contains: query, mode: "insensitive" } } },
+        ...(matchingCaseIds.length > 0
+          ? [{ storedFile: { sourceRecordId: { in: matchingCaseIds } } }]
+          : []),
+      ],
+    } : {};
+    const assets = await this.prisma.communicationAsset.findMany({
+      where: {
+        AND: [
+          publicAssetAccessWhere(scope),
+          { storedFile: { kind: StoredFileKind.DOCUMENT } },
+          searchWhere,
+        ],
+      },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      select: PORTAL_ASSET_SELECT,
+    });
+    const unique = deduplicateAssets(assets);
+    const cases = await this.loadVisibleAssetCaseSnapshots(
+      scope,
+      unique.map((asset) => asset.storedFile.sourceRecordId),
+    );
+    return mapPortalAssets(unique, cases).filter((asset) => asset.kind === "DOCUMENT");
+  }
+
   private async deviceCaseCounts(
     scope: PortalDataScope,
     sourceRecordId: string,
@@ -567,15 +635,116 @@ export class PrismaHospitalPortalStore implements HospitalPortalStore {
       }
     }
     const rowById = new Map(rows.map((row) => [row.airtableRecordId, row]));
-    return keys.flatMap((key) => {
+    const items = keys.flatMap((key) => {
       const row = rowById.get(key.sourceRecordId);
       return row ? [mapCase({
         ...row,
         taskCustomerStatus: taskStatus.get(key.sourceRecordId) ?? null,
       }, key.type, devicesByCase.get(row.id) ?? [])] : [];
     });
+    if (includeDetails) await this.attachCaseAssets(scope, items, rows);
+    return items;
+  }
+
+  private async attachCaseAssets(
+    scope: PortalDataScope,
+    cases: PortalCaseListItem[],
+    snapshots: StoredPortalCase[],
+  ): Promise<void> {
+    if (cases.length === 0) return;
+    const sourceIds = cases.map((item) => item.sourceRecordId);
+    const assets = await this.prisma.communicationAsset.findMany({
+      where: {
+        AND: [
+          publicAssetAccessWhere(scope),
+          {
+            storedFile: {
+              sourceRecordId: { in: sourceIds },
+              sourceEntityType: { in: [
+                CommunicationSourceEntityType.SERVICE_ORDER,
+                CommunicationSourceEntityType.INSPECTION,
+              ] },
+            },
+          },
+        ],
+      },
+      orderBy: [{ displayOrder: "asc" }, { id: "asc" }],
+      select: PORTAL_ASSET_SELECT,
+    });
+    const mapped = mapPortalAssets(
+      deduplicateAssets(assets),
+      new Map(cases.flatMap((item) => {
+        const snapshot = snapshots.find((row) => row.airtableRecordId === item.sourceRecordId);
+        return snapshot ? [[item.sourceRecordId, assetCaseContext(snapshot, item.type)] as const] : [];
+      })),
+    );
+    for (const item of cases) {
+      const caseAssets = mapped.filter((asset) => asset.sourceRecordId === item.sourceRecordId);
+      item.documents = caseAssets.filter((asset) => asset.kind === "DOCUMENT");
+      item.photos = caseAssets.filter((asset) => asset.kind === "IMAGE");
+    }
+  }
+
+  private async searchCaseIds(scope: PortalDataScope, query: string): Promise<string[]> {
+    const rows = await this.prisma.$queryRaw<Array<{ sourceRecordId: string }>>(Prisma.sql`
+      WITH scoped AS (${scopedCasesSql(scope)})
+      SELECT "sourceRecordId" FROM scoped scoped_case
+      WHERE 1=1 ${searchFilterSql(query, scope.hospitalId)}
+    `);
+    return rows.map((row) => row.sourceRecordId);
+  }
+
+  private async loadVisibleAssetCaseSnapshots(
+    scope: PortalDataScope,
+    sourceRecordIds: readonly string[],
+  ): Promise<Map<string, PortalAssetCaseContext>> {
+    if (sourceRecordIds.length === 0) return new Map();
+    const uniqueIds = [...new Set(sourceRecordIds)];
+    const keys = await this.prisma.$queryRaw<PageKey[]>(Prisma.sql`
+      WITH scoped AS (${scopedCasesSql(scope)})
+      SELECT type, "sourceRecordId", "sortKey" FROM scoped
+      WHERE "sourceRecordId" IN (${Prisma.join(uniqueIds)})
+    `);
+    if (keys.length === 0) return new Map();
+    const rows = await this.prisma.trackedCase.findMany({
+      where: {
+        airtableRecordId: { in: keys.map((key) => key.sourceRecordId) },
+        sourceHospitalRecordId: scope.hospitalId,
+      },
+      select: {
+        airtableRecordId: true,
+        businessNumber: true,
+        deviceName: true,
+        manufacturer: true,
+        model: true,
+        serialNumber: true,
+        reportedAt: true,
+        inspectionPerformedAt: true,
+      },
+    });
+    const rowById = new Map(rows.map((row) => [row.airtableRecordId, row]));
+    return new Map(keys.flatMap((key) => {
+      const row = rowById.get(key.sourceRecordId);
+      return row ? [[key.sourceRecordId, assetCaseContext(row, key.type)] as const] : [];
+    }));
   }
 }
+
+const PORTAL_ASSET_SELECT = {
+  id: true,
+  role: true,
+  displayOrder: true,
+  createdAt: true,
+  storedFile: {
+    select: {
+      id: true,
+      sourceRecordId: true,
+      sourceEntityType: true,
+      kind: true,
+      originalFileName: true,
+    },
+  },
+} satisfies Prisma.CommunicationAssetSelect;
 
 export class HospitalPortalViewModelService {
   readonly pageSize: number;
@@ -656,6 +825,17 @@ export class HospitalPortalViewModelService {
       clampLimit(options.limit, this.pageSize),
       cursor,
     );
+  }
+
+  async listDocuments(
+    authorization: PortalAuthorizationContext,
+    options: { query?: string } = {},
+  ): Promise<PortalPage<PortalDocument>> {
+    const scope = await this.resolveScope(authorization);
+    const items = this.store.listDocuments
+      ? await this.store.listDocuments(scope, normalizeSearch(options.query))
+      : [];
+    return { items, nextCursor: null };
   }
 
   private async resolveScope(
@@ -792,6 +972,79 @@ function mapCase(
     validUntil: type === "INSPECTION" ? stored.inspectionValidUntil : null,
     description: stored.faultDescription, history, documents: [], photos: [],
   };
+}
+
+function deduplicateAssets(assets: readonly PortalAssetRow[]): PortalAssetRow[] {
+  const seen = new Set<string>();
+  return assets.filter((asset) => {
+    if (seen.has(asset.storedFile.id)) return false;
+    seen.add(asset.storedFile.id);
+    return true;
+  });
+}
+
+function mapPortalAssets(
+  assets: readonly PortalAssetRow[],
+  cases: ReadonlyMap<string, PortalAssetCaseContext>,
+): PortalDocument[] {
+  const roleCounts = new Map<string, number>();
+  return assets.flatMap((asset) => {
+    const linkedCase = cases.get(asset.storedFile.sourceRecordId);
+    if (!linkedCase) return [];
+    const countKey = `${asset.storedFile.sourceRecordId}:${asset.role}`;
+    const roleIndex = (roleCounts.get(countKey) ?? 0) + 1;
+    roleCounts.set(countKey, roleIndex);
+    const title = assetTitle(asset.role, roleIndex);
+    return [{
+      id: asset.id,
+      fileName: asset.storedFile.originalFileName,
+      title,
+      kind: asset.storedFile.kind,
+      role: asset.role,
+      documentType: title,
+      sourceRecordId: asset.storedFile.sourceRecordId,
+      caseType: linkedCase.type,
+      deviceName: linkedCase.deviceName,
+      manufacturer: linkedCase.manufacturer,
+      model: linkedCase.model,
+      serialNumber: linkedCase.serialNumber,
+      caseNumber: linkedCase.caseNumber,
+      caseDate: linkedCase.caseDate,
+      createdAt: asset.createdAt,
+    }];
+  });
+}
+
+function assetCaseContext(
+  snapshot: {
+    airtableRecordId: string;
+    businessNumber: string | null;
+    deviceName: string | null;
+    manufacturer: string | null;
+    model: string | null;
+    serialNumber: string | null;
+    reportedAt: Date | null;
+    inspectionPerformedAt: Date | null;
+  },
+  type: "REPAIR" | "INSPECTION",
+): PortalAssetCaseContext {
+  return {
+    type,
+    sourceRecordId: snapshot.airtableRecordId,
+    deviceName: snapshot.deviceName || "Urządzenie medyczne",
+    manufacturer: snapshot.manufacturer,
+    model: snapshot.model,
+    serialNumber: snapshot.serialNumber,
+    caseNumber: snapshot.businessNumber,
+    caseDate: type === "REPAIR" ? snapshot.reportedAt : snapshot.inspectionPerformedAt,
+  };
+}
+
+function assetTitle(role: CommunicationAssetRole, index: number): string {
+  if (role === CommunicationAssetRole.REPAIR_PROTOCOL) return "Protokół naprawy";
+  if (role === CommunicationAssetRole.DIAGNOSTIC_PROTOCOL) return "Protokół diagnostyczny";
+  if (role === CommunicationAssetRole.PHOTO) return `Zdjęcie ${index}`;
+  return index === 1 ? "Dokument przeglądu" : `Dokument przeglądu ${index}`;
 }
 
 export function requiresCustomerAction(status: string | null): boolean {
