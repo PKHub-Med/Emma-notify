@@ -34,6 +34,9 @@ const workerEnvironmentSchema = z.object({
   RESEND_CASE_DIGEST_TEMPLATE_ID: z.string().default(""),
   EMAIL_FROM: z.string().default(""),
   EMAIL_REPLY_TO: z.email().default("serwis@tiemed.pl"),
+  TIEMED_OFFICE_NAME: z.string().default("Tiemed"),
+  TIEMED_OFFICE_PHONE: z.string().default(""),
+  TIEMED_OFFICE_EMAIL: z.email().default("serwis@tiemed.pl"),
   ACCESS_LINK_SIGNING_SECRET: accessLinkSigningSecretSchema,
   PUBLIC_BASE_URL: publicBaseUrlSchema,
   TIEMED_FALLBACK_EMAIL: z.union([z.email(), z.literal("")]).default(""),
@@ -62,6 +65,9 @@ export type WorkerConfig = BaseConfig & AssetConfig & {
   resendCaseDigestTemplateId: string | null;
   emailFrom: string | null;
   emailReplyTo: string;
+  tiemedOfficeName: string;
+  tiemedOfficePhone: string;
+  tiemedOfficeEmail: string;
   accessLinkSigningSecret: string;
   publicBaseUrl: string;
   tiemedFallbackEmail: string | null;
@@ -96,6 +102,9 @@ export function loadWorkerConfig(environment: NodeJS.ProcessEnv): WorkerConfig {
       parsed.data.RESEND_CASE_DIGEST_TEMPLATE_ID.trim() || null,
     emailFrom: parsed.data.EMAIL_FROM.trim() || null,
     emailReplyTo: parsed.data.EMAIL_REPLY_TO,
+    tiemedOfficeName: parsed.data.TIEMED_OFFICE_NAME.trim() || "Tiemed",
+    tiemedOfficePhone: parsed.data.TIEMED_OFFICE_PHONE.trim(),
+    tiemedOfficeEmail: parsed.data.TIEMED_OFFICE_EMAIL,
     accessLinkSigningSecret: parsed.data.ACCESS_LINK_SIGNING_SECRET,
     publicBaseUrl: parsed.data.PUBLIC_BASE_URL,
     tiemedFallbackEmail: parsed.data.TIEMED_FALLBACK_EMAIL.trim() || null,

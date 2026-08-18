@@ -345,6 +345,11 @@ async function pollCommunicationEmail(): Promise<void> {
         resendApiKey: config.resendApiKey,
         replyTo: config.emailReplyTo,
         timeZone: config.communicationTimezone,
+        officeContact: {
+          name: config.tiemedOfficeName,
+          phone: config.tiemedOfficePhone,
+          email: config.tiemedOfficeEmail,
+        },
       },
       ...(assetPreflight ? { assetPreflight } : {}),
       log: (message) => console.info(message),

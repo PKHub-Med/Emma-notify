@@ -1,0 +1,258 @@
+<!doctype html>
+<html lang="pl">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Oczekiwanie na części · Sprawa {{{CASE_NUMBER}}}</title>
+    <style>
+      @media only screen and (max-width:680px){.wrap{width:100%!important} .px{padding-left:18px!important;padding-right:18px!important} .mobile-stack{display:block!important;width:100%!important} .meta-label{width:130px!important}}
+    </style>
+  </head>
+  <body
+    style="margin:0;padding:0;background:#F1F4F8;font-family:Arial,Helvetica,sans-serif;color:#1F2F49;"
+  >
+    <div style="display:none;max-height:0;overflow:hidden;opacity:0;color:transparent;">
+      Naprawa oczekuje na części. Numer Sprawy: {{{CASE_NUMBER}}}.&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;
+    </div>
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" bgcolor="#F1F4F8">
+      <tr>
+        <td align="center" style="padding:24px 10px;">
+          <table
+            role="presentation"
+            class="wrap"
+            width="640"
+            cellspacing="0"
+            cellpadding="0"
+            border="0"
+            style="width:100%;max-width:640px;background:#FFFFFF;border:1px solid #D9E1EB;border-radius:15px;overflow:hidden;"
+          >
+            <tr>
+              <td class="px" style="padding:22px 28px 18px;border-bottom:1px solid #D9E1EB;">
+                <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
+                  <tr>
+                    <td style="vertical-align:top;">
+                      <!-- CODEX: Nazwa serwisu ma pochodzić z konfiguracji tenant/service provider. Nie wpisuj nazwy dostawcy na stałe w kodzie aplikacji. -->
+                      <div style="font-size:25px;line-height:30px;color:#223F6D;font-weight:850;letter-spacing:-0.4px;">
+                        {{{SERVICE_NAME}}}
+                      </div>
+                      <div style="font-size:12px;line-height:18px;color:#66758A;margin-top:5px;">
+                        Obsługa serwisowa przez platformę <strong style="color:#223F6D;">EMMA</strong>
+                      </div>
+                    </td>
+                    <td
+                      align="right"
+                      style="vertical-align:top;font-size:10px;line-height:15px;color:#66758A;white-space:nowrap;"
+                    >
+                      Data wysłania<br /><strong style="color:#1F2F49;">{{{SENT_AT}}}</strong>
+                    </td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+            <tr>
+              <td class="px" style="padding:26px 28px 28px;">
+                <h1 style="margin:0;font-size:25px;line-height:32px;letter-spacing:-0.4px;color:#1F2F49;">
+                  Naprawa oczekuje na części
+                </h1>
+                <p style="margin:9px 0 0;font-size:14px;line-height:22px;color:#1F2F49;">
+                  W trakcie realizacji okazało się, że do dalszych prac potrzebujemy części zamiennych. Poniżej
+                  przekazujemy bieżący przewidywany termin.
+                </p>
+                <div style="margin-top:12px;">
+                  <span
+                    style="display:inline-block;padding:6px 10px;border-radius:999px;background:#FBF1DB;color:#9B6A12;font-size:11px;line-height:15px;font-weight:700;"
+                    >Oczekiwanie na części</span
+                  >
+                </div>
+                <table
+                  role="presentation"
+                  width="100%"
+                  cellspacing="0"
+                  cellpadding="0"
+                  border="0"
+                  style="margin-top:18px;border:1px solid #D9E1EB;background:#F7F9FC;"
+                >
+                  <tr>
+                    <td style="padding:16px 18px;">
+                      <div style="font-size:16px;line-height:22px;font-weight:800;color:#1F2F49;margin-bottom:5px;">
+                        Aktualizacja sprawy
+                      </div>
+                      <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
+                        <tr>
+                          <td
+                            class="meta-label"
+                            style="padding:7px 10px 7px 0;width:180px;color:#66758A;font-size:12px;line-height:18px;vertical-align:top;"
+                          >
+                            Numer Sprawy
+                          </td>
+                          <td
+                            style="padding:7px 0;color:#1F2F49;font-size:13px;line-height:18px;font-weight:700;vertical-align:top;"
+                          >
+                            {{{CASE_NUMBER}}}
+                          </td>
+                        </tr>
+                        <tr>
+                          <td
+                            class="meta-label"
+                            style="padding:7px 10px 7px 0;width:180px;color:#66758A;font-size:12px;line-height:18px;vertical-align:top;"
+                          >
+                            Nr zlecenia klienta
+                          </td>
+                          <td
+                            style="padding:7px 0;color:#1F2F49;font-size:13px;line-height:18px;font-weight:700;vertical-align:top;"
+                          >
+                            {{{CLIENT_ORDER_NUMBER}}}
+                          </td>
+                        </tr>
+                        <tr>
+                          <td
+                            class="meta-label"
+                            style="padding:7px 10px 7px 0;width:180px;color:#66758A;font-size:12px;line-height:18px;vertical-align:top;"
+                          >
+                            Urządzenie
+                          </td>
+                          <td
+                            style="padding:7px 0;color:#1F2F49;font-size:13px;line-height:18px;font-weight:700;vertical-align:top;"
+                          >
+                            {{{DEVICE_NAME}}}
+                          </td>
+                        </tr>
+                        <tr>
+                          <td
+                            class="meta-label"
+                            style="padding:7px 10px 7px 0;width:180px;color:#66758A;font-size:12px;line-height:18px;vertical-align:top;"
+                          >
+                            Producent / model
+                          </td>
+                          <td
+                            style="padding:7px 0;color:#1F2F49;font-size:13px;line-height:18px;font-weight:700;vertical-align:top;"
+                          >
+                            {{{MANUFACTURER_MODEL}}}
+                          </td>
+                        </tr>
+                        <tr>
+                          <td
+                            class="meta-label"
+                            style="padding:7px 10px 7px 0;width:180px;color:#66758A;font-size:12px;line-height:18px;vertical-align:top;"
+                          >
+                            Numer seryjny
+                          </td>
+                          <td
+                            style="padding:7px 0;color:#1F2F49;font-size:13px;line-height:18px;font-weight:700;vertical-align:top;"
+                          >
+                            {{{SERIAL_NUMBER}}}
+                          </td>
+                        </tr>
+                        <tr>
+                          <td
+                            class="meta-label"
+                            style="padding:7px 10px 7px 0;width:180px;color:#66758A;font-size:12px;line-height:18px;vertical-align:top;"
+                          >
+                            Nr inwentarzowy
+                          </td>
+                          <td
+                            style="padding:7px 0;color:#1F2F49;font-size:13px;line-height:18px;font-weight:700;vertical-align:top;"
+                          >
+                            {{{INVENTORY_NUMBER}}}
+                          </td>
+                        </tr>
+                        <tr>
+                          <td
+                            class="meta-label"
+                            style="padding:7px 10px 7px 0;width:180px;color:#66758A;font-size:12px;line-height:18px;vertical-align:top;"
+                          >
+                            Przewidywany termin
+                          </td>
+                          <td
+                            style="padding:7px 0;color:#1F2F49;font-size:13px;line-height:18px;font-weight:700;vertical-align:top;"
+                          >
+                            {{{EXPECTED_DATE}}}
+                          </td>
+                        </tr>
+                        <tr>
+                          <td
+                            class="meta-label"
+                            style="padding:7px 10px 7px 0;width:180px;color:#66758A;font-size:12px;line-height:18px;vertical-align:top;"
+                          >
+                            Aktualny status
+                          </td>
+                          <td
+                            style="padding:7px 0;color:#1F2F49;font-size:13px;line-height:18px;font-weight:700;vertical-align:top;"
+                          >
+                            Oczekiwanie na części
+                          </td>
+                        </tr>
+                      </table>
+                    </td>
+                  </tr>
+                </table>
+                <p style="margin:17px 0 0;font-size:13px;line-height:20px;color:#66758A;">
+                  Gdy pojawi się istotna zmiana, przekażemy kolejną informację. Aktualny przebieg sprawy jest dostępny w
+                  Emma.
+                </p>
+                <table
+                  role="presentation"
+                  width="100%"
+                  cellspacing="0"
+                  cellpadding="0"
+                  border="0"
+                  style="margin-top:20px;"
+                >
+                  <tr>
+                    <td align="center" bgcolor="#223F6D" style="background:#223F6D;border-radius:10px;">
+                      <!-- CODEX: Przed wysyłką podstaw w zmiennej Resend EMMA_SECURE_URL bezpieczny, czasowy link wygenerowany przez backend dla TEGO odbiorcy i TEJ sprawy/wizyty. Nie hardkoduj domeny, ścieżki ani przykładowych ID. Ten sam URL musi trafić do href CTA oraz — jeśli jest widoczny — do tekstowego linku awaryjnego. -->
+                      <a
+                        href="{{{EMMA_SECURE_URL}}}"
+                        style="display:block;padding:14px 20px;font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:20px;font-weight:800;color:#ffffff;text-decoration:none;"
+                        >Zobacz sprawę w Emma</a
+                      >
+                    </td>
+                  </tr>
+                </table>
+                <p style="margin:9px 0 0;font-size:10px;line-height:15px;color:#66758A;word-break:break-all;">
+                  {{{EMMA_SECURE_URL}}}
+                </p>
+              </td>
+            </tr>
+            <tr>
+              <td class="px" style="padding:18px 28px;border-top:1px solid #D9E1EB;color:#66758A;">
+                <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
+                  <tr>
+                    <td style="padding-top:14px;">
+                      <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
+                        <tr>
+                          <td style="font-size:11px;line-height:17px;color:#66758A;">
+                            <strong
+                              style="display:block;margin-bottom:3px;color:#223F6D;font-size:12px;line-height:18px;"
+                              >Poznaj platformę EMMA</strong
+                            >
+                            EMMA porządkuje komunikację serwisową, statusy urządzeń, przeglądy i dokumentację w jednym
+                            miejscu.
+                            <a
+                              href="https://www.emmamed.com"
+                              style="color:#33598F;text-decoration:underline;font-weight:700;"
+                              >Dowiedz się więcej na www.emmamed.com</a
+                            >
+                          </td>
+                        </tr>
+                      </table>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td style="padding-top:13px;font-size:10px;line-height:16px;color:#66758A;">
+                      <!-- CODEX: {{{EMMA_UNSUBSCRIBE_URL}}} ma być indywidualnym, podpisanym linkiem wygenerowanym dla konkretnego odbiorcy. Link ma wyłączyć dalsze automatyczne powiadomienia mailowe objęte tym mechanizmem zgodnie z ustawieniami odbiorcy. Nie używaj tu {{{EMMA_SECURE_URL}}} i nie wysyłaj maila z nierozwiązanym placeholderem. -->
+                      Nie chcesz otrzymywać takich powiadomień?
+                      <a href="{{{EMMA_UNSUBSCRIBE_URL}}}" style="color:#66758A;text-decoration:underline;"
+                        >Wyłącz otrzymywanie tych maili</a
+                      >.
+                    </td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>

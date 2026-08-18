@@ -240,7 +240,7 @@ describe("paginated hospital portal", () => {
         inventoryNumber: null, currentStatus: "SPRAWNE", faultDescription: null,
         sourceCreatedAt: null, reportedAt: null, sourceModifiedAt: null,
         inspectionDueDate: null, inspectionPerformedAt: new Date("2026-08-13T00:00:00Z"),
-        inspectionResult: "SPRAWNE", inspectionValidUntil: new Date("2027-08-13T00:00:00Z"),
+        inspectionResult: "SPRAWNE", inspectionValidUntil: new Date("2027-08-13T00:00:00Z"), sourceSnapshot: {},
         events: [],
       }] },
       trackedTask: { findMany: async () => [] },
@@ -279,7 +279,7 @@ describe("paginated hospital portal", () => {
         serialNumber: "SN-HIST", inventoryNumber: "INV-HIST", currentStatus: null,
         faultDescription: null, sourceCreatedAt: null, reportedAt: null,
         sourceModifiedAt: null, inspectionDueDate: null, inspectionPerformedAt: null,
-        inspectionResult: null, inspectionValidUntil: null, events: [],
+        inspectionResult: null, inspectionValidUntil: null, sourceSnapshot: {}, events: [],
       }] },
       trackedTask: { findMany: async () => [] },
       trackedCaseDevice: { findMany: async () => [{
@@ -320,7 +320,7 @@ describe("paginated hospital portal", () => {
       faultDescription: null, sourceCreatedAt: new Date("2025-01-01T00:00:00Z"),
       reportedAt: new Date("2025-01-01T00:00:00Z"), sourceModifiedAt: null,
       inspectionDueDate: null, inspectionPerformedAt: null, inspectionResult: null,
-      inspectionValidUntil: null, events: [],
+      inspectionValidUntil: null, sourceSnapshot: {}, events: [],
     };
     const assetRows = [
       {

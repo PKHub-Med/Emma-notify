@@ -125,6 +125,9 @@ describe("loadWorkerConfig", () => {
       communicationEmailsEnabled: false,
       communicationSendNotBefore: null,
       emailReplyTo: "serwis@tiemed.pl",
+      tiemedOfficeName: "Tiemed",
+      tiemedOfficePhone: "",
+      tiemedOfficeEmail: "serwis@tiemed.pl",
       assetMaxDocumentSourceBytes: 52_428_800,
     });
   });

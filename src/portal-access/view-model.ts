@@ -6,6 +6,7 @@ import {
   StoredFileKind,
 } from "../generated/prisma/enums.js";
 import { publicAssetAccessWhere } from "../assets/public-files.js";
+import { parseInspectionDueDate } from "../airtable/parse-inspection-due-date.js";
 import type { PortalAuthorizationContext } from "./public.js";
 import type { PortalEntryContext } from "./service.js";
 import {
@@ -149,6 +150,7 @@ export type StoredPortalCase = {
   inspectionPerformedAt: Date | null;
   inspectionResult: string | null;
   inspectionValidUntil: Date | null;
+  sourceSnapshot: unknown;
   events: StoredEvent[];
 };
 
@@ -251,6 +253,7 @@ const CASE_SELECT = {
   inspectionPerformedAt: true,
   inspectionResult: true,
   inspectionValidUntil: true,
+  sourceSnapshot: true,
   events: {
     where: {
       visibleToCustomer: true,
@@ -969,9 +972,25 @@ function mapCase(
     requiresAction: requiresCustomerAction(currentStatus),
     reportedAt: type === "REPAIR" ? stored.reportedAt : null,
     inspectionPerformedAt: type === "INSPECTION" ? stored.inspectionPerformedAt : null,
-    validUntil: type === "INSPECTION" ? stored.inspectionValidUntil : null,
+    validUntil: type === "INSPECTION"
+      ? stored.inspectionValidUntil ?? stored.inspectionDueDate ??
+        inspectionValidUntilFromSnapshot(stored.sourceSnapshot)
+      : null,
     description: stored.faultDescription, history, documents: [], photos: [],
   };
+}
+
+function inspectionValidUntilFromSnapshot(snapshot: unknown): Date | null {
+  if (typeof snapshot !== "object" || snapshot === null || Array.isArray(snapshot)) return null;
+  const value = snapshot as Record<string, unknown>;
+  for (const candidate of [value.inspectionDueDate, value.inspectionDueDateRaw]) {
+    if (typeof candidate !== "string" || !candidate.trim()) continue;
+    const iso = new Date(candidate);
+    if (!Number.isNaN(iso.getTime())) return iso;
+    const parsed = parseInspectionDueDate(candidate);
+    if (parsed) return parsed;
+  }
+  return null;
 }
 
 function deduplicateAssets(assets: readonly PortalAssetRow[]): PortalAssetRow[] {

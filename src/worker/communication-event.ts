@@ -236,6 +236,10 @@ export function buildServiceOrderObservation(
       emmaMailTemplate: template,
       businessNumber: serviceOrder.businessNumber,
       clientOrderNumber: serviceOrder.clientOrderNumber,
+      reportedAt: serviceOrder.reportedAt?.toISOString() ?? null,
+      completedAt: snapshotString(serviceOrder.sourceSnapshot, "completedAt"),
+      department: snapshotString(serviceOrder.sourceSnapshot, "department"),
+      currentStatus: serviceOrder.currentStatus,
       serviceOrderType: serviceOrder.serviceOrderType,
       hospitalName: serviceOrder.hospitalName,
       sourceHospitalRecordId: serviceOrder.sourceHospitalRecordId,
@@ -284,6 +288,8 @@ export function buildTaskObservation(
       emmaCustomerStatus: state,
       emmaMailTemplate: template,
       day: task.day,
+      department: task.department,
+      durationSeconds: task.durationSeconds,
       completed: task.completed,
       selectedContactRecordIds: task.selectedContactRecordIds,
       sourceHospitalRecordId: task.sourceHospitalRecordId,
@@ -337,6 +343,11 @@ function signature(payload: readonly unknown[]): string {
 function normalizeValue(value: string | null | undefined): string | null {
   const normalized = value?.trim() ?? "";
   return normalized || null;
+}
+
+function snapshotString(snapshot: Record<string, string | number | null>, key: string): string | null {
+  const value = snapshot[key];
+  return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
 function toSyncEntityType(

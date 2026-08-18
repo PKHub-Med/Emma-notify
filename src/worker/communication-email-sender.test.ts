@@ -7,6 +7,7 @@ import {
 } from "../generated/prisma/enums.js";
 import type { EmailProvider, ProviderEmailRequest, ProviderEmailResult } from "../email/resend-client.js";
 import {
+  communicationBatchIdempotencyKey,
   communicationIdempotencyKey,
   runCommunicationEmailSender,
   type CommunicationEmailSenderConfig,
@@ -237,18 +238,17 @@ describe("claim, JIT grant and deterministic retry", () => {
     expect(fixture.store.lastError).toBe("TEMPLATE_VARIABLES_INVALID");
   });
 
-  it("preserves exact Unicode through builder, sendSnapshot and Resend request", async () => {
+  it("preserves exact Unicode through the repair batch builder and Resend request", async () => {
     const expected = ["Damian · Tiemed", "Michał Kowalski", "Urządzenie", "Przegląd", "Oczekiwanie na części", "Łódź", "Żółty", "Nr zlecenia klienta"];
     for (const value of expected) {
       const fixture = setup({ eventSnapshot: {
         businessNumber: "SO-1", sourceHospitalRecordId: "recHospital",
-        sourceCreatedAt: "2026-08-15T08:00:00Z",
+        reportedAt: "2026-08-15T08:00:00Z",
         device: { name: value },
       } });
       await run(fixture);
       expect(fixture.provider.requests[0]!.template.variables.DEVICE_NAME).toBe(value);
-      expect(fixture.candidate.sendSnapshot?.variables.DEVICE_NAME).toBe(value);
-      expect(JSON.stringify(fixture.candidate.sendSnapshot)).not.toContain("Ă‚Â·");
+      expect(JSON.stringify(fixture.provider.requests[0]!.template.variables)).not.toContain("Ă‚Â·");
     }
   });
 
@@ -264,26 +264,55 @@ describe("claim, JIT grant and deterministic retry", () => {
     expect(fixture.grants.calls).toBe(1);
   });
 
-  it("429 retry keeps identical grant, URL, idempotency key and sendSnapshot", async () => {
+  it("429 batch retry keeps identical grant, URL, payload and idempotency key", async () => {
     const fixture = setup({}, [
       { ok: false, error: { name: "rate_limit_exceeded", statusCode: 429 } },
       { ok: true, id: "resend-after-retry" },
     ]);
     await run(fixture);
-    const firstSnapshot = structuredClone(fixture.candidate.sendSnapshot);
     const firstRequest = structuredClone(fixture.provider.requests[0]);
     await run(fixture, {}, [], new Date(now.getTime() + 60_000));
     expect(fixture.grants.publicIds).toEqual(["grant-public-id", "grant-public-id"]);
     expect(fixture.unsubscribeGrants.publicIds).toEqual(["unsubscribe-public-id", "unsubscribe-public-id"]);
-    expect(fixture.candidate.sendSnapshot).toEqual(firstSnapshot);
     expect(fixture.provider.requests[1]).toEqual(firstRequest);
-    expect(fixture.provider.requests.map((request) => request.idempotencyKey))
-      .toEqual(["emma-communication/delivery-1", "emma-communication/delivery-1"]);
+    const key = communicationBatchIdempotencyKey(["delivery-1"]);
+    expect(fixture.provider.requests.map((request) => request.idempotencyKey)).toEqual([key, key]);
   });
 
-  it("stable idempotency key is derived only from delivery ID", () => {
+  it("stable idempotency keys are deterministic", () => {
     expect(communicationIdempotencyKey("delivery-1"))
       .toBe("emma-communication/delivery-1");
+    expect(communicationBatchIdempotencyKey(["b", "a"]))
+      .toBe(communicationBatchIdempotencyKey(["a", "b"]));
+  });
+
+  it("groups two repair deliveries for the same hospital, recipient and window into one email", async () => {
+    const first = communicationCandidate({ id: "delivery-a" });
+    const second = communicationCandidate({
+      id: "delivery-b",
+      event: {
+        detectedAt: activation,
+        sourceRecordId: "recService2",
+        eventSnapshot: {
+          ...repairSnapshot(),
+          businessNumber: "SO-2",
+          device: { ...repairSnapshot().device, name: "Pompa infuzyjna" },
+        },
+      },
+    });
+    const store = new MultiMemorySendStore([first, second]);
+    const provider = new MockProvider([{ ok: true, id: "resend-batch" }]);
+    const stats = await runCommunicationEmailSender({
+      store, provider, grants: new FixedGrants(),
+      unsubscribeGrants: new FixedUnsubscribeGrants(), dataSource: dataSource(),
+      config: config(), now: () => now,
+    });
+    expect(provider.requests).toHaveLength(1);
+    expect(provider.requests[0]!.template.variables.REPAIR_COUNT).toBe(2);
+    expect(provider.requests[0]!.template.variables.REPAIRS_ROWS).toContain("Pompa infuzyjna");
+    expect(stats.sent).toBe(2);
+    expect(first.status).toBe(CommunicationDeliveryStatus.SENT);
+    expect(second.status).toBe(CommunicationDeliveryStatus.SENT);
   });
 
   it("SENT delivery is never selected or sent again", async () => {
@@ -361,6 +390,10 @@ class MemorySendStore implements CommunicationEmailSendStore {
     this.actualRecipientEmail = actual;
     return true;
   }
+  async claimBatch(candidates: readonly CommunicationSendCandidate[], at: Date, mode: string, actual: string) {
+    if (candidates.length !== 1 || candidates[0] !== this.candidate) return false;
+    return this.claim(this.candidate, at, mode, actual);
+  }
   async getCurrentTask() { return this.currentTask; }
   async saveSnapshot(
     _id: string,
@@ -374,6 +407,9 @@ class MemorySendStore implements CommunicationEmailSendStore {
     this.resendMessageId = messageId;
     this.sentAt = at;
   }
+  async markBatchSent(ids: readonly string[], messageId: string, at: Date) {
+    if (ids.includes(this.candidate.id)) await this.markSent(this.candidate.id, messageId, at);
+  }
   async markFailed(_id: string, reason: string, _at: Date, next: Date | null) {
     this.candidate.status = CommunicationDeliveryStatus.FAILED;
     this.candidate.nextRetryAt = next;
@@ -384,6 +420,31 @@ class MemorySendStore implements CommunicationEmailSendStore {
     this.cancelReason = reason;
     return true;
   }
+}
+
+class MultiMemorySendStore implements CommunicationEmailSendStore {
+  constructor(readonly candidates: CommunicationSendCandidate[]) {}
+  async findCandidates(at: Date) {
+    return this.candidates.filter((candidate) => candidate.status === CommunicationDeliveryStatus.READY ||
+      candidate.status === CommunicationDeliveryStatus.FAILED && !!candidate.nextRetryAt && candidate.nextRetryAt <= at);
+  }
+  async claim(candidate: CommunicationSendCandidate, _at: Date, _mode: string, _actual: string) {
+    if (candidate.status !== CommunicationDeliveryStatus.READY && candidate.status !== CommunicationDeliveryStatus.FAILED) return false;
+    candidate.status = CommunicationDeliveryStatus.SENDING; candidate.attemptCount += 1; candidate.nextRetryAt = null; return true;
+  }
+  async claimBatch(candidates: readonly CommunicationSendCandidate[], _at: Date, _mode: string, _actual: string) {
+    if (candidates.some((candidate) => candidate.status !== CommunicationDeliveryStatus.READY && candidate.status !== CommunicationDeliveryStatus.FAILED)) return false;
+    for (const candidate of candidates) { candidate.status=CommunicationDeliveryStatus.SENDING; candidate.attemptCount += 1; candidate.nextRetryAt=null; }
+    return true;
+  }
+  async getCurrentTask() { return null; }
+  async saveSnapshot(id: string, snapshot: PersistedCommunicationSendSnapshot) {
+    const item = this.candidates.find((value) => value.id === id)!; item.sendSnapshot ??= snapshot; return item.sendSnapshot;
+  }
+  async markSent(id: string) { this.candidates.find((item) => item.id === id)!.status = CommunicationDeliveryStatus.SENT; }
+  async markBatchSent(ids: readonly string[]) { for (const id of ids) await this.markSent(id); }
+  async markFailed(id: string, _reason: string, _at: Date, next: Date | null) { const item=this.candidates.find((value)=>value.id===id)!; item.status=CommunicationDeliveryStatus.FAILED; item.nextRetryAt=next; }
+  async cancel(id: string) { this.candidates.find((item) => item.id === id)!.status = CommunicationDeliveryStatus.CANCELLED; return true; }
 }
 
 class MockProvider implements EmailProvider {
@@ -554,5 +615,6 @@ function dataSource(): CommunicationTemplateDataSource {
   return {
     async getEmployees() { return []; },
     async getInspections() { return []; },
+    async getDevices() { return []; },
   };
 }

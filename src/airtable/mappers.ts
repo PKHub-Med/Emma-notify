@@ -43,7 +43,7 @@ export type MappedCase = {
   inspectionPerformedAt: Date | null;
   inspectionResult: string | null;
   inspectionValidUntil: Date | null;
-  sourceSnapshot: Record<string, string | null>;
+  sourceSnapshot: Record<string, string | number | null>;
   contactRecordIds: string[];
   invalidDueDate: boolean;
 };
@@ -75,12 +75,18 @@ export function mapServiceOrder(record: AirtableRecord): MappedCase {
     faultDescription: toOptionalString(
       record.fields[SERVICE_ORDER_FIELDS.faultDescription],
     ),
+    department: toOptionalString(record.fields[SERVICE_ORDER_FIELDS.department]),
+    completedAt: parseAirtableDate(
+      record.fields[SERVICE_ORDER_FIELDS.completedAt],
+    )?.toISOString() ?? null,
   };
+
+  const { department: _department, completedAt: _completedAt, ...storedValues } = values;
 
   return {
     caseType: CaseType.SERVICE_ORDER,
     airtableRecordId: record.id,
-    ...values,
+    ...storedValues,
     sourceHospitalRecordId: toFirstLinkedRecordId(
       record.fields[SERVICE_ORDER_FIELDS.sourceHospitalLink],
     ),
@@ -130,6 +136,10 @@ export function mapInspection(record: AirtableRecord): MappedCase {
     inspectionScheduledDate:
       parseAirtableDate(record.fields[INSPECTION_FIELDS.scheduledDate])?.toISOString() ??
       null,
+    department: toOptionalString(record.fields[INSPECTION_FIELDS.department]),
+    estimatedDurationSeconds: optionalFiniteNumber(
+      record.fields[INSPECTION_FIELDS.estimatedDuration],
+    ),
   };
 
   return {
@@ -179,4 +189,8 @@ export function mapInspection(record: AirtableRecord): MappedCase {
 function rawString(value: unknown): string | null {
   if (typeof value === "string") return value.trim() ? value : null;
   return toOptionalString(value);
+}
+
+function optionalFiniteNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
 }

@@ -15,12 +15,10 @@ import {
   type DueReminder,
   type PlannedDelivery,
 } from "./communication-delivery.js";
-import { parseLocalDate, reminderScheduledFor } from "./communication-time.js";
+import { parseLocalDate, reminderScheduledFor, repairBatchScheduledFor } from "./communication-time.js";
 
 const timeZone = "Europe/Warsaw";
 const eventDrivenScenarios = [
-  CommunicationScenario.REPAIR_RECEIVED,
-  CommunicationScenario.REPAIR_COMPLETED,
   CommunicationScenario.INSPECTION_DATE_PROPOSED,
   CommunicationScenario.INSPECTION_DATE_CONFIRMED,
   CommunicationScenario.INSPECTION_COMPLETED,
@@ -40,11 +38,21 @@ describe("event-driven communication delivery", () => {
     }]);
   });
 
-  it("does not add a legacy quiet period or debounce", () => {
+  it("batches repair events at the next 06:00/14:00 Warsaw boundary", () => {
     const source = event(CommunicationScenario.REPAIR_RECEIVED, ["recipientA"]);
-    const plan = createDeliveryPlan(source, "recipientA", new Date("2026-08-13T10:00:00Z"), timeZone);
-    expect(plan.scheduledFor).toEqual(source.detectedAt);
-    expect(plan.status).toBe(CommunicationDeliveryStatus.READY);
+    const beforeBoundary = createDeliveryPlan(source, "recipientA", new Date("2026-08-13T08:00:00Z"), timeZone);
+    expect(beforeBoundary.scheduledFor).toEqual(new Date("2026-08-13T12:00:00Z"));
+    expect(beforeBoundary.status).toBe(CommunicationDeliveryStatus.SCHEDULED);
+    const recoveredAfterBoundary = createDeliveryPlan(source, "recipientA", new Date("2026-08-13T12:01:00Z"), timeZone);
+    expect(recoveredAfterBoundary.status).toBe(CommunicationDeliveryStatus.READY);
+  });
+
+  it("transitions a scheduled repair batch to READY at 14:00 Warsaw", async () => {
+    const store = new MemoryDeliveryStore([event(CommunicationScenario.REPAIR_COMPLETED, ["recipientA"])]);
+    await planner(store, new Date("2026-08-13T08:00:00Z"));
+    expect(store.deliveries[0]?.status).toBe(CommunicationDeliveryStatus.SCHEDULED);
+    await planner(store, new Date("2026-08-13T12:00:00Z"));
+    expect(store.deliveries[0]?.status).toBe(CommunicationDeliveryStatus.READY);
   });
 
   it("creates a terminal delivery when a new event has no hospital scope", async () => {
@@ -155,6 +163,15 @@ describe("Europe/Warsaw timezone", () => {
   it("maps summer 06:00 CEST to 04:00 UTC", () => {
     expect(reminderScheduledFor(parseLocalDate("2026-08-15")!, timeZone).toISOString())
       .toBe("2026-08-14T04:00:00.000Z");
+  });
+
+  it("maps repair windows to local 06:00 and 14:00 across DST", () => {
+    expect(repairBatchScheduledFor(new Date("2026-08-13T03:00:00Z"), timeZone).toISOString())
+      .toBe("2026-08-13T04:00:00.000Z");
+    expect(repairBatchScheduledFor(new Date("2026-08-13T07:00:00Z"), timeZone).toISOString())
+      .toBe("2026-08-13T12:00:00.000Z");
+    expect(repairBatchScheduledFor(new Date("2026-01-13T14:30:00Z"), timeZone).toISOString())
+      .toBe("2026-01-14T05:00:00.000Z");
   });
 });
 
@@ -282,7 +299,11 @@ class MemoryDeliveryStore implements CommunicationDeliveryStore {
 
   async findDueReminders(now: Date): Promise<DueReminder[]> {
     return this.deliveries
-      .filter((item) => item.scenario === CommunicationScenario.INSPECTION_REMINDER &&
+      .filter((item) => [
+        CommunicationScenario.INSPECTION_REMINDER,
+        CommunicationScenario.REPAIR_RECEIVED,
+        CommunicationScenario.REPAIR_COMPLETED,
+      ].includes(item.scenario) &&
         item.status === CommunicationDeliveryStatus.SCHEDULED &&
         item.scheduledFor.getTime() <= now.getTime())
       .map((item) => {

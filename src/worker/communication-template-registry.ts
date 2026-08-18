@@ -19,6 +19,8 @@ export function templateAliasForScenario(scenario: CommunicationScenario): strin
 }
 
 const NUMBER_VARIABLES_BY_TEMPLATE: Readonly<Record<string, readonly string[]>> = Object.freeze({
+  "emma-repair-received": ["REPAIR_COUNT"],
+  "emma-repair-completed": ["REPAIR_COUNT"],
   "emma-inspection-confirmed": ["DEVICE_COUNT"],
   "emma-inspection-proposed": ["DEVICE_COUNT"],
   "emma-inspection-reminder": ["DEVICE_COUNT"],

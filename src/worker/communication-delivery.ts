@@ -11,6 +11,7 @@ import {
   localDateAt,
   parseLocalDate,
   reminderScheduledFor,
+  repairBatchScheduledFor,
 } from "./communication-time.js";
 
 const PLANNER_LIMIT = 50;
@@ -170,7 +171,11 @@ export class PrismaCommunicationDeliveryStore implements CommunicationDeliverySt
   async findDueReminders(now: Date, limit: number): Promise<DueReminder[]> {
     const deliveries = await this.prisma.communicationDelivery.findMany({
       where: {
-        scenario: CommunicationScenario.INSPECTION_REMINDER,
+        scenario: { in: [
+          CommunicationScenario.INSPECTION_REMINDER,
+          CommunicationScenario.REPAIR_RECEIVED,
+          CommunicationScenario.REPAIR_COMPLETED,
+        ] },
         status: CommunicationDeliveryStatus.SCHEDULED,
         scheduledFor: { lte: now },
       },
@@ -262,18 +267,21 @@ export async function runCommunicationDeliveryPlanner(input: {
   const taskCache = new Map<string, CurrentTaskState | null>();
   let remindersTransitioned = 0;
   for (const reminder of reminders) {
-    if (!taskCache.has(reminder.sourceRecordId)) {
+    if (reminder.scenario === CommunicationScenario.INSPECTION_REMINDER &&
+      !taskCache.has(reminder.sourceRecordId)) {
       taskCache.set(
         reminder.sourceRecordId,
         await input.store.getCurrentTask(reminder.sourceRecordId),
       );
     }
-    const cancelReason = reminderCancellationReason(
-      reminder.eventSnapshot,
-      taskCache.get(reminder.sourceRecordId) ?? null,
-      transitionNow,
-      input.timeZone,
-    );
+    const cancelReason = reminder.scenario === CommunicationScenario.INSPECTION_REMINDER
+      ? reminderCancellationReason(
+          reminder.eventSnapshot,
+          taskCache.get(reminder.sourceRecordId) ?? null,
+          transitionNow,
+          input.timeZone,
+        )
+      : null;
     const transition: {
       status: ReminderTransitionStatus;
       cancelReason: CommunicationDeliveryCancelReason | null;
@@ -319,6 +327,21 @@ export function createDeliveryPlan(
         ? CommunicationDeliveryScheduleReason.REMINDER_0600
         : CommunicationDeliveryScheduleReason.EVENT_DRIVEN,
       cancelReason: CommunicationDeliveryCancelReason.MISSING_HOSPITAL_SCOPE,
+    };
+  }
+  if (event.scenario === CommunicationScenario.REPAIR_RECEIVED ||
+      event.scenario === CommunicationScenario.REPAIR_COMPLETED) {
+    const scheduledFor = repairBatchScheduledFor(event.detectedAt, timeZone);
+    const ready = now.getTime() >= scheduledFor.getTime();
+    return {
+      recipientId,
+      status: ready
+        ? CommunicationDeliveryStatus.READY
+        : CommunicationDeliveryStatus.SCHEDULED,
+      scheduledFor,
+      readyAt: ready ? now : null,
+      scheduleReason: CommunicationDeliveryScheduleReason.EVENT_DRIVEN,
+      cancelReason: null,
     };
   }
   if (event.scenario !== CommunicationScenario.INSPECTION_REMINDER) {

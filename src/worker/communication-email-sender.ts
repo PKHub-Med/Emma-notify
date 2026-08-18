@@ -19,6 +19,7 @@ import {
 import type { PortalAccessGrantRecord } from "../portal-access/service.js";
 import type { UnsubscribeGrantRecord } from "../communication-unsubscribe/service.js";
 import {
+  buildCommunicationRepairBatchPayload,
   buildCommunicationTemplatePayload,
   CommunicationTemplateDataError,
   type CommunicationTemplateDataSource,
@@ -33,7 +34,7 @@ import { normalizeCommunicationTemplateVariables } from "./communication-templat
 const MAX_ATTEMPTS = 4;
 const STALE_SENDING_MS = 5 * 60_000;
 const RETRY_DELAYS_MS = [60_000, 5 * 60_000, 15 * 60_000, 15 * 60_000] as const;
-const CANDIDATE_LIMIT = 10;
+const CANDIDATE_LIMIT = 1000;
 
 export type PersistedCommunicationSendSnapshot = {
   templateId: string;
@@ -72,6 +73,12 @@ export interface CommunicationEmailSendStore {
     mode: EmailMode,
     actualRecipientEmail: string,
   ): Promise<boolean>;
+  claimBatch(
+    candidates: readonly CommunicationSendCandidate[],
+    now: Date,
+    mode: EmailMode,
+    actualRecipientEmail: string,
+  ): Promise<boolean>;
   getCurrentTask(sourceRecordId: string): Promise<CurrentTaskState | null>;
   saveSnapshot(
     deliveryId: string,
@@ -79,6 +86,7 @@ export interface CommunicationEmailSendStore {
     preparedAt: Date,
   ): Promise<PersistedCommunicationSendSnapshot>;
   markSent(deliveryId: string, messageId: string, sentAt: Date): Promise<void>;
+  markBatchSent(deliveryIds: readonly string[], messageId: string, sentAt: Date): Promise<void>;
   markFailed(
     deliveryId: string,
     reason: string,
@@ -116,6 +124,7 @@ export type CommunicationEmailSenderConfig = {
   replyTo: string;
   timeZone: string;
   communicationAssetsEnabled?: boolean;
+  officeContact?: { name: string; phone: string; email: string };
 };
 
 export class PrismaCommunicationEmailSendStore implements CommunicationEmailSendStore {
@@ -214,6 +223,45 @@ export class PrismaCommunicationEmailSendStore implements CommunicationEmailSend
     return claimed.count === 1;
   }
 
+  async claimBatch(
+    candidates: readonly CommunicationSendCandidate[],
+    now: Date,
+    mode: EmailMode,
+    actualRecipientEmail: string,
+  ): Promise<boolean> {
+    if (candidates.length === 0) return false;
+    const staleBefore = new Date(now.getTime() - STALE_SENDING_MS);
+    try {
+      await this.prisma.$transaction(async (transaction) => {
+        for (const candidate of candidates) {
+          const state: Prisma.CommunicationDeliveryWhereInput =
+            candidate.status === CommunicationDeliveryStatus.READY
+              ? { status: CommunicationDeliveryStatus.READY }
+              : candidate.status === CommunicationDeliveryStatus.FAILED
+                ? { status: CommunicationDeliveryStatus.FAILED, nextRetryAt: { not: null, lte: now } }
+                : { status: CommunicationDeliveryStatus.SENDING, sendingStartedAt: { not: null, lte: staleBefore } };
+          const claimed = await transaction.communicationDelivery.updateMany({
+            where: { id: candidate.id, attemptCount: candidate.attemptCount, ...state },
+            data: {
+              status: CommunicationDeliveryStatus.SENDING,
+              sendingStartedAt: now,
+              failedAt: null,
+              nextRetryAt: null,
+              lastError: null,
+              emailMode: mode,
+              actualRecipientEmail,
+              attemptCount: { increment: 1 },
+            },
+          });
+          if (claimed.count !== 1) throw new Error("BATCH_CLAIM_CONFLICT");
+        }
+      }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   getCurrentTask(sourceRecordId: string): Promise<CurrentTaskState | null> {
     return this.prisma.trackedTask.findUnique({
       where: { airtableRecordId: sourceRecordId },
@@ -266,6 +314,31 @@ export class PrismaCommunicationEmailSendStore implements CommunicationEmailSend
       }),
       this.prisma.communicationAsset.updateMany({
         where: { deliveryId, exposedAt: null }, data: { exposedAt: sentAt },
+      }),
+    ]);
+  }
+
+  async markBatchSent(
+    deliveryIds: readonly string[],
+    messageId: string,
+    sentAt: Date,
+  ): Promise<void> {
+    if (deliveryIds.length === 0) return;
+    await this.prisma.$transaction([
+      this.prisma.communicationDelivery.updateMany({
+        where: { id: { in: [...deliveryIds] }, status: CommunicationDeliveryStatus.SENDING },
+        data: {
+          status: CommunicationDeliveryStatus.SENT,
+          sentAt,
+          resendMessageId: messageId,
+          failedAt: null,
+          nextRetryAt: null,
+          lastError: null,
+        },
+      }),
+      this.prisma.communicationAsset.updateMany({
+        where: { deliveryId: { in: [...deliveryIds] }, exposedAt: null },
+        data: { exposedAt: sentAt },
       }),
     ]);
   }
@@ -371,13 +444,247 @@ export async function runCommunicationEmailSender(input: {
   const now = input.now ?? (() => new Date());
   const candidates = await input.store.findCandidates(now(), CANDIDATE_LIMIT);
   stats.candidates = candidates.length;
+  const processed = new Set<string>();
+
   for (const candidate of candidates) {
+    if (processed.has(candidate.id)) continue;
+
+    if (isRepairScenario(candidate.scenario)) {
+      const key = repairBatchKey(candidate);
+      const batch = candidates
+        .filter((item) => !processed.has(item.id) && repairBatchKey(item) === key)
+        .sort((a, b) => a.id.localeCompare(b.id));
+      batch.forEach((item) => processed.add(item.id));
+
+      const outcome = await sendCommunicationRepairBatch({
+        ...input,
+        candidates: batch,
+        now: now(),
+      });
+      stats.sent += outcome.sent;
+      stats.failed += outcome.failed;
+      stats.cancelled += outcome.cancelled;
+      continue;
+    }
+
+    processed.add(candidate.id);
     const outcome = await sendCommunicationDelivery({ ...input, candidate, now: now() });
     if (outcome === "SENT") stats.sent += 1;
     if (outcome === "FAILED") stats.failed += 1;
     if (outcome === "CANCELLED") stats.cancelled += 1;
   }
   return stats;
+}
+
+export async function sendCommunicationRepairBatch(input: {
+  store: CommunicationEmailSendStore;
+  provider: EmailProvider;
+  grants: CommunicationPortalGrantProvider;
+  unsubscribeGrants: CommunicationUnsubscribeGrantProvider;
+  dataSource: CommunicationTemplateDataSource;
+  assetPreflight?: CommunicationAssetPreflight;
+  config: CommunicationEmailSenderConfig;
+  candidates: readonly CommunicationSendCandidate[];
+  now: Date;
+  log?: (message: string) => void;
+}): Promise<{ sent: number; failed: number; cancelled: number }> {
+  const result = { sent: 0, failed: 0, cancelled: 0 };
+  const activation = input.config.communicationSendNotBefore;
+  if (!activation || input.candidates.length === 0) return result;
+
+  const eligible: CommunicationSendCandidate[] = [];
+  for (const candidate of input.candidates) {
+    if (!snapshotString(candidate.event.eventSnapshot, "sourceHospitalRecordId")) {
+      const reason = isPreActivation(candidate, activation)
+        ? CommunicationDeliveryCancelReason.MISSING_HOSPITAL_SCOPE_LEGACY
+        : CommunicationDeliveryCancelReason.MISSING_HOSPITAL_SCOPE;
+      if (await input.store.cancel(candidate.id, reason, input.now)) result.cancelled += 1;
+      input.log?.(`COMMUNICATION_DELIVERY_CANCELLED deliveryId=${candidate.id} reason=${reason}`);
+      continue;
+    }
+    if (isPreActivation(candidate, activation)) {
+      if (await input.store.cancel(
+        candidate.id,
+        CommunicationDeliveryCancelReason.PRE_ACTIVATION,
+        input.now,
+      )) result.cancelled += 1;
+      input.log?.(`COMMUNICATION_EMAIL_CANCELLED deliveryId=${candidate.id} reason=PRE_ACTIVATION`);
+      continue;
+    }
+    eligible.push(candidate);
+  }
+  if (eligible.length === 0) return result;
+
+  let actualRecipientEmail: string;
+  try {
+    actualRecipientEmail = resolveActualRecipient({
+      mode: input.config.mode,
+      intendedRecipientEmail: eligible[0]!.recipient.email ?? "",
+      testEmail: input.config.testEmail,
+      productionEmailsEnabled: input.config.productionEmailsEnabled,
+    });
+    assertTestRecipient({
+      mode: input.config.mode,
+      actualRecipientEmail,
+      testEmail: input.config.testEmail,
+    });
+  } catch (error: unknown) {
+    const reason = recipientErrorCode(error);
+    for (const candidate of eligible) {
+      const claimed = await input.store.claim(candidate, input.now, input.config.mode, "");
+      if (claimed) {
+        await input.store.markFailed(candidate.id, reason, input.now, null);
+        result.failed += 1;
+      }
+    }
+    return result;
+  }
+
+  const batchClaimed = await input.store.claimBatch(
+    eligible,
+    input.now,
+    input.config.mode,
+    actualRecipientEmail,
+  );
+  if (!batchClaimed) return result;
+  const claimed = [...eligible];
+  for (const candidate of claimed) {
+    input.log?.(
+      `COMMUNICATION_EMAIL_CLAIMED deliveryId=${candidate.id} scenario=${candidate.scenario} batch=true`,
+    );
+  }
+
+  if (input.config.communicationAssetsEnabled && input.assetPreflight) {
+    for (const candidate of claimed) {
+      await input.assetPreflight.prepare({
+        id: candidate.id,
+        scenario: candidate.scenario,
+        sourceRecordId: candidate.event.sourceRecordId,
+        eventSnapshot: candidate.event.eventSnapshot,
+      });
+    }
+  }
+
+  if (!input.config.resendApiKey) {
+    await failRepairBatch(input, claimed, "RESEND_API_KEY_MISSING", false);
+    result.failed += claimed.length;
+    return result;
+  }
+
+  // The lexicographically first delivery is the deterministic owner of the
+  // portal/unsubscribe links for the whole batch. Failed retries keep the same
+  // owner because all deliveries in the batch fail and retry together.
+  const owner = claimed.slice().sort((a, b) => a.id.localeCompare(b.id))[0]!;
+  let grantResult: Awaited<ReturnType<CommunicationPortalGrantProvider["getOrCreatePortalAccessGrant"]>>;
+  try {
+    grantResult = await input.grants.getOrCreatePortalAccessGrant(owner.id, input.now);
+  } catch (error: unknown) {
+    const failure = portalGrantFailure(error);
+    await failRepairBatch(input, claimed, failure.code, failure.retryable);
+    result.failed += claimed.length;
+    return result;
+  }
+
+  let unsubscribeResult: Awaited<ReturnType<CommunicationUnsubscribeGrantProvider["getOrCreateUnsubscribeGrant"]>>;
+  try {
+    unsubscribeResult = await input.unsubscribeGrants.getOrCreateUnsubscribeGrant(owner.id, input.now);
+  } catch (error: unknown) {
+    const failure = portalGrantFailure(error);
+    await failRepairBatch(input, claimed, failure.code, failure.retryable);
+    result.failed += claimed.length;
+    return result;
+  }
+
+  let snapshot = owner.sendSnapshot;
+  if (!snapshot) {
+    try {
+      const payload = await buildCommunicationRepairBatchPayload({
+        deliveries: claimed.map((candidate) => ({
+          id: candidate.id,
+          scenario: candidate.scenario,
+          sourceRecordId: candidate.event.sourceRecordId,
+          eventSnapshot: candidate.event.eventSnapshot,
+        })),
+        dataSource: input.dataSource,
+        secureUrl: grantResult.url,
+        unsubscribeUrl: unsubscribeResult.url,
+        preparedAt: owner.scheduledFor,
+        timeZone: input.config.timeZone,
+      });
+      const {
+        EMMA_SECURE_URL: _secureUrl,
+        EMMA_UNSUBSCRIBE_URL: _unsubscribeUrl,
+        ...safeVariables
+      } = payload.variables;
+      const prepared: PersistedCommunicationSendSnapshot = {
+        templateId: payload.templateId,
+        variables: safeVariables,
+        portalGrantPublicId: grantResult.grant.publicId,
+        unsubscribeGrantPublicId: unsubscribeResult.grant.publicId,
+        preparedAt: owner.scheduledFor.toISOString(),
+      };
+      for (const candidate of claimed) {
+        const stored = await input.store.saveSnapshot(candidate.id, prepared, input.now);
+        if (candidate.id === owner.id) snapshot = stored;
+      }
+      snapshot ??= prepared;
+    } catch (error: unknown) {
+      const failure = templateFailure(error);
+      await failRepairBatch(input, claimed, failure.code, failure.retryable);
+      result.failed += claimed.length;
+      return result;
+    }
+  }
+
+  if (snapshot.portalGrantPublicId !== grantResult.grant.publicId) {
+    await failRepairBatch(input, claimed, "SEND_SNAPSHOT_GRANT_MISMATCH", false);
+    result.failed += claimed.length;
+    return result;
+  }
+  if (snapshot.unsubscribeGrantPublicId !== unsubscribeResult.grant.publicId) {
+    await failRepairBatch(input, claimed, "SEND_SNAPSHOT_UNSUBSCRIBE_GRANT_MISMATCH", false);
+    result.failed += claimed.length;
+    return result;
+  }
+
+  let variables: Record<string, TemplateVariableValue>;
+  try {
+    variables = normalizeCommunicationTemplateVariables(snapshot.templateId, {
+      ...snapshot.variables,
+      EMMA_SECURE_URL: grantResult.url,
+      EMMA_UNSUBSCRIBE_URL: unsubscribeResult.url,
+    });
+  } catch {
+    await failRepairBatch(input, claimed, "TEMPLATE_VARIABLES_INVALID", false);
+    result.failed += claimed.length;
+    return result;
+  }
+
+  try {
+    const response = await input.provider.send({
+      to: actualRecipientEmail,
+      replyTo: input.config.replyTo,
+      template: { id: snapshot.templateId, variables },
+      idempotencyKey: communicationBatchIdempotencyKey(claimed.map((item) => item.id)),
+    });
+    if (!response.ok) {
+      const failure = classifyProviderFailure(response);
+      await failRepairBatch(input, claimed, failure.code, failure.retryable);
+      result.failed += claimed.length;
+      return result;
+    }
+
+    await input.store.markBatchSent(claimed.map((candidate) => candidate.id), response.id, input.now);
+    result.sent += claimed.length;
+    input.log?.(
+      `COMMUNICATION_EMAIL_BATCH_SENT scenario=${owner.scenario} deliveries=${claimed.length} recipientType=${owner.recipient.recipientType}`,
+    );
+    return result;
+  } catch {
+    await failRepairBatch(input, claimed, "EMAIL_NETWORK_ERROR", true);
+    result.failed += claimed.length;
+    return result;
+  }
 }
 
 export async function sendCommunicationDelivery(input: {
@@ -517,6 +824,7 @@ export async function sendCommunicationDelivery(input: {
         unsubscribeUrl: unsubscribeResult.url,
         preparedAt: input.now,
         timeZone: input.config.timeZone,
+        ...(input.config.officeContact ? { officeContact: input.config.officeContact } : {}),
       });
       const { EMMA_SECURE_URL: _secureUrl, EMMA_UNSUBSCRIBE_URL: _unsubscribeUrl, ...safeVariables } = payload.variables;
       snapshot = await input.store.saveSnapshot(input.candidate.id, {
@@ -572,6 +880,56 @@ export async function sendCommunicationDelivery(input: {
     return "SENT";
   } catch {
     return fail(input, "EMAIL_NETWORK_ERROR", true, attempt);
+  }
+}
+
+function isRepairScenario(scenario: CommunicationScenario): boolean {
+  return scenario === CommunicationScenario.REPAIR_RECEIVED ||
+    scenario === CommunicationScenario.REPAIR_COMPLETED;
+}
+
+function repairBatchKey(candidate: CommunicationSendCandidate): string {
+  const hospital = snapshotString(candidate.event.eventSnapshot, "sourceHospitalRecordId") ?? "";
+  const recipient = (candidate.recipient.normalizedEmail ?? candidate.recipient.email ?? "")
+    .trim()
+    .toLowerCase();
+  return [candidate.scenario, candidate.scheduledFor.toISOString(), hospital, recipient].join("|");
+}
+
+export function communicationBatchIdempotencyKey(deliveryIds: readonly string[]): string {
+  const stableIds = [...deliveryIds].sort().join(".");
+  // A compact deterministic hash keeps the provider idempotency key well below
+  // header-size limits even for large hospital batches.
+  let hash = 2166136261;
+  for (let index = 0; index < stableIds.length; index += 1) {
+    hash ^= stableIds.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return `emma-communication-batch/${(hash >>> 0).toString(16).padStart(8, "0")}`;
+}
+
+async function failRepairBatch(
+  input: Parameters<typeof sendCommunicationRepairBatch>[0],
+  candidates: readonly CommunicationSendCandidate[],
+  reason: string,
+  retryable: boolean,
+): Promise<void> {
+  for (const candidate of candidates) {
+    // Prisma claims increment the persisted attempt count without mutating the
+    // fetched candidate object, while in-memory/test stores may mutate it.
+    // Support both semantics so retry timing remains 1/5/15 minutes.
+    const attempt = candidate.status === CommunicationDeliveryStatus.SENDING
+      ? candidate.attemptCount
+      : candidate.attemptCount + 1;
+    const nextRetryAt = retryable && attempt < MAX_ATTEMPTS
+      ? new Date(input.now.getTime() + RETRY_DELAYS_MS[attempt - 1]!)
+      : null;
+    await input.store.markFailed(candidate.id, reason, input.now, nextRetryAt);
+    input.log?.(
+      nextRetryAt
+        ? `COMMUNICATION_EMAIL_RETRY deliveryId=${candidate.id} attempt=${attempt} reason=${reason} batch=true`
+        : `COMMUNICATION_EMAIL_FAILED deliveryId=${candidate.id} reason=${reason} batch=true`,
+    );
   }
 }
 

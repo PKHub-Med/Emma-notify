@@ -28,6 +28,8 @@ describe("central Airtable contract", () => {
       day: "fldAImlfkzvwvBWM3",
       plannedDay: "fld90rJaXlfO9uF20",
       activity: "fld9RzXBJhbtuByps",
+      duration: "fldWJMm0G7ZyOMZXR",
+      department: "fldQRN7HvTXzbM80h",
       assigneeLinks: "fldycuqcSGGjlRrNn",
       completed: "fldoDQQssvNrgpghY",
       status: "fldf9YgAt4q2MfJaL",

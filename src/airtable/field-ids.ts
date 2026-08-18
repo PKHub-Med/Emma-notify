@@ -24,6 +24,8 @@ export const TASK_FIELDS = {
   emmaCustomerStatus: "fldiTY6M5rQLoOFvd",
   emmaMailTemplate: "fldgGORaQ08utJddW",
   sourceHospitalLink: "fldDQYxpMRt6xaHCE",
+  department: "fldQRN7HvTXzbM80h",
+  duration: "fldWJMm0G7ZyOMZXR",
 } as const;
 
 export const EMPLOYEE_FIELDS = {
@@ -68,6 +70,8 @@ export const SERVICE_ORDER_FIELDS = {
   emmaCustomerStatus: "fldOi8KDzJ1zwMaWJ",
   emmaMailTemplate: "fldfqDFr9bJ4DiMRe",
   sourceHospitalLink: "fldXGnsGh3ok8WlMe",
+  department: "fld4esE0HyzXB2i4l",
+  completedAt: "fldsyjQ9U7NR4IZuQ",
 } as const;
 
 // Attachment fields are intentionally separate from SERVICE_ORDER_FIELD_IDS.
@@ -102,6 +106,8 @@ export const INSPECTION_FIELDS = {
   scheduledDate: "fldsN3Yu1qFao8B87",
   performedAt: "fld3knASxSRaBdDVt",
   result: "fldWQzKcmaHodBwLF",
+  department: "fldhWkH5UBqAPmj6m",
+  estimatedDuration: "fldxx69OVN0ML7ZJG",
 } as const;
 
 export const DEVICE_FIELDS = {

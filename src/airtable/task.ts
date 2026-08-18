@@ -10,6 +10,8 @@ export type MappedTask = {
   airtableRecordId: string;
   taskNumber: string | null;
   day: string | null;
+  department: string | null;
+  durationSeconds: number | null;
   activity: string | null;
   performerRecordIds: string[];
   completed: boolean | null;
@@ -32,6 +34,8 @@ export function mapTask(record: AirtableRecord): MappedTask {
     airtableRecordId: record.id,
     taskNumber: toOptionalString(record.fields[TASK_FIELDS.sequenceNumber]),
     day: toOptionalString(record.fields[TASK_FIELDS.day]),
+    department: toOptionalString(record.fields[TASK_FIELDS.department]),
+    durationSeconds: toOptionalNumber(record.fields[TASK_FIELDS.duration]),
     activity: toOptionalString(record.fields[TASK_FIELDS.activity]),
     performerRecordIds: toLinkedRecordIds(record.fields[TASK_FIELDS.assigneeLinks]),
     completed: toOptionalBoolean(record.fields[TASK_FIELDS.completed]),
@@ -59,4 +63,8 @@ export function mapTask(record: AirtableRecord): MappedTask {
 
 function toOptionalBoolean(value: unknown): boolean | null {
   return typeof value === "boolean" ? value : null;
+}
+
+function toOptionalNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
 }

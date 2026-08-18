@@ -9,6 +9,8 @@ describe("task contract mapper", () => {
       [TASK_FIELDS.sequenceNumber]: 17,
       [TASK_FIELDS.day]: "2026-08-12",
       [TASK_FIELDS.activity]: "Przypomnienie",
+      [TASK_FIELDS.department]: "BLOK PORODOWY ",
+      [TASK_FIELDS.duration]: 10800,
       [TASK_FIELDS.assigneeLinks]: ["recEmployeeA", "recEmployeeB"],
       [TASK_FIELDS.completed]: false,
       [TASK_FIELDS.status]: "Zaplanowane",
@@ -27,6 +29,8 @@ describe("task contract mapper", () => {
 
     expect(mapped).toMatchObject({
       taskNumber: "17",
+      department: "BLOK PORODOWY",
+      durationSeconds: 10800,
       performerRecordIds: ["recEmployeeA", "recEmployeeB"],
       linkedServiceOrderRecordIds: ["recServiceA", "recServiceB"],
       linkedInspectionRecordIds: ["recInspectionA", "recInspectionB"],
