@@ -29,7 +29,10 @@ import {
   type CurrentTaskState,
 } from "./communication-delivery.js";
 import type { CommunicationAssetPreflight } from "../assets/preflight.js";
-import { normalizeCommunicationTemplateVariables } from "./communication-template-registry.js";
+import {
+  normalizeCommunicationTemplateVariables,
+  REPAIR_ROW_SLOT_COUNT,
+} from "./communication-template-registry.js";
 
 const MAX_ATTEMPTS = 4;
 const STALE_SENDING_MS = 5 * 60_000;
@@ -451,19 +454,23 @@ export async function runCommunicationEmailSender(input: {
 
     if (isRepairScenario(candidate.scenario)) {
       const key = repairBatchKey(candidate);
-      const batch = candidates
+      const matching = candidates
         .filter((item) => !processed.has(item.id) && repairBatchKey(item) === key)
         .sort((a, b) => a.id.localeCompare(b.id));
-      batch.forEach((item) => processed.add(item.id));
 
-      const outcome = await sendCommunicationRepairBatch({
-        ...input,
-        candidates: batch,
-        now: now(),
-      });
-      stats.sent += outcome.sent;
-      stats.failed += outcome.failed;
-      stats.cancelled += outcome.cancelled;
+      for (let offset = 0; offset < matching.length; offset += REPAIR_ROW_SLOT_COUNT) {
+        const batch = matching.slice(offset, offset + REPAIR_ROW_SLOT_COUNT);
+        batch.forEach((item) => processed.add(item.id));
+
+        const outcome = await sendCommunicationRepairBatch({
+          ...input,
+          candidates: batch,
+          now: now(),
+        });
+        stats.sent += outcome.sent;
+        stats.failed += outcome.failed;
+        stats.cancelled += outcome.cancelled;
+      }
       continue;
     }
 

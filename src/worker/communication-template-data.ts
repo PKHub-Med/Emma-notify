@@ -9,7 +9,13 @@ import type { AirtableIncrementalSource } from "../airtable/types.js";
 import { toOptionalString } from "../airtable/values.js";
 import type { TemplateVariableValue } from "../email/resend-client.js";
 import { parseLocalDate } from "./communication-time.js";
-import { templateAliasForScenario } from "./communication-template-registry.js";
+import {
+  INSPECTION_ROW_SLOT_COUNT,
+  REPAIR_ROW_SLOT_COUNT,
+  TEMPLATE_STRING_VALUE_MAX_LENGTH,
+  templateAliasForScenario,
+  templateRowSlotKey,
+} from "./communication-template-registry.js";
 
 export type TemplateDelivery = {
   id: string;
@@ -213,7 +219,7 @@ export async function buildCommunicationTemplatePayload(input: {
         PASSED_COUNT: count("WORKING"),
         CONDITIONAL_COUNT: count("CONDITIONAL"),
         FAILED_COUNT: count("DEFECTIVE"),
-        RESULT_ROWS: resultRows(completed),
+        ...rowSlotVariables("RESULT_ROW", resultRows(completed), INSPECTION_ROW_SLOT_COUNT),
       },
     };
   }
@@ -226,7 +232,7 @@ export async function buildCommunicationTemplatePayload(input: {
       "—",
     ),
     DEVICE_COUNT: inspections.length,
-    DEVICES_ROWS: deviceRows(inspections),
+    ...rowSlotVariables("DEVICE_ROW", deviceRows(inspections), INSPECTION_ROW_SLOT_COUNT),
   };
 
   if (input.delivery.scenario === CommunicationScenario.INSPECTION_DATE_CONFIRMED) {
@@ -370,7 +376,7 @@ export async function buildCommunicationRepairBatchPayload(input: {
       ),
       EMAIL_TITLE: title,
       REPAIR_COUNT: rows.length,
-      REPAIRS_ROWS: repairRows(rows, scenario),
+      ...rowSlotVariables("REPAIR_ROW", repairRows(rows, scenario), REPAIR_ROW_SLOT_COUNT),
       CASE_NUMBER: first.caseNumber,
       CLIENT_ORDER_NUMBER: first.clientOrderNumber,
       REPORTED_AT: first.reportedAt,
@@ -407,20 +413,19 @@ function commonVariables(
   };
 }
 
-function deviceRows(inspections: TemplateInspection[]): string {
+function deviceRows(inspections: TemplateInspection[]): string[] {
   return inspections.map((inspection, index) => {
+    const bottomBorder = index < inspections.length - 1
+      ? "border-bottom:1px solid #D9E1EB;"
+      : "";
     const details = [
-      `<strong>${htmlEscape(display(inspection.deviceName, "Urządzenie"))}</strong>`,
-      `Producent: ${htmlEscape(display(inspection.manufacturer, "—"))}`,
-      `Model: ${htmlEscape(display(inspection.model, "—"))}`,
-      `SN: ${htmlEscape(display(inspection.serialNumber, "—"))}`,
-      `Nr inw.: ${htmlEscape(display(inspection.inventoryNumber, "—"))}`,
-      `Nr zlecenia klienta: ${htmlEscape(display(inspection.clientOrderNumber, "brak numeru"))}`,
-      `Numer Sprawy: ${htmlEscape(display(inspection.businessNumber, "—"))}`,
-    ].join("<br>");
+      `<div style="font-size:13px;line-height:18px;font-weight:800;color:#1F2F49;">${htmlEscape(display(inspection.deviceName, "Urządzenie"))}</div>`,
+      `<div style="margin-top:3px;font-size:11px;line-height:17px;color:#34445D;">Producent: ${htmlEscape(display(inspection.manufacturer, "—"))}<br>Model: ${htmlEscape(display(inspection.model, "—"))}</div>`,
+      `<div style="margin-top:4px;font-size:10px;line-height:16px;color:#66758A;">SN: ${htmlEscape(display(inspection.serialNumber, "—"))} &#183; Nr inw.: ${htmlEscape(display(inspection.inventoryNumber, "—"))}<br>Numer Sprawy: ${htmlEscape(display(inspection.businessNumber, "—"))}<br>Nr zlecenia klienta: ${htmlEscape(display(inspection.clientOrderNumber, "brak numeru"))}</div>`,
+    ].join("");
 
-    return `<tr><td style="text-align:center">${index + 1}</td><td>${details}</td><td style="text-align:center">${htmlEscape(formatDuration(inspection.estimatedDurationSeconds))}</td></tr>`;
-  }).join("");
+    return `<tr><td style="padding:13px 8px;${bottomBorder}border-right:1px solid #D9E1EB;text-align:center;vertical-align:middle;font-size:11px;line-height:17px;color:#34445D;">${index + 1}</td><td style="padding:13px 12px;${bottomBorder}border-right:1px solid #D9E1EB;vertical-align:top;">${details}</td><td style="padding:13px 8px;${bottomBorder}text-align:center;vertical-align:middle;font-size:11px;line-height:17px;font-weight:700;color:#1F2F49;white-space:nowrap;">${htmlEscape(formatDuration(inspection.estimatedDurationSeconds))}</td></tr>`;
+  });
 }
 
 function repairRows(
@@ -438,25 +443,94 @@ function repairRows(
     deviceStatus: string;
   }>,
   scenario: CommunicationScenario,
-): string {
+): string[] {
   return items.map((item, index) => {
-    const dateLabel = scenario === CommunicationScenario.REPAIR_RECEIVED
-      ? `Data zgłoszenia: ${item.reportedAt}`
-      : `Data zakończenia: ${item.completedAt}`;
+    const bottomBorder = index < items.length - 1
+      ? "border-bottom:1px solid #D9E1EB;"
+      : "";
+    const date = scenario === CommunicationScenario.REPAIR_RECEIVED
+      ? item.reportedAt
+      : item.completedAt;
 
-    const status = scenario === CommunicationScenario.REPAIR_COMPLETED
-      ? `<br>Status naprawy: ${htmlEscape(item.repairStatus)}<br>Status urządzenia: ${htmlEscape(item.deviceStatus)}`
+    const statuses = scenario === CommunicationScenario.REPAIR_COMPLETED
+      ? `<div style="margin-top:9px;">${statusBadge(item.repairStatus, repairStatusTone(item.repairStatus))}<span style="display:inline-block;width:5px;">&nbsp;</span>${statusBadge(`Urządzenie: ${item.deviceStatus}`, deviceStatusTone(item.deviceStatus))}</div>`
       : "";
 
-    return `<tr><td style="text-align:center">${index + 1}</td><td><strong>${htmlEscape(item.deviceName)}</strong><br>${htmlEscape(item.manufacturer)} · ${htmlEscape(item.model)}<br>SN: ${htmlEscape(item.serialNumber)} · Nr inw.: ${htmlEscape(item.inventoryNumber)}<br>Numer Sprawy: ${htmlEscape(item.caseNumber)}<br>Nr zlecenia klienta: ${htmlEscape(item.clientOrderNumber)}<br>${htmlEscape(dateLabel)}${status}</td></tr>`;
-  }).join("");
+    const details = `<div style="font-size:13px;line-height:18px;font-weight:800;color:#1F2F49;">${htmlEscape(item.deviceName)}</div><div style="margin-top:3px;font-size:11px;line-height:17px;color:#34445D;">${htmlEscape(item.manufacturer)} &#183; ${htmlEscape(item.model)}</div><div style="margin-top:4px;font-size:10px;line-height:16px;color:#66758A;">SN: ${htmlEscape(item.serialNumber)} &#183; Nr inw.: ${htmlEscape(item.inventoryNumber)}<br>Numer Sprawy: ${htmlEscape(item.caseNumber)}<br>Nr zlecenia klienta: ${htmlEscape(item.clientOrderNumber)}</div>${statuses}`;
+
+    return `<tr><td style="padding:14px 8px;${bottomBorder}border-right:1px solid #D9E1EB;text-align:center;vertical-align:middle;font-size:11px;line-height:17px;color:#34445D;">${index + 1}</td><td style="padding:14px 12px;${bottomBorder}border-right:1px solid #D9E1EB;vertical-align:top;">${details}</td><td style="padding:14px 10px;${bottomBorder}text-align:center;vertical-align:middle;font-size:11px;line-height:17px;font-weight:700;color:#1F2F49;white-space:nowrap;">${htmlEscape(date)}</td></tr>`;
+  });
 }
 
 function resultRows(
   items: Array<{ inspection: TemplateInspection; result: InspectionResult }>,
+): string[] {
+  return items.map(({ inspection, result }, index) => {
+    const bottomBorder = index < items.length - 1
+      ? "border-bottom:1px solid #D9E1EB;"
+      : "";
+    const details = `<div style="font-size:13px;line-height:18px;font-weight:800;color:#1F2F49;">${htmlEscape(display(inspection.deviceName, "Urządzenie"))}</div><div style="margin-top:3px;font-size:11px;line-height:17px;color:#34445D;">${htmlEscape(display(inspection.manufacturer, "—"))} &#183; ${htmlEscape(display(inspection.model, "—"))}</div><div style="margin-top:4px;font-size:10px;line-height:16px;color:#66758A;">SN: ${htmlEscape(display(inspection.serialNumber, "—"))} &#183; Nr inw.: ${htmlEscape(display(inspection.inventoryNumber, "—"))}<br>Numer Sprawy: ${htmlEscape(display(inspection.businessNumber, "—"))}<br>Nr zlecenia klienta: ${htmlEscape(display(inspection.clientOrderNumber, "brak numeru"))}</div>`;
+    return `<tr><td style="padding:13px 8px;${bottomBorder}border-right:1px solid #D9E1EB;text-align:center;vertical-align:middle;font-size:11px;line-height:17px;color:#34445D;">${index + 1}</td><td style="padding:13px 12px;${bottomBorder}border-right:1px solid #D9E1EB;vertical-align:top;">${details}</td><td style="padding:13px 10px;${bottomBorder}text-align:center;vertical-align:middle;">${statusBadge(result.label, inspectionResultTone(result.key))}</td></tr>`;
+  });
+}
+
+function rowSlotVariables(
+  prefix: string,
+  rows: readonly string[],
+  slotCount: number,
+): Record<string, string> {
+  if (rows.length > slotCount) {
+    throw new CommunicationTemplateDataError("TEMPLATE_ROW_LIMIT_EXCEEDED", false);
+  }
+
+  const variables: Record<string, string> = {};
+  for (let index = 0; index < slotCount; index += 1) {
+    const row = rows[index] ?? "";
+    if (row.length > TEMPLATE_STRING_VALUE_MAX_LENGTH) {
+      throw new CommunicationTemplateDataError("TEMPLATE_VARIABLE_TOO_LARGE", false);
+    }
+    variables[templateRowSlotKey(prefix, index)] = row;
+  }
+  return variables;
+}
+
+function statusBadge(
+  label: string,
+  tone: { background: string; color: string; border: string },
 ): string {
-  return items.map(({ inspection, result }, index) =>
-    `<tr><td>${index + 1}</td><td>${htmlEscape(deviceDescription(inspection))}</td><td>${htmlEscape(result.label)}</td></tr>`).join("");
+  return `<span style="display:inline-block;padding:5px 8px;border-radius:999px;border:1px solid ${tone.border};background:${tone.background};color:${tone.color};font-size:9px;line-height:13px;font-weight:800;white-space:nowrap;">${htmlEscape(label)}</span>`;
+}
+
+function repairStatusTone(value: string) {
+  const status = value.trim().toUpperCase();
+  if (status.includes("ZAKOŃCZ")) {
+    return { background: "#E7F3EF", color: "#2B7A64", border: "#C9E5DC" };
+  }
+  return { background: "#EAF0F9", color: "#33598F", border: "#D4E0F0" };
+}
+
+function deviceStatusTone(value: string) {
+  const status = value.trim().toUpperCase();
+  if (status.includes("NIESPRAW")) {
+    return { background: "#F8E9E9", color: "#9A4949", border: "#EECFCF" };
+  }
+  if (status.includes("WARUNK")) {
+    return { background: "#FBF1DB", color: "#8B6117", border: "#EFDCA9" };
+  }
+  if (status.includes("SPRAW")) {
+    return { background: "#E7F3EF", color: "#2B7A64", border: "#C9E5DC" };
+  }
+  return { background: "#F1F4F8", color: "#66758A", border: "#D9E1EB" };
+}
+
+function inspectionResultTone(key: InspectionResult["key"]) {
+  if (key === "DEFECTIVE") {
+    return { background: "#F8E9E9", color: "#9A4949", border: "#EECFCF" };
+  }
+  if (key === "CONDITIONAL") {
+    return { background: "#FBF1DB", color: "#8B6117", border: "#EFDCA9" };
+  }
+  return { background: "#E7F3EF", color: "#2B7A64", border: "#C9E5DC" };
 }
 
 function deviceDescription(inspection: TemplateInspection): string {

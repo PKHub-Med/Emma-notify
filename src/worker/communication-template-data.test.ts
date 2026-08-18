@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { CommunicationScenario } from "../generated/prisma/enums.js";
-import { COMMUNICATION_TEMPLATE_ALIASES } from "./communication-template-registry.js";
+import {
+  COMMUNICATION_TEMPLATE_ALIASES,
+  INSPECTION_ROW_SLOT_COUNT,
+  REPAIR_ROW_SLOT_COUNT,
+  TEMPLATE_STRING_VALUE_MAX_LENGTH,
+  templateRowSlotKey,
+} from "./communication-template-registry.js";
 import {
   buildCommunicationTemplatePayload,
   type CommunicationTemplateDataSource,
@@ -12,8 +18,12 @@ const preparedAt = new Date("2026-08-15T10:00:00Z");
 const secureUrl = "https://notify.example.org/p/signed-token";
 const unsubscribeUrl = "https://notify.example.org/u/signed-token";
 
+const repairRowKeys = slotKeys("REPAIR_ROW", REPAIR_ROW_SLOT_COUNT);
+const deviceRowKeys = slotKeys("DEVICE_ROW", INSPECTION_ROW_SLOT_COUNT);
+const resultRowKeys = slotKeys("RESULT_ROW", INSPECTION_ROW_SLOT_COUNT);
+
 const repairKeys = [
-  "SERVICE_NAME","SENT_AT","EMAIL_TITLE","REPAIR_COUNT","REPAIRS_ROWS",
+  "SERVICE_NAME","SENT_AT","EMAIL_TITLE","REPAIR_COUNT",...repairRowKeys,
   "CASE_NUMBER","CLIENT_ORDER_NUMBER","REPORTED_AT","COMPLETED_AT","DEVICE_NAME",
   "MANUFACTURER_MODEL","SERIAL_NUMBER","INVENTORY_NUMBER","REPAIR_STATUS",
   "DEVICE_STATUS","EMMA_SECURE_URL","EMMA_UNSUBSCRIBE_URL",
@@ -21,10 +31,10 @@ const repairKeys = [
 const expectedKeys: Record<CommunicationScenario, string[]> = {
   REPAIR_RECEIVED: repairKeys,
   REPAIR_COMPLETED: repairKeys,
-  INSPECTION_DATE_CONFIRMED: ["SERVICE_NAME","SENT_AT","VISIT_DATE","DEPARTMENT","DEVICE_COUNT","DEVICES_ROWS","EMMA_SECURE_URL","EMMA_UNSUBSCRIBE_URL"],
-  INSPECTION_DATE_PROPOSED: ["SERVICE_NAME","SENT_AT","VISIT_DATE","DEPARTMENT","DEVICE_COUNT","COORDINATOR_NAME","COORDINATOR_PHONE","COORDINATOR_EMAIL","COORDINATOR_REPLY_URL","DEVICES_ROWS","EMMA_SECURE_URL","EMMA_UNSUBSCRIBE_URL"],
-  INSPECTION_REMINDER: ["SERVICE_NAME","SENT_AT","VISIT_DATE","DEPARTMENT","DEVICE_COUNT","TECHNICIAN_NAME","TECHNICIAN_PHONE","TECHNICIAN_PHONE_TEL","TECHNICIAN_EMAIL","DEVICES_ROWS","EMMA_SECURE_URL","EMMA_UNSUBSCRIBE_URL"],
-  INSPECTION_COMPLETED: ["SERVICE_NAME","SENT_AT","VISIT_DATE","PASSED_COUNT","CONDITIONAL_COUNT","FAILED_COUNT","RESULT_ROWS","EMMA_SECURE_URL","EMMA_UNSUBSCRIBE_URL"],
+  INSPECTION_DATE_CONFIRMED: ["SERVICE_NAME","SENT_AT","VISIT_DATE","DEPARTMENT","DEVICE_COUNT",...deviceRowKeys,"EMMA_SECURE_URL","EMMA_UNSUBSCRIBE_URL"],
+  INSPECTION_DATE_PROPOSED: ["SERVICE_NAME","SENT_AT","VISIT_DATE","DEPARTMENT","DEVICE_COUNT","COORDINATOR_NAME","COORDINATOR_PHONE","COORDINATOR_EMAIL","COORDINATOR_REPLY_URL",...deviceRowKeys,"EMMA_SECURE_URL","EMMA_UNSUBSCRIBE_URL"],
+  INSPECTION_REMINDER: ["SERVICE_NAME","SENT_AT","VISIT_DATE","DEPARTMENT","DEVICE_COUNT","TECHNICIAN_NAME","TECHNICIAN_PHONE","TECHNICIAN_PHONE_TEL","TECHNICIAN_EMAIL",...deviceRowKeys,"EMMA_SECURE_URL","EMMA_UNSUBSCRIBE_URL"],
+  INSPECTION_COMPLETED: ["SERVICE_NAME","SENT_AT","VISIT_DATE","PASSED_COUNT","CONDITIONAL_COUNT","FAILED_COUNT",...resultRowKeys,"EMMA_SECURE_URL","EMMA_UNSUBSCRIBE_URL"],
 };
 
 describe("published communication template registry", () => {
@@ -48,6 +58,15 @@ describe("published communication template registry", () => {
         : secureUrl,
     );
     expect(payload.variables.EMMA_UNSUBSCRIBE_URL).toBe(unsubscribeUrl);
+  });
+
+  it("keeps every string template variable within the Resend per-value limit", async () => {
+    for (const scenario of Object.values(CommunicationScenario)) {
+      const payload = await build(scenario);
+      for (const value of Object.values(payload.variables)) {
+        if (typeof value === "string") expect(value.length).toBeLessThanOrEqual(TEMPLATE_STRING_VALUE_MAX_LENGTH);
+      }
+    }
   });
 
   it("keeps numeric counters numeric for Resend", async () => {
@@ -80,19 +99,42 @@ describe("published communication template registry", () => {
 describe("dynamic HTML and source mapping", () => {
   it("uses inspection snapshot fields, escapes HTML and includes per-device duration", async () => {
     const variables = (await build(CommunicationScenario.INSPECTION_DATE_CONFIRMED)).variables;
-    expect(variables.DEVICES_ROWS).toContain("Łóżko &lt;OIOM&gt;");
-    expect(variables.DEVICES_ROWS).toContain("Producent: Żółty Medical");
-    expect(variables.DEVICES_ROWS).toContain("Model: Przegląd · 2");
-    expect(variables.DEVICES_ROWS).toContain("Nr zlecenia klienta: ADZP-381-353/25");
-    expect(variables.DEVICES_ROWS).toContain("Numer Sprawy: 25793");
-    expect(variables.DEVICES_ROWS).toContain("12 min");
-    expect(variables.DEVICES_ROWS).not.toContain("Ă‚Â·");
+    const row = String(variables.DEVICE_ROW_01);
+    expect(row).toContain("Łóżko &lt;OIOM&gt;");
+    expect(row).toContain("Producent: Żółty Medical");
+    expect(row).toContain("Model: Przegląd · 2");
+    expect(row).toContain("Nr zlecenia klienta: ADZP-381-353/25");
+    expect(row).toContain("Numer Sprawy: 25793");
+    expect(row).toContain("12 min");
+    expect(row).toContain("border-right:1px solid #D9E1EB");
+    expect(row).toContain("font-size:10px");
+    expect(row).toContain("&#183;");
+    expect(row).not.toContain("Ă‚Â·");
   });
 
-  it("sorts completed inspection results problem-first", async () => {
+  it("renders repair dates in a separate column and completed statuses as colored badges", async () => {
+    const received = String((await build(CommunicationScenario.REPAIR_RECEIVED)).variables.REPAIR_ROW_01);
+    expect(received).toContain("16.06.2026</td></tr>");
+    expect(received).toContain("border-right:1px solid #D9E1EB");
+    expect(received).toContain("font-size:10px");
+    expect(received).not.toContain("Data zgłoszenia:");
+
+    const completed = String((await build(CommunicationScenario.REPAIR_COMPLETED)).variables.REPAIR_ROW_01);
+    expect(completed).toContain("23.07.2026</td></tr>");
+    expect(completed).toContain(">Naprawa zakończona</span>");
+    expect(completed).toContain("Urządzenie: Brak danych");
+    expect(completed).toContain("border-radius:999px");
+    expect(completed).not.toContain("Data zakończenia:");
+  });
+
+  it("sorts completed inspection results problem-first and renders status badges", async () => {
     const variables = (await build(CommunicationScenario.INSPECTION_COMPLETED)).variables;
     expect(variables).toMatchObject({ FAILED_COUNT: "1", CONDITIONAL_COUNT: "1", PASSED_COUNT: "1" });
-    expect(variables.RESULT_ROWS!.indexOf("NIESPRAWNY")).toBeLessThan(variables.RESULT_ROWS!.indexOf("WARUNKOWO DOPUSZCZONY"));
+    const rows = resultRowKeys.map((key) => String(variables[key] ?? "")).join("");
+    expect(rows.indexOf("NIESPRAWNY")).toBeLessThan(rows.indexOf("WARUNKOWO DOPUSZCZONY"));
+    expect(rows).toContain("border-radius:999px");
+    expect(rows).toContain("Numer Sprawy: 25793");
+    expect(rows).toContain("Nr zlecenia klienta: ADZP-381-353/25");
   });
 
   it("always uses the first task performer, including that employee email", async () => {
@@ -130,6 +172,10 @@ describe("dynamic HTML and source mapping", () => {
     expect(variables.EMAIL_TITLE).toContain("Aparat HFNOT · 250939J8H · DAM.224.0582/26.DSK.JK, PS508436");
   });
 });
+
+function slotKeys(prefix: string, count: number): string[] {
+  return Array.from({ length: count }, (_, index) => templateRowSlotKey(prefix, index));
+}
 
 async function build(scenario: CommunicationScenario) {
   return buildCommunicationTemplatePayload({

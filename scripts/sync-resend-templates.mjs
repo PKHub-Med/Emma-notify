@@ -66,6 +66,7 @@ const templates = [
 ];
 
 const variablePattern = /\{\{\{([A-Z0-9_]+)\}\}\}/g;
+const MAX_TEMPLATE_VARIABLES = 50;
 
 function variablesFor(template, html) {
   const keys = new Set(template.extraVariables ?? []);
@@ -100,6 +101,9 @@ async function resend(path, init = {}) {
 for (const template of templates) {
   const html = await readFile(join(templateDir, template.file), "utf8");
   const variables = variablesFor(template, html);
+  if (variables.length > MAX_TEMPLATE_VARIABLES) {
+    throw new Error(`${template.alias} uses ${variables.length} variables; Resend allows ${MAX_TEMPLATE_VARIABLES}`);
+  }
   console.info(`[resend] update ${template.alias} (${variables.length} vars)`);
   await resend(`/templates/${encodeURIComponent(template.alias)}`, {
     method: "PATCH",

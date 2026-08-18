@@ -219,6 +219,8 @@ describe("claim, JIT grant and deterministic retry", () => {
     const variables = fixture.provider.requests[0]!.template.variables;
     expect(typeof variables.DEVICE_COUNT).toBe("number");
     expect(variables.DEVICE_COUNT).toBe(15);
+    expect(variables.DEVICES_ROWS).toBeUndefined();
+    expect(variables.DEVICE_ROW_01).toBe("<tr></tr>");
   });
 
   it("does not call Resend when DEVICE_COUNT is not a finite number", async () => {
@@ -309,10 +311,30 @@ describe("claim, JIT grant and deterministic retry", () => {
     });
     expect(provider.requests).toHaveLength(1);
     expect(provider.requests[0]!.template.variables.REPAIR_COUNT).toBe(2);
-    expect(provider.requests[0]!.template.variables.REPAIRS_ROWS).toContain("Pompa infuzyjna");
+    expect(provider.requests[0]!.template.variables.REPAIR_ROW_02).toContain("Pompa infuzyjna");
     expect(stats.sent).toBe(2);
     expect(first.status).toBe(CommunicationDeliveryStatus.SENT);
     expect(second.status).toBe(CommunicationDeliveryStatus.SENT);
+  });
+
+  it("splits repair groups larger than the Resend row-slot capacity", async () => {
+    const candidates = Array.from({ length: 21 }, (_, index) => communicationCandidate({
+      id: `delivery-${String(index + 1).padStart(2, "0")}`,
+      event: { detectedAt: activation, sourceRecordId: `recService${index + 1}`, eventSnapshot: {
+        ...repairSnapshot(), businessNumber: `SO-${index + 1}`,
+        device: { ...repairSnapshot().device, name: `Urządzenie ${index + 1}` },
+      } },
+    }));
+    const store = new MultiMemorySendStore(candidates);
+    const provider = new MockProvider([{ ok: true, id: "resend-batch-1" }, { ok: true, id: "resend-batch-2" }]);
+    const stats = await runCommunicationEmailSender({
+      store, provider, grants: new FixedGrants(), unsubscribeGrants: new FixedUnsubscribeGrants(),
+      dataSource: dataSource(), config: config(), now: () => now,
+    });
+    expect(provider.requests).toHaveLength(2);
+    expect(provider.requests.map((request) => request.template.variables.REPAIR_COUNT)).toEqual([20, 1]);
+    expect(stats.sent).toBe(21);
+    expect(candidates.every((candidate) => candidate.status === CommunicationDeliveryStatus.SENT)).toBe(true);
   });
 
   it("SENT delivery is never selected or sent again", async () => {
