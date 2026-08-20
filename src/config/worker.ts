@@ -47,6 +47,14 @@ const workerEnvironmentSchema = z.object({
   COMMUNICATION_EMAILS_ENABLED: strictBooleanString,
   COMMUNICATION_SEND_NOT_BEFORE: z.string().default(""),
   ...assetEnvironmentShape,
+}).superRefine((value, context) => {
+  if (value.COMMUNICATION_EMAILS_ENABLED && !value.TIEMED_FALLBACK_EMAIL.trim()) {
+    context.addIssue({
+      code: "custom",
+      path: ["TIEMED_FALLBACK_EMAIL"],
+      message: "TIEMED_FALLBACK_EMAIL is required when communication emails are enabled",
+    });
+  }
 });
 
 export type WorkerConfig = BaseConfig & AssetConfig & {

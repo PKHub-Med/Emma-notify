@@ -8,6 +8,7 @@ import {
 import { CONTACT_FIELDS } from "../airtable/field-ids.js";
 import type { AirtableIncrementalSource, AirtableRecord } from "../airtable/types.js";
 import {
+  MAX_RECIPIENT_RESOLUTION_ATTEMPTS,
   recipientResolutionBackoffSeconds,
   resolveCommunicationEventRecipients,
   resolvePendingCommunicationRecipients,
@@ -218,6 +219,27 @@ describe("recipient resolution retry", () => {
     expect(recipientResolutionBackoffSeconds(2)).toBe(30);
     expect(recipientResolutionBackoffSeconds(100)).toBe(900);
   });
+
+  it("retries contact reads, then resolves exactly one Tiemed fallback on attempt four", async () => {
+    const store = new RetryStore();
+    const airtable = airtableSource({}, new Error("Airtable unavailable"));
+    let clock = new Date("2026-08-13T10:00:00Z");
+    const run = () => resolvePendingCommunicationRecipients({
+      airtable, store, tiemedFallbackEmail: fallbackEmail, now: () => clock,
+    });
+    for (let attempt = 1; attempt < MAX_RECIPIENT_RESOLUTION_ATTEMPTS; attempt += 1) {
+      expect(await run()).toBe(1);
+      expect(fallback(store)).toHaveLength(0);
+      expect(store.resolvedAt).toBeNull();
+      clock = store.nextAt!;
+    }
+    expect(await run()).toBe(1);
+    expect(ready(store)).toHaveLength(0);
+    expect(fallback(store)).toMatchObject([{ resolutionReason: "AIRTABLE_CONTACT_READ_FAILED:4" }]);
+    expect(await run()).toBe(0);
+    expect(fallback(store)).toHaveLength(1);
+    expect(airtable.fetchRecord).toHaveBeenCalledTimes(4);
+  });
 });
 
 class MemoryStore implements RecipientResolutionStore {
@@ -255,7 +277,7 @@ class RetryStore extends MemoryStore {
 
   override async findUnresolved(now: Date): Promise<RecipientResolutionEvent[]> {
     if (this.resolvedAt || (this.nextAt && this.nextAt.getTime() > now.getTime())) return [];
-    return [taskEvent(["recA"])];
+    return [{ ...taskEvent(["recA"]), recipientResolutionAttemptCount: this.attempts }];
   }
 
   override async markFailed(

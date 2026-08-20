@@ -54,15 +54,19 @@ describe("PortalAccessPolicy", () => {
     expect(sql).not.toContain("'TASK'");
   });
 
-  it("unlocks a fallback Service Order only through its exact grant delivery", () => {
+  it("unlocks a repair batch only through SENT deliveries sharing the grant message", () => {
     const fragment = visibleCaseSql({
       hospitalId: "hospital-A", accessLevel: PortalAccessLevel.COMMUNICATION,
       communicationDeliveryId: "delivery-fallback-R1",
     }, "SERVICE_ORDER");
     const sql = fragment.strings.join("?");
     expect(sql).toContain('FROM "CommunicationDelivery" grant_delivery');
+    expect(sql).toContain('JOIN "CommunicationDelivery" batch_delivery');
+    expect(sql).toContain('batch_delivery."resendMessageId" = grant_delivery."resendMessageId"');
     expect(sql).toContain("grant_delivery.id =");
     expect(sql).toContain("grant_delivery.status = 'SENT'");
+    expect(sql).toContain("batch_delivery.status = 'SENT'");
+    expect(sql).toContain('grant_delivery."resendMessageId" IS NOT NULL');
     expect(fragment.values).toContain("delivery-fallback-R1");
     const grantBranch = sql.slice(sql.indexOf('FROM "CommunicationDelivery" grant_delivery'));
     expect(grantBranch).not.toContain('communication_recipient."recipientType"');

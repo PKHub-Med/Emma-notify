@@ -2,7 +2,6 @@ import { Prisma, type PrismaClient } from "../generated/prisma/client.js";
 import {
   AssetProcessingStatus,
   CommunicationDeliveryStatus,
-  CommunicationRecipientType,
   PortalAccessLevel,
   StoredFileKind,
 } from "../generated/prisma/enums.js";
@@ -49,6 +48,7 @@ export type PublicAssetAccessScope = {
   hospitalId: string;
   accessLevel: PortalAccessLevel;
   communicationDeliveryId: string;
+  communicationBatchMessageId?: string | null;
 };
 
 /** One shared predicate for file redirects, case assets and the Documents tab. */
@@ -69,15 +69,15 @@ export function publicAssetAccessWhere(
             },
           },
         },
-        {
+        ...(scope.communicationBatchMessageId ? [{
           delivery: {
             status: CommunicationDeliveryStatus.SENT,
-            communicationEventRecipient: { recipientType: CommunicationRecipientType.CLIENT },
+            resendMessageId: scope.communicationBatchMessageId,
             communicationEvent: {
               eventSnapshot: { path: ["sourceHospitalRecordId"], equals: scope.hospitalId },
             },
           },
-        },
+        }] : []),
       ],
     } : {}),
     storedFile: {
@@ -111,6 +111,7 @@ export class PrismaPublicAssetStore implements PublicAssetStore {
         delivery: {
           select: {
             status: true,
+            resendMessageId: true,
             communicationEventRecipient: { select: { recipientType: true } },
             communicationEvent: { select: { eventSnapshot: true } },
           },
@@ -146,10 +147,15 @@ export class PrismaPublicAssetStore implements PublicAssetStore {
       }
       const sent = asset.delivery.status === CommunicationDeliveryStatus.SENT;
       const exactGrantDelivery = asset.deliveryId === authorization.communicationDeliveryId;
-      const clientHistory = asset.delivery.communicationEventRecipient.recipientType ===
-        CommunicationRecipientType.CLIENT;
+      const grantDelivery = await this.prisma.communicationDelivery?.findUnique({
+        where: { id: authorization.communicationDeliveryId },
+        select: { resendMessageId: true, status: true },
+      });
+      const sameBatch = Boolean(grantDelivery?.status === CommunicationDeliveryStatus.SENT &&
+        grantDelivery.resendMessageId &&
+        grantDelivery.resendMessageId === asset.delivery.resendMessageId);
       if (!sent) return { asset: null, reason: "ACCESS_POLICY_DENIED" };
-      if (!exactGrantDelivery && !clientHistory) {
+      if (!exactGrantDelivery && !sameBatch) {
         return { asset: null, reason: "GRANT_DELIVERY_MISMATCH" };
       }
     }

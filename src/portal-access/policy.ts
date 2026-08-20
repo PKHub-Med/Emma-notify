@@ -58,10 +58,14 @@ export function visibleCaseSql(
     ? Prisma.sql`OR EXISTS (
         SELECT 1
         FROM "CommunicationDelivery" grant_delivery
+        JOIN "CommunicationDelivery" batch_delivery
+          ON batch_delivery."resendMessageId" = grant_delivery."resendMessageId"
         JOIN "CommunicationEvent" communication_event
-          ON communication_event.id = grant_delivery."communicationEventId"
+          ON communication_event.id = batch_delivery."communicationEventId"
         WHERE grant_delivery.id = ${access.communicationDeliveryId}
           AND grant_delivery.status = 'SENT'
+          AND batch_delivery.status = 'SENT'
+          AND grant_delivery."resendMessageId" IS NOT NULL
           AND communication_event."eventSnapshot"->>'sourceHospitalRecordId' = ${access.hospitalId}
           AND ${sourceMatch}
       )`

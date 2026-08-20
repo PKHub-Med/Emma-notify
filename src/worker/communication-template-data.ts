@@ -11,6 +11,7 @@ import type { TemplateVariableValue } from "../email/resend-client.js";
 import { parseLocalDate } from "./communication-time.js";
 import {
   INSPECTION_ROW_SLOT_COUNT,
+  EMAIL_VISIBLE_ROW_LIMIT,
   REPAIR_ROW_SLOT_COUNT,
   TEMPLATE_STRING_VALUE_MAX_LENGTH,
   templateAliasForScenario,
@@ -35,6 +36,10 @@ export type TemplateInspection = {
   businessNumber: string | null;
   clientOrderNumber: string | null;
   currentStatus: string | null;
+  inspectionResult: string | null;
+  sourceHospitalRecordId: string | null;
+  inspectionPerformedAt: Date | null;
+  inspectionDueDate: Date | null;
   deviceName: string | null;
   manufacturer: string | null;
   model: string | null;
@@ -81,6 +86,7 @@ export class PrismaCommunicationTemplateDataSource implements CommunicationTempl
     const records = await this.prisma.trackedCase.findMany({
       where: {
         caseType: CaseType.INSPECTION,
+        active: true,
         airtableRecordId: { in: [...recordIds] },
       },
       select: {
@@ -88,6 +94,10 @@ export class PrismaCommunicationTemplateDataSource implements CommunicationTempl
         businessNumber: true,
         clientOrderNumber: true,
         currentStatus: true,
+        inspectionResult: true,
+        sourceHospitalRecordId: true,
+        inspectionPerformedAt: true,
+        inspectionDueDate: true,
         deviceName: true,
         manufacturer: true,
         model: true,
@@ -103,6 +113,10 @@ export class PrismaCommunicationTemplateDataSource implements CommunicationTempl
         businessNumber: record.businessNumber,
         clientOrderNumber: record.clientOrderNumber,
         currentStatus: record.currentStatus,
+        inspectionResult: record.inspectionResult,
+        sourceHospitalRecordId: record.sourceHospitalRecordId,
+        inspectionPerformedAt: record.inspectionPerformedAt,
+        inspectionDueDate: record.inspectionDueDate,
         deviceName: record.deviceName,
         manufacturer: record.manufacturer,
         model: record.model,
@@ -120,7 +134,7 @@ export class PrismaCommunicationTemplateDataSource implements CommunicationTempl
   async getDevices(recordIds: readonly string[]): Promise<TemplateDevice[]> {
     if (recordIds.length === 0) return [];
     const records = await this.prisma.trackedDevice.findMany({
-      where: { airtableRecordId: { in: [...recordIds] } },
+      where: { airtableRecordId: { in: [...recordIds] }, active: true },
       select: { airtableRecordId: true, deviceStatus: true },
     });
     const byId = new Map(records.map((record) => [record.airtableRecordId, record]));
@@ -145,8 +159,130 @@ export type CommunicationOfficeContact = {
   email: string;
 };
 
+export type CommunicationBlockDiagnostic = {
+  code: string;
+  expected?: unknown;
+  found?: unknown;
+  recordIds?: readonly string[];
+  safeRecordIds?: readonly string[];
+  failedAttemptCount?: number;
+};
+
+export function buildBlockedClientFallbackPayload(input: {
+  deliveries: readonly TemplateDelivery[];
+  secureUrl: string;
+  unsubscribeUrl: string;
+  preparedAt: Date;
+  timeZone: string;
+  error: CommunicationTemplateDataError;
+}): CommunicationTemplatePayload {
+  const delivery = input.deliveries[0];
+  if (!delivery) throw new Error("BLOCKED_FALLBACK_DELIVERY_MISSING");
+  const scenario = delivery.scenario;
+  const snapshot = object(delivery.eventSnapshot);
+  const diagnostic = input.error.diagnostic;
+  const notice = blockedNotice({
+    code: input.error.code,
+    scenario,
+    sourceRecordIds: input.deliveries.map((item) => item.sourceRecordId),
+    expected: diagnostic?.expected,
+    found: diagnostic?.found,
+    ...(diagnostic?.recordIds ? { recordIds: diagnostic.recordIds } : {}),
+    ...(diagnostic?.failedAttemptCount !== undefined
+      ? { failedAttemptCount: diagnostic.failedAttemptCount } : {}),
+    preparedAt: input.preparedAt,
+  });
+  const common = {
+    ...commonVariables(input.preparedAt, input.timeZone, input.secureUrl,
+      input.unsubscribeUrl, scenario),
+    BLOCKED_NOTICE: notice,
+    TRUNCATION_NOTICE: "",
+  };
+  if (isRepairScenario(scenario)) {
+    const safeIds = diagnostic?.safeRecordIds
+      ? new Set(diagnostic.safeRecordIds)
+      : new Set(input.deliveries.map((item) => item.sourceRecordId));
+    const safeSnapshots = input.deliveries
+      .filter((item) => safeIds.has(item.sourceRecordId))
+      .map((item) => object(item.eventSnapshot));
+    const safeRows = safeSnapshots.flatMap((item) => {
+      const device = object(item.device);
+      const caseNumber = clean(item.businessNumber);
+      const deviceName = clean(device.name);
+      if (!caseNumber || !deviceName) return [];
+      return [{
+        caseNumber,
+        clientOrderNumber: display(item.clientOrderNumber, "brak numeru"),
+        reportedAt: formatSourceDate(item.reportedAtRaw, item.reportedAt,
+          input.timeZone, "—", false),
+        completedAt: formatOptionalDate(item.completedAt, input.timeZone, "—", false),
+        department: display(item.department, "—"),
+        deviceName,
+        manufacturer: display(device.manufacturer, "—"),
+        model: display(device.model, "—"),
+        serialNumber: display(device.serialNumber, "brak danych"),
+        inventoryNumber: display(device.inventoryNumber, "brak danych"),
+        repairStatus: display(item.emmaCustomerStatus ?? item.currentStatus, "Brak informacji"),
+        deviceStatus: "Brak danych",
+      }];
+    });
+    return {
+      templateId: templateAliasForScenario(scenario),
+      variables: {
+        ...common,
+        EMAIL_TITLE: "EMMA — wiadomość wymaga ręcznej obsługi",
+        REPAIR_COUNT: input.deliveries.length,
+        ...rowSlotVariables("REPAIR_ROW",
+          repairRows(safeRows, scenario).slice(0, EMAIL_VISIBLE_ROW_LIMIT),
+          REPAIR_ROW_SLOT_COUNT),
+        CASE_NUMBER: display(snapshot.businessNumber, "—"),
+        CLIENT_ORDER_NUMBER: display(snapshot.clientOrderNumber, "—"),
+        REPORTED_AT: "—", COMPLETED_AT: "—",
+        DEVICE_NAME: "Dane bezpieczne dostępne w diagnostyce",
+        MANUFACTURER_MODEL: "—", SERIAL_NUMBER: "—", INVENTORY_NUMBER: "—",
+        REPAIR_STATUS: display(snapshot.emmaCustomerStatus ?? snapshot.currentStatus, "—"),
+        DEVICE_STATUS: "—",
+      },
+    };
+  }
+  const visitDate = formatVisitDate(snapshot.day) ?? "—";
+  const base = {
+    ...common,
+    VISIT_DATE: visitDate,
+    DEPARTMENT: display(snapshot.department, "—"),
+    DEVICE_COUNT: stringArray(snapshot.linkedInspectionRecordIds).length,
+  };
+  if (scenario === CommunicationScenario.INSPECTION_COMPLETED) {
+    return { templateId: templateAliasForScenario(scenario), variables: {
+      ...base, PASSED_COUNT: "0", CONDITIONAL_COUNT: "0", FAILED_COUNT: "0",
+      ...rowSlotVariables("RESULT_ROW", [], INSPECTION_ROW_SLOT_COUNT),
+    } };
+  }
+  const variables: Record<string, TemplateVariableValue> = {
+    ...base,
+    ...rowSlotVariables("DEVICE_ROW", [], INSPECTION_ROW_SLOT_COUNT),
+  };
+  if (scenario === CommunicationScenario.INSPECTION_DATE_PROPOSED) {
+    Object.assign(variables, {
+      COORDINATOR_NAME: "Tiemed", COORDINATOR_PHONE: "—",
+      COORDINATOR_EMAIL: "serwis@tiemed.pl", COORDINATOR_REPLY_URL: "mailto:serwis@tiemed.pl",
+    });
+  }
+  if (scenario === CommunicationScenario.INSPECTION_REMINDER) {
+    Object.assign(variables, {
+      TECHNICIAN_NAME: "Tiemed", TECHNICIAN_PHONE: "—",
+      TECHNICIAN_PHONE_TEL: "", TECHNICIAN_EMAIL: "—",
+    });
+  }
+  return { templateId: templateAliasForScenario(scenario), variables };
+}
+
 export class CommunicationTemplateDataError extends Error {
-  constructor(readonly code: string, readonly retryable: boolean) {
+  constructor(
+    readonly code: string,
+    readonly retryable: boolean,
+    readonly diagnostic?: CommunicationBlockDiagnostic,
+  ) {
     super(code);
     this.name = "CommunicationTemplateDataError";
   }
@@ -184,20 +320,81 @@ export async function buildCommunicationTemplatePayload(input: {
   const visitDate = required(formatVisitDate(snapshot.day) ?? "");
 
   let inspections: TemplateInspection[];
+  const expectedInspectionIds = stringArray(snapshot.linkedInspectionRecordIds);
   try {
     inspections = await input.dataSource.getInspections(
-      stringArray(snapshot.linkedInspectionRecordIds),
+      expectedInspectionIds,
     );
   } catch {
     throw new CommunicationTemplateDataError("TEMPLATE_DATA_SOURCE_ERROR", true);
   }
 
+  const foundIds = new Set(inspections.map((inspection) => inspection.airtableRecordId));
+  const missingIds = expectedInspectionIds.filter((id) => !foundIds.has(id));
+  if (missingIds.length > 0 || inspections.length !== expectedInspectionIds.length) {
+    throw new CommunicationTemplateDataError("INSPECTION_SET_INCOMPLETE", false, {
+      code: "INSPECTION_SET_INCOMPLETE",
+      expected: expectedInspectionIds.length,
+      found: inspections.length,
+      recordIds: missingIds,
+      safeRecordIds: inspections.map((inspection) => inspection.airtableRecordId),
+    });
+  }
+
+  const expectedHospital = clean(snapshot.sourceHospitalRecordId);
+  const scopeMismatch = inspections.find((inspection) =>
+    !expectedHospital || inspection.sourceHospitalRecordId !== expectedHospital);
+  if (scopeMismatch) {
+    throw new CommunicationTemplateDataError("INSPECTION_HOSPITAL_SCOPE_MISMATCH", false, {
+      code: "INSPECTION_HOSPITAL_SCOPE_MISMATCH",
+      expected: expectedHospital || null,
+      found: scopeMismatch.sourceHospitalRecordId,
+      recordIds: [scopeMismatch.airtableRecordId],
+      safeRecordIds: inspections
+        .filter((inspection) => inspection.sourceHospitalRecordId === expectedHospital)
+        .map((inspection) => inspection.airtableRecordId),
+    });
+  }
+
+  const inconsistent = inspections.find(isInspectionStateInconsistent);
+  if (inconsistent) {
+    throw new CommunicationTemplateDataError("INSPECTION_STATE_INCONSISTENT", false, {
+      code: "INSPECTION_STATE_INCONSISTENT",
+      expected: "completed status for performed inspection",
+      found: {
+        currentStatus: inconsistent.currentStatus,
+        performedAt: inconsistent.inspectionPerformedAt?.toISOString() ?? null,
+        dueDate: inconsistent.inspectionDueDate?.toISOString() ?? null,
+        inspectionResult: inconsistent.inspectionResult,
+      },
+      recordIds: [inconsistent.airtableRecordId],
+      safeRecordIds: inspections.filter((inspection) => inspection !== inconsistent)
+        .map((inspection) => inspection.airtableRecordId),
+    });
+  }
+
   if (input.delivery.scenario === CommunicationScenario.INSPECTION_COMPLETED) {
-    const completed = inspections
+    const classified = inspections
       .map((inspection) => ({
         inspection,
-        result: inspectionResult(inspection.currentStatus),
-      }))
+        result: inspectionResult(inspection.inspectionResult),
+      }));
+    const unrecognized = classified.filter((item) => item.result === null);
+    if (unrecognized.length > 0) {
+      throw new CommunicationTemplateDataError("INSPECTION_RESULT_INCOMPLETE", false, {
+        code: "INSPECTION_RESULT_INCOMPLETE",
+        expected: { expectedCount: inspections.length, recognizedCount: inspections.length - unrecognized.length },
+        found: unrecognized.map(({ inspection }) => ({
+          taskId: input.delivery.sourceRecordId,
+          inspectionRecordId: inspection.airtableRecordId,
+          rawInspectionResult: inspection.inspectionResult,
+        })),
+        recordIds: unrecognized.map(({ inspection }) => inspection.airtableRecordId),
+        safeRecordIds: classified.filter((item) => item.result !== null)
+          .map(({ inspection }) => inspection.airtableRecordId),
+      });
+    }
+    const completed = classified
       .filter((item): item is {
         inspection: TemplateInspection;
         result: InspectionResult;
@@ -215,24 +412,28 @@ export async function buildCommunicationTemplatePayload(input: {
       templateId,
       variables: {
         ...common,
+        BLOCKED_NOTICE: "",
         VISIT_DATE: visitDate,
         PASSED_COUNT: count("WORKING"),
         CONDITIONAL_COUNT: count("CONDITIONAL"),
         FAILED_COUNT: count("DEFECTIVE"),
-        ...rowSlotVariables("RESULT_ROW", resultRows(completed), INSPECTION_ROW_SLOT_COUNT),
+        TRUNCATION_NOTICE: truncationNotice(completed.length, "urządzeń", "przeglądy"),
+        ...rowSlotVariables("RESULT_ROW", resultRows(completed).slice(0, EMAIL_VISIBLE_ROW_LIMIT), INSPECTION_ROW_SLOT_COUNT),
       },
     };
   }
 
   const base = {
     ...common,
+    BLOCKED_NOTICE: "",
     VISIT_DATE: visitDate,
     DEPARTMENT: display(
       snapshot.department ?? snapshot.caseLocation ?? snapshot.hospitalName,
       "—",
     ),
     DEVICE_COUNT: inspections.length,
-    ...rowSlotVariables("DEVICE_ROW", deviceRows(inspections), INSPECTION_ROW_SLOT_COUNT),
+    TRUNCATION_NOTICE: truncationNotice(inspections.length, "urządzeń", "przeglądy"),
+    ...rowSlotVariables("DEVICE_ROW", deviceRows(inspections).slice(0, EMAIL_VISIBLE_ROW_LIMIT), INSPECTION_ROW_SLOT_COUNT),
   };
 
   if (input.delivery.scenario === CommunicationScenario.INSPECTION_DATE_CONFIRMED) {
@@ -327,7 +528,8 @@ export async function buildCommunicationRepairBatchPayload(input: {
     return {
       caseNumber: required(display(snapshot.businessNumber, "")),
       clientOrderNumber: display(snapshot.clientOrderNumber, "brak numeru"),
-      reportedAt: formatOptionalDate(
+      reportedAt: formatSourceDate(
+        snapshot.reportedAtRaw,
         snapshot.reportedAt,
         input.timeZone,
         "—",
@@ -336,9 +538,10 @@ export async function buildCommunicationRepairBatchPayload(input: {
       completedAt: formatOptionalDate(
         snapshot.completedAt,
         input.timeZone,
-        formatDate(input.preparedAt, input.timeZone),
+        "—",
         false,
       ),
+      department: display(snapshot.department, "—"),
       deviceName: required(display(device.name, "")),
       manufacturer: display(device.manufacturer, "—"),
       model: display(device.model, "—"),
@@ -359,10 +562,14 @@ export async function buildCommunicationRepairBatchPayload(input: {
   const title = rows.length === 1
     ? scenario === CommunicationScenario.REPAIR_RECEIVED
       ? `Przyjęliśmy zgłoszenie serwisowe · ${first.manufacturer} · ${first.model} · ${first.serialNumber}`
-      : `Naprawa zakończona · ${first.deviceName} · ${first.serialNumber} · ${first.clientOrderNumber}`
+      : scenario === CommunicationScenario.REPAIR_DELAYED_PARTS
+        ? `Naprawa oczekuje na części · ${first.deviceName} · ${first.caseNumber}`
+        : `Naprawa zakończona · ${first.deviceName} · ${first.serialNumber} · ${first.clientOrderNumber}`
     : scenario === CommunicationScenario.REPAIR_RECEIVED
       ? `Przyjęliśmy ${rows.length} zgłoszenia serwisowe`
-      : `Zakończone naprawy · ${rows.length} spraw`;
+      : scenario === CommunicationScenario.REPAIR_DELAYED_PARTS
+        ? `Naprawy oczekujące na części · ${rows.length} spraw`
+        : `Zakończone naprawy · ${rows.length} spraw`;
 
   return {
     templateId: templateAliasForScenario(scenario),
@@ -375,8 +582,10 @@ export async function buildCommunicationRepairBatchPayload(input: {
         scenario,
       ),
       EMAIL_TITLE: title,
+      BLOCKED_NOTICE: "",
       REPAIR_COUNT: rows.length,
-      ...rowSlotVariables("REPAIR_ROW", repairRows(rows, scenario), REPAIR_ROW_SLOT_COUNT),
+      TRUNCATION_NOTICE: truncationNotice(rows.length, "napraw", "naprawy"),
+      ...rowSlotVariables("REPAIR_ROW", repairRows(rows, scenario).slice(0, EMAIL_VISIBLE_ROW_LIMIT), REPAIR_ROW_SLOT_COUNT),
       CASE_NUMBER: first.caseNumber,
       CLIENT_ORDER_NUMBER: first.clientOrderNumber,
       REPORTED_AT: first.reportedAt,
@@ -404,13 +613,21 @@ function commonVariables(
   return {
     SERVICE_NAME: "Tiemed",
     SENT_AT: formatDateTime(preparedAt, timeZone),
-    EMMA_SECURE_URL: required(
-      scenario === CommunicationScenario.INSPECTION_REMINDER
-        ? `${secureUrl}#inspections`
-        : secureUrl,
-    ),
-    EMMA_UNSUBSCRIBE_URL: required(unsubscribeUrl),
+    EMMA_SECURE_URL: buildSecureCtaHtml(secureUrl, scenario),
+    EMMA_UNSUBSCRIBE_URL: buildUnsubscribeHtml(unsubscribeUrl),
   };
+}
+
+export function buildSecureCtaHtml(secureUrl: string, scenario: CommunicationScenario): string {
+  if (!secureUrl) return "";
+  const url = `${secureUrl}${isRepairScenario(scenario) ? "#repairs" : "#inspections"}`;
+  const label = isRepairScenario(scenario) ? "Zobacz naprawy w Emma" : "Zobacz przeglądy w Emma";
+  return `<a href="${htmlEscape(url)}" style="display:inline-block;margin-top:16px;padding:12px 18px;border-radius:8px;background:#223F6D;color:#fff;text-decoration:none;font-size:14px;line-height:20px;font-weight:800;">${label}</a>`;
+}
+
+export function buildUnsubscribeHtml(unsubscribeUrl: string): string {
+  if (!unsubscribeUrl) return "";
+  return `<span style="display:block;margin-top:4px;">Nie chcesz otrzymywać takich powiadomień? <a href="${htmlEscape(unsubscribeUrl)}" style="color:#66758A;text-decoration:underline;">Wyłącz otrzymywanie tych maili</a>.</span>`;
 }
 
 function deviceRows(inspections: TemplateInspection[]): string[] {
@@ -419,12 +636,12 @@ function deviceRows(inspections: TemplateInspection[]): string[] {
       ? "border-bottom:1px solid #D9E1EB;"
       : "";
     const details = [
-      `<div style="font-size:13px;line-height:18px;font-weight:800;color:#1F2F49;">${htmlEscape(display(inspection.deviceName, "Urządzenie"))}</div>`,
-      `<div style="margin-top:3px;font-size:11px;line-height:17px;color:#34445D;">Producent: ${htmlEscape(display(inspection.manufacturer, "—"))}<br>Model: ${htmlEscape(display(inspection.model, "—"))}</div>`,
-      `<div style="margin-top:4px;font-size:10px;line-height:16px;color:#66758A;">SN: ${htmlEscape(display(inspection.serialNumber, "—"))} &#183; Nr inw.: ${htmlEscape(display(inspection.inventoryNumber, "—"))}<br>Numer Sprawy: ${htmlEscape(display(inspection.businessNumber, "—"))}<br>Nr zlecenia klienta: ${htmlEscape(display(inspection.clientOrderNumber, "brak numeru"))}</div>`,
+      `<div style="font-size:14px;line-height:20px;font-weight:800;color:#1F2F49;">${htmlEscape(display(inspection.deviceName, "Urządzenie"))}</div>`,
+      `<div style="margin-top:3px;font-size:12px;line-height:18px;color:#34445D;">${htmlEscape(display(inspection.manufacturer, "—"))} &#183; ${htmlEscape(display(inspection.model, "—"))}</div>`,
+      `<div style="margin-top:4px;font-size:12px;line-height:18px;color:#66758A;">SN: ${htmlEscape(display(inspection.serialNumber, "—"))} &#183; Nr inw.: ${htmlEscape(display(inspection.inventoryNumber, "—"))}<br>Numer sprawy: ${htmlEscape(display(inspection.businessNumber, "—"))}<br>Nr zlecenia klienta: ${htmlEscape(display(inspection.clientOrderNumber, "brak numeru"))}</div>`,
     ].join("");
 
-    return `<tr><td style="padding:13px 8px;${bottomBorder}border-right:1px solid #D9E1EB;text-align:center;vertical-align:middle;font-size:11px;line-height:17px;color:#34445D;">${index + 1}</td><td style="padding:13px 12px;${bottomBorder}border-right:1px solid #D9E1EB;vertical-align:top;">${details}</td><td style="padding:13px 8px;${bottomBorder}text-align:center;vertical-align:middle;font-size:11px;line-height:17px;font-weight:700;color:#1F2F49;white-space:nowrap;">${htmlEscape(formatDuration(inspection.estimatedDurationSeconds))}</td></tr>`;
+    return `<tr><td style="padding:13px 8px;${bottomBorder}border-right:1px solid #D9E1EB;text-align:center;vertical-align:middle;font-size:12px;line-height:18px;color:#34445D;">${index + 1}</td><td style="padding:13px 12px;${bottomBorder}border-right:1px solid #D9E1EB;vertical-align:top;">${details}</td><td style="padding:13px 8px;${bottomBorder}text-align:center;vertical-align:middle;font-size:12px;line-height:18px;font-weight:700;color:#1F2F49;white-space:nowrap;">${htmlEscape(formatDuration(inspection.estimatedDurationSeconds))}</td></tr>`;
   });
 }
 
@@ -441,6 +658,7 @@ function repairRows(
     inventoryNumber: string;
     repairStatus: string;
     deviceStatus: string;
+    department: string;
   }>,
   scenario: CommunicationScenario,
 ): string[] {
@@ -448,7 +666,8 @@ function repairRows(
     const bottomBorder = index < items.length - 1
       ? "border-bottom:1px solid #D9E1EB;"
       : "";
-    const date = scenario === CommunicationScenario.REPAIR_RECEIVED
+    const date = scenario === CommunicationScenario.REPAIR_RECEIVED ||
+        scenario === CommunicationScenario.REPAIR_DELAYED_PARTS
       ? item.reportedAt
       : item.completedAt;
 
@@ -456,9 +675,12 @@ function repairRows(
       ? `<div style="margin-top:9px;">${statusBadge(item.repairStatus, repairStatusTone(item.repairStatus))}<span style="display:inline-block;width:5px;">&nbsp;</span>${statusBadge(`Urządzenie: ${item.deviceStatus}`, deviceStatusTone(item.deviceStatus))}</div>`
       : "";
 
-    const details = `<div style="font-size:13px;line-height:18px;font-weight:800;color:#1F2F49;">${htmlEscape(item.deviceName)}</div><div style="margin-top:3px;font-size:11px;line-height:17px;color:#34445D;">${htmlEscape(item.manufacturer)} &#183; ${htmlEscape(item.model)}</div><div style="margin-top:4px;font-size:10px;line-height:16px;color:#66758A;">SN: ${htmlEscape(item.serialNumber)} &#183; Nr inw.: ${htmlEscape(item.inventoryNumber)}<br>Numer Sprawy: ${htmlEscape(item.caseNumber)}<br>Nr zlecenia klienta: ${htmlEscape(item.clientOrderNumber)}</div>${statuses}`;
+    const waiting = scenario === CommunicationScenario.REPAIR_DELAYED_PARTS
+      ? `<div style="margin-top:9px;font-size:12px;line-height:18px;color:#8B6117;font-weight:700;">Oczekiwanie na części. Kolejna informacja pojawi się po zmianie statusu.</div>`
+      : "";
+    const details = `<div style="font-size:14px;line-height:20px;font-weight:800;color:#1F2F49;">${htmlEscape(item.deviceName)}</div><div style="margin-top:3px;font-size:12px;line-height:18px;color:#34445D;">${htmlEscape(item.manufacturer)} &#183; ${htmlEscape(item.model)}</div><div style="margin-top:4px;font-size:12px;line-height:18px;color:#66758A;">SN: ${htmlEscape(item.serialNumber)} &#183; Nr inw.: ${htmlEscape(item.inventoryNumber)}<br>Oddział: ${htmlEscape(item.department)}<br>Numer sprawy: ${htmlEscape(item.caseNumber)}<br>Nr zlecenia klienta: ${htmlEscape(item.clientOrderNumber)}</div>${statuses}${waiting}`;
 
-    return `<tr><td style="padding:14px 8px;${bottomBorder}border-right:1px solid #D9E1EB;text-align:center;vertical-align:middle;font-size:11px;line-height:17px;color:#34445D;">${index + 1}</td><td style="padding:14px 12px;${bottomBorder}border-right:1px solid #D9E1EB;vertical-align:top;">${details}</td><td style="padding:14px 10px;${bottomBorder}text-align:center;vertical-align:middle;font-size:11px;line-height:17px;font-weight:700;color:#1F2F49;white-space:nowrap;">${htmlEscape(date)}</td></tr>`;
+    return `<tr><td style="padding:14px 8px;${bottomBorder}border-right:1px solid #D9E1EB;text-align:center;vertical-align:middle;font-size:12px;line-height:18px;color:#34445D;">${index + 1}</td><td style="padding:14px 12px;${bottomBorder}border-right:1px solid #D9E1EB;vertical-align:top;">${details}</td><td style="padding:14px 10px;${bottomBorder}text-align:center;vertical-align:middle;font-size:12px;line-height:18px;font-weight:700;color:#1F2F49;white-space:nowrap;">${htmlEscape(date)}</td></tr>`;
   });
 }
 
@@ -469,8 +691,8 @@ function resultRows(
     const bottomBorder = index < items.length - 1
       ? "border-bottom:1px solid #D9E1EB;"
       : "";
-    const details = `<div style="font-size:13px;line-height:18px;font-weight:800;color:#1F2F49;">${htmlEscape(display(inspection.deviceName, "Urządzenie"))}</div><div style="margin-top:3px;font-size:11px;line-height:17px;color:#34445D;">${htmlEscape(display(inspection.manufacturer, "—"))} &#183; ${htmlEscape(display(inspection.model, "—"))}</div><div style="margin-top:4px;font-size:10px;line-height:16px;color:#66758A;">SN: ${htmlEscape(display(inspection.serialNumber, "—"))} &#183; Nr inw.: ${htmlEscape(display(inspection.inventoryNumber, "—"))}<br>Numer Sprawy: ${htmlEscape(display(inspection.businessNumber, "—"))}<br>Nr zlecenia klienta: ${htmlEscape(display(inspection.clientOrderNumber, "brak numeru"))}</div>`;
-    return `<tr><td style="padding:13px 8px;${bottomBorder}border-right:1px solid #D9E1EB;text-align:center;vertical-align:middle;font-size:11px;line-height:17px;color:#34445D;">${index + 1}</td><td style="padding:13px 12px;${bottomBorder}border-right:1px solid #D9E1EB;vertical-align:top;">${details}</td><td style="padding:13px 10px;${bottomBorder}text-align:center;vertical-align:middle;">${statusBadge(result.label, inspectionResultTone(result.key))}</td></tr>`;
+    const details = `<div style="font-size:14px;line-height:20px;font-weight:800;color:#1F2F49;">${htmlEscape(display(inspection.deviceName, "Urządzenie"))}</div><div style="margin-top:3px;font-size:12px;line-height:18px;color:#34445D;">${htmlEscape(display(inspection.manufacturer, "—"))} &#183; ${htmlEscape(display(inspection.model, "—"))}</div><div style="margin-top:4px;font-size:12px;line-height:18px;color:#66758A;">SN: ${htmlEscape(display(inspection.serialNumber, "—"))} &#183; Nr inw.: ${htmlEscape(display(inspection.inventoryNumber, "—"))}<br>Numer sprawy: ${htmlEscape(display(inspection.businessNumber, "—"))}<br>Nr zlecenia klienta: ${htmlEscape(display(inspection.clientOrderNumber, "brak numeru"))}</div>`;
+    return `<tr><td style="padding:13px 8px;${bottomBorder}border-right:1px solid #D9E1EB;text-align:center;vertical-align:middle;font-size:12px;line-height:18px;color:#34445D;">${index + 1}</td><td style="padding:13px 12px;${bottomBorder}border-right:1px solid #D9E1EB;vertical-align:top;">${details}</td><td style="padding:13px 10px;${bottomBorder}text-align:center;vertical-align:middle;">${statusBadge(result.label, inspectionResultTone(result.key))}</td></tr>`;
   });
 }
 
@@ -498,7 +720,7 @@ function statusBadge(
   label: string,
   tone: { background: string; color: string; border: string },
 ): string {
-  return `<span style="display:inline-block;padding:5px 8px;border-radius:999px;border:1px solid ${tone.border};background:${tone.background};color:${tone.color};font-size:9px;line-height:13px;font-weight:800;white-space:nowrap;">${htmlEscape(label)}</span>`;
+  return `<span style="display:inline-block;padding:5px 8px;border-radius:999px;border:1px solid ${tone.border};background:${tone.background};color:${tone.color};font-size:12px;line-height:18px;font-weight:800;white-space:nowrap;">${htmlEscape(label)}</span>`;
 }
 
 function repairStatusTone(value: string) {
@@ -680,5 +902,63 @@ function formatDuration(seconds: number | null): string {
 
 function isRepairScenario(scenario: CommunicationScenario): boolean {
   return scenario === CommunicationScenario.REPAIR_RECEIVED ||
+    scenario === CommunicationScenario.REPAIR_DELAYED_PARTS ||
     scenario === CommunicationScenario.REPAIR_COMPLETED;
+}
+
+export function formatSourceDate(
+  rawValue: unknown,
+  timestampValue: unknown,
+  timeZone: string,
+  fallback: string,
+  includeTime = true,
+): string {
+  if (typeof rawValue === "string" && /^\d{4}-\d{2}-\d{2}$/.test(rawValue.trim())) {
+    const [year, month, day] = rawValue.trim().split("-");
+    return `${day}.${month}.${year}`;
+  }
+  return formatOptionalDate(timestampValue, timeZone, fallback, includeTime);
+}
+
+export function isInspectionStateInconsistent(inspection: Pick<TemplateInspection,
+  "currentStatus" | "inspectionPerformedAt">): boolean {
+  if (!inspection.inspectionPerformedAt) return false;
+  const status = inspection.currentStatus?.trim().toUpperCase() ?? "";
+  return /^(DO REALIZACJI|DO WYKONANIA|PLANOWAN|ZAPLANOWAN)/.test(status);
+}
+
+function truncationNotice(total: number, noun: string, section: string): string {
+  if (total <= EMAIL_VISIBLE_ROW_LIMIT) return "";
+  return `<div style="margin:20px 0;padding:16px;border:2px solid #C96B1A;border-radius:10px;background:#FFF3E8;color:#713B0C;font-size:14px;line-height:20px;"><strong style="display:block;font-size:15px;">TO NIE JEST PEŁNA LISTA</strong>W wiadomości pokazujemy ${EMAIL_VISIBLE_ROW_LIMIT} z ${total} ${htmlEscape(noun)}. Pełna lista jest dostępna w sekcji ${htmlEscape(section)} w Emma.</div>`;
+}
+
+function blockedNotice(input: {
+  code: string;
+  scenario: CommunicationScenario;
+  sourceRecordIds: readonly string[];
+  expected: unknown;
+  found: unknown;
+  recordIds?: readonly string[];
+  failedAttemptCount?: number;
+  preparedAt: Date;
+}): string {
+  const lines = [
+    "Wiadomość nie została wysłana do klienta.",
+    `Scenariusz: ${input.scenario}`,
+    `Kod błędu: ${input.code}`,
+    `Źródło: ${input.sourceRecordIds.join(", ")}`,
+    input.recordIds?.length ? `Rekordy: ${input.recordIds.join(", ")}` : "",
+    input.failedAttemptCount !== undefined
+      ? `Liczba nieudanych prób: ${input.failedAttemptCount}` : "",
+    input.expected !== undefined ? `Oczekiwano: ${safeDiagnostic(input.expected)}` : "",
+    input.found !== undefined ? `Znaleziono: ${safeDiagnostic(input.found)}` : "",
+    `Timestamp: ${input.preparedAt.toISOString()}`,
+  ].filter(Boolean);
+  return `<div style="margin:0 0 20px;padding:18px;border:3px solid #A33A3A;border-radius:10px;background:#FFF0F0;color:#6F2020;font-size:14px;line-height:21px;"><strong style="display:block;font-size:17px;">EMMA — WIADOMOŚĆ WYMAGA RĘCZNEJ OBSŁUGI</strong>${lines.map((line) => `<div>${htmlEscape(line)}</div>`).join("")}</div>`;
+}
+
+function safeDiagnostic(value: unknown): string {
+  if (value === null) return "null";
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") return String(value);
+  try { return JSON.stringify(value); } catch { return "[unavailable]"; }
 }

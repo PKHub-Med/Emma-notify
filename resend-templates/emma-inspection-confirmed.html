@@ -33,7 +33,7 @@
                   <tr>
                     <td style="vertical-align:top;">
                       <!-- CODEX: Nazwa serwisu ma pochodzić z konfiguracji tenant/service provider. Nie wpisuj nazwy dostawcy na stałe w kodzie aplikacji. -->
-                      <div style="font-size:25px;line-height:30px;color:#223F6D;font-weight:850;letter-spacing:-0.4px;">
+                      <div style="font-size:25px;line-height:30px;color:#223F6D;font-weight:800;letter-spacing:-0.4px;">
                         {{{SERVICE_NAME}}}
                       </div>
                       <div style="font-size:12px;line-height:18px;color:#66758A;margin-top:5px;">
@@ -42,7 +42,7 @@
                     </td>
                     <td
                       align="right"
-                      style="vertical-align:top;font-size:10px;line-height:15px;color:#66758A;white-space:nowrap;"
+                      style="vertical-align:top;font-size:12px;line-height:18px;color:#66758A;white-space:nowrap;"
                     >
                       Data wysłania<br /><strong style="color:#1F2F49;">{{{SENT_AT}}}</strong>
                     </td>
@@ -52,11 +52,12 @@
             </tr>
             <tr>
               <td class="px" style="padding:26px 28px 28px;">
+                {{{BLOCKED_NOTICE}}}
                 <h1 style="margin:0;font-size:25px;line-height:32px;letter-spacing:-0.4px;color:#1F2F49;">
-                  Wizyta serwisowa została ustalona
+                  Wizyta serwisowa została zaplanowana
                 </h1>
                 <p style="margin:9px 0 0;font-size:14px;line-height:22px;color:#1F2F49;">
-                  Potwierdzamy termin realizacji przeglądów okresowych aparatury medycznej.
+                  Termin realizacji przeglądów okresowych został ustalony na poniższy termin.
                 </p>
                 <table
                   role="presentation"
@@ -80,7 +81,7 @@
                             Data
                           </td>
                           <td
-                            style="padding:7px 0;color:#1F2F49;font-size:13px;line-height:18px;font-weight:700;vertical-align:top;"
+                            style="padding:7px 0;color:#1F2F49;font-size:14px;line-height:22px;font-weight:700;vertical-align:top;"
                           >
                             {{{VISIT_DATE}}}
                           </td>
@@ -93,7 +94,7 @@
                             Oddział
                           </td>
                           <td
-                            style="padding:7px 0;color:#1F2F49;font-size:13px;line-height:18px;font-weight:700;vertical-align:top;"
+                            style="padding:7px 0;color:#1F2F49;font-size:14px;line-height:22px;font-weight:700;vertical-align:top;"
                           >
                             {{{DEPARTMENT}}}
                           </td>
@@ -106,7 +107,7 @@
                             Liczba urządzeń
                           </td>
                           <td
-                            style="padding:7px 0;color:#1F2F49;font-size:13px;line-height:18px;font-weight:700;vertical-align:top;"
+                            style="padding:7px 0;color:#1F2F49;font-size:14px;line-height:22px;font-weight:700;vertical-align:top;"
                           >
                             {{{DEVICE_COUNT}}}
                           </td>
@@ -119,7 +120,7 @@
                             Aktualny status
                           </td>
                           <td style="padding:7px 0;vertical-align:top;">
-                            <span style="display:inline-block;padding:5px 9px;border-radius:999px;border:1px solid #D4E0F0;background:#EAF0F9;color:#33598F;font-size:10px;line-height:14px;font-weight:800;">Umówione</span>
+                            <span style="display:inline-block;padding:5px 9px;border-radius:999px;border:1px solid #D4E0F0;background:#EAF0F9;color:#33598F;font-size:12px;line-height:18px;font-weight:800;">Umówione</span>
                           </td>
                         </tr>
                       </table>
@@ -140,17 +141,17 @@
                   >
                     <tr>
                       <td
-                        style="padding:9px 8px;border-bottom:1px solid #D9E1EB;border-right:1px solid #D9E1EB;background:#F7F9FC;font-size:9px;line-height:14px;color:#66758A;font-weight:800;text-transform:uppercase;letter-spacing:.03em;width:28px;"
+                        style="padding:9px 8px;border-bottom:1px solid #D9E1EB;border-right:1px solid #D9E1EB;background:#F7F9FC;font-size:12px;line-height:18px;color:#66758A;font-weight:800;text-transform:uppercase;letter-spacing:.03em;width:28px;"
                       >
                         LP.
                       </td>
                       <td
-                        style="padding:9px 8px;border-bottom:1px solid #D9E1EB;border-right:1px solid #D9E1EB;background:#F7F9FC;font-size:9px;line-height:14px;color:#66758A;font-weight:800;text-transform:uppercase;letter-spacing:.03em;"
+                        style="padding:9px 8px;border-bottom:1px solid #D9E1EB;border-right:1px solid #D9E1EB;background:#F7F9FC;font-size:12px;line-height:18px;color:#66758A;font-weight:800;text-transform:uppercase;letter-spacing:.03em;"
                       >
                         Urządzenie
                       </td>
                       <td
-                        style="padding:9px 8px;border-bottom:1px solid #D9E1EB;background:#F7F9FC;font-size:9px;line-height:14px;color:#66758A;font-weight:800;text-transform:uppercase;letter-spacing:.03em;text-align:right;width:145px;"
+                        style="padding:9px 8px;border-bottom:1px solid #D9E1EB;background:#F7F9FC;font-size:12px;line-height:18px;color:#66758A;font-weight:800;text-transform:uppercase;letter-spacing:.03em;text-align:right;width:145px;"
                       >
                         Szacunkowy czas realizacji
                       </td>
@@ -186,17 +187,9 @@
 {{{DEVICE_ROW_28}}}
 {{{DEVICE_ROW_29}}}
 {{{DEVICE_ROW_30}}}
-{{{DEVICE_ROW_31}}}
-{{{DEVICE_ROW_32}}}
-{{{DEVICE_ROW_33}}}
-{{{DEVICE_ROW_34}}}
-{{{DEVICE_ROW_35}}}
-{{{DEVICE_ROW_36}}}
-{{{DEVICE_ROW_37}}}
-{{{DEVICE_ROW_38}}}
-{{{DEVICE_ROW_39}}}
                   </table>
                 </div>
+                {{{TRUNCATION_NOTICE}}}
                 <table
                   role="presentation"
                   width="100%"
@@ -207,13 +200,13 @@
                 >
                   <tr>
                     <td style="padding:15px 18px;">
-                      <div style="font-size:15px;line-height:21px;font-weight:800;color:#1F2F49;margin-bottom:4px;">
+                      <div style="font-size:16px;line-height:22px;font-weight:800;color:#1F2F49;margin-bottom:4px;">
                         Przygotowanie przed wizytą
                       </div>
                       <table role="presentation" width="100%">
                         <tr>
                           <td
-                            style="padding:5px 0 5px 0;width:18px;vertical-align:top;color:#2B7A64;font-size:15px;line-height:20px;"
+                            style="padding:5px 0 5px 0;width:18px;vertical-align:top;color:#2B7A64;font-size:16px;line-height:22px;"
                           >
                             ✓
                           </td>
@@ -223,7 +216,7 @@
                         </tr>
                         <tr>
                           <td
-                            style="padding:5px 0 5px 0;width:18px;vertical-align:top;color:#2B7A64;font-size:15px;line-height:20px;"
+                            style="padding:5px 0 5px 0;width:18px;vertical-align:top;color:#2B7A64;font-size:16px;line-height:22px;"
                           >
                             ✓
                           </td>
@@ -233,7 +226,7 @@
                         </tr>
                         <tr>
                           <td
-                            style="padding:5px 0 5px 0;width:18px;vertical-align:top;color:#2B7A64;font-size:15px;line-height:20px;"
+                            style="padding:5px 0 5px 0;width:18px;vertical-align:top;color:#2B7A64;font-size:16px;line-height:22px;"
                           >
                             ✓
                           </td>
@@ -248,28 +241,7 @@
                 <p style="margin:16px 0 0;font-size:12px;line-height:18px;color:#66758A;">
                   Szczegóły urządzeń, historia i dokumentacja są dostępne w Emma.
                 </p>
-                <table
-                  role="presentation"
-                  width="100%"
-                  cellspacing="0"
-                  cellpadding="0"
-                  border="0"
-                  style="margin-top:20px;"
-                >
-                  <tr>
-                    <td align="center" bgcolor="#223F6D" style="background:#223F6D;border-radius:10px;">
-                      <!-- CODEX: Przed wysyłką podstaw w zmiennej Resend EMMA_SECURE_URL bezpieczny, czasowy link wygenerowany przez backend dla TEGO odbiorcy i TEJ sprawy/wizyty. Nie hardkoduj domeny, ścieżki ani przykładowych ID. Ten sam URL musi trafić do href CTA oraz — jeśli jest widoczny — do tekstowego linku awaryjnego. -->
-                      <a
-                        href="{{{EMMA_SECURE_URL}}}"
-                        style="display:block;padding:14px 20px;font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:20px;font-weight:800;color:#ffffff;text-decoration:none;"
-                        >Zobacz szczegóły wizyty w Emma</a
-                      >
-                    </td>
-                  </tr>
-                </table>
-                <p style="margin:9px 0 0;font-size:10px;line-height:15px;color:#66758A;word-break:break-all;">
-                  {{{EMMA_SECURE_URL}}}
-                </p>
+                {{{EMMA_SECURE_URL}}}
               </td>
             </tr>
             <tr>
@@ -279,7 +251,7 @@
                     <td style="padding-top:14px;">
                       <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
                         <tr>
-                          <td style="font-size:11px;line-height:17px;color:#66758A;">
+                          <td style="font-size:12px;line-height:18px;color:#66758A;">
                             <strong
                               style="display:block;margin-bottom:3px;color:#223F6D;font-size:12px;line-height:18px;"
                               >Poznaj platformę EMMA</strong
@@ -297,12 +269,8 @@
                     </td>
                   </tr>
                   <tr>
-                    <td style="padding-top:13px;font-size:10px;line-height:16px;color:#66758A;">
-                      <!-- CODEX: {{{EMMA_UNSUBSCRIBE_URL}}} ma być indywidualnym, podpisanym linkiem wygenerowanym dla konkretnego odbiorcy. Link ma wyłączyć dalsze automatyczne powiadomienia mailowe objęte tym mechanizmem zgodnie z ustawieniami odbiorcy. Nie używaj tu {{{EMMA_SECURE_URL}}} i nie wysyłaj maila z nierozwiązanym placeholderem. -->
-                      Nie chcesz otrzymywać takich powiadomień?
-                      <a href="{{{EMMA_UNSUBSCRIBE_URL}}}" style="color:#66758A;text-decoration:underline;"
-                        >Wyłącz otrzymywanie tych maili</a
-                      >.
+                    <td style="padding-top:13px;font-size:12px;line-height:18px;color:#66758A;">
+                      {{{EMMA_UNSUBSCRIBE_URL}}}
                     </td>
                   </tr>
                 </table>

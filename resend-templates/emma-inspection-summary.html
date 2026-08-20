@@ -33,7 +33,7 @@
                   <tr>
                     <td style="vertical-align:top;">
                       <!-- CODEX: Nazwa serwisu ma pochodzić z konfiguracji tenant/service provider. Nie wpisuj nazwy dostawcy na stałe w kodzie aplikacji. -->
-                      <div style="font-size:25px;line-height:30px;color:#223F6D;font-weight:850;letter-spacing:-0.4px;">
+                      <div style="font-size:25px;line-height:30px;color:#223F6D;font-weight:800;letter-spacing:-0.4px;">
                         {{{SERVICE_NAME}}}
                       </div>
                       <div style="font-size:12px;line-height:18px;color:#66758A;margin-top:5px;">
@@ -42,7 +42,7 @@
                     </td>
                     <td
                       align="right"
-                      style="vertical-align:top;font-size:10px;line-height:15px;color:#66758A;white-space:nowrap;"
+                      style="vertical-align:top;font-size:12px;line-height:18px;color:#66758A;white-space:nowrap;"
                     >
                       Data wysłania<br /><strong style="color:#1F2F49;">{{{SENT_AT}}}</strong>
                     </td>
@@ -52,6 +52,7 @@
             </tr>
             <tr>
               <td class="px" style="padding:26px 28px 28px;">
+                {{{BLOCKED_NOTICE}}}
                 <h1 style="margin:0;font-size:25px;line-height:32px;letter-spacing:-0.4px;color:#1F2F49;">
                   Przeglądy zostały zakończone
                 </h1>
@@ -62,12 +63,6 @@
                 <p style="margin:5px 0 0;font-size:12px;line-height:18px;color:#66758A;">
                   Data wizyty: <strong style="color:#1F2F49;">{{{VISIT_DATE}}}</strong>
                 </p>
-                <div style="margin-top:12px;">
-                  <span
-                    style="display:inline-block;padding:6px 10px;border-radius:999px;background:#E7F3EF;color:#2B7A64;font-size:11px;line-height:15px;font-weight:700;"
-                    >Wizyta zakończona</span
-                  >
-                </div>
                 <table
                   role="presentation"
                   width="100%"
@@ -81,15 +76,15 @@
                       width="33.33%"
                       style="padding:12px 8px;border:1px solid #D9E1EB;background:#E7F3EF;text-align:center;"
                     >
-                      <div style="font-size:22px;font-weight:900;color:#2B7A64;">{{{PASSED_COUNT}}}</div>
-                      <div style="font-size:10px;line-height:15px;color:#2B7A64;font-weight:700;">sprawne</div>
+                      <div style="font-size:22px;font-weight:800;color:#2B7A64;">{{{PASSED_COUNT}}}</div>
+                      <div style="font-size:12px;line-height:18px;color:#2B7A64;font-weight:700;">sprawne</div>
                     </td>
                     <td
                       width="33.33%"
                       style="padding:12px 8px;border-top:1px solid #D9E1EB;border-bottom:1px solid #D9E1EB;background:#FBF1DB;text-align:center;"
                     >
-                      <div style="font-size:22px;font-weight:900;color:#9B6A12;">{{{CONDITIONAL_COUNT}}}</div>
-                      <div style="font-size:10px;line-height:15px;color:#9B6A12;font-weight:700;">
+                      <div style="font-size:22px;font-weight:800;color:#9B6A12;">{{{CONDITIONAL_COUNT}}}</div>
+                      <div style="font-size:12px;line-height:18px;color:#9B6A12;font-weight:700;">
                         warunkowo dopuszczone
                       </div>
                     </td>
@@ -97,8 +92,8 @@
                       width="33.33%"
                       style="padding:12px 8px;border:1px solid #D9E1EB;background:#F8E9E9;text-align:center;"
                     >
-                      <div style="font-size:22px;font-weight:900;color:#9A4949;">{{{FAILED_COUNT}}}</div>
-                      <div style="font-size:10px;line-height:15px;color:#9A4949;font-weight:700;">niesprawne</div>
+                      <div style="font-size:22px;font-weight:800;color:#9A4949;">{{{FAILED_COUNT}}}</div>
+                      <div style="font-size:12px;line-height:18px;color:#9A4949;font-weight:700;">niesprawne</div>
                     </td>
                   </tr>
                 </table>
@@ -115,9 +110,9 @@
                     style="border:1px solid #D9E1EB;background:#ffffff;border-collapse:separate;border-spacing:0;table-layout:fixed;"
                   >
                     <tr>
-                      <td style="padding:9px 8px;border-bottom:1px solid #D9E1EB;border-right:1px solid #D9E1EB;background:#F7F9FC;font-size:9px;line-height:14px;color:#66758A;font-weight:800;width:34px;text-align:center;">LP.</td>
-                      <td style="padding:9px 10px;border-bottom:1px solid #D9E1EB;border-right:1px solid #D9E1EB;background:#F7F9FC;font-size:9px;line-height:14px;color:#66758A;font-weight:800;">URZĄDZENIE I DANE</td>
-                      <td style="padding:9px 8px;border-bottom:1px solid #D9E1EB;background:#F7F9FC;font-size:9px;line-height:14px;color:#66758A;font-weight:800;width:150px;text-align:center;">STATUS</td>
+                      <td style="padding:9px 8px;border-bottom:1px solid #D9E1EB;border-right:1px solid #D9E1EB;background:#F7F9FC;font-size:12px;line-height:18px;color:#66758A;font-weight:800;width:34px;text-align:center;">LP.</td>
+                      <td style="padding:9px 10px;border-bottom:1px solid #D9E1EB;border-right:1px solid #D9E1EB;background:#F7F9FC;font-size:12px;line-height:18px;color:#66758A;font-weight:800;">URZĄDZENIE I DANE</td>
+                      <td style="padding:9px 8px;border-bottom:1px solid #D9E1EB;background:#F7F9FC;font-size:12px;line-height:18px;color:#66758A;font-weight:800;width:150px;text-align:center;">STATUS</td>
                     </tr>
                     <!-- CODEX: RESULT_ROWS jest gotowym HTML-em <tr>...</tr> generowanym w backendzie. Sortuj: NIESPRAWNY -> WARUNKOWO DOPUSZCZONY -> SPRAWNY. Każdą wartość z Airtable HTML-escapeuj. -->
                     {{{RESULT_ROW_01}}}
@@ -150,17 +145,9 @@
 {{{RESULT_ROW_28}}}
 {{{RESULT_ROW_29}}}
 {{{RESULT_ROW_30}}}
-{{{RESULT_ROW_31}}}
-{{{RESULT_ROW_32}}}
-{{{RESULT_ROW_33}}}
-{{{RESULT_ROW_34}}}
-{{{RESULT_ROW_35}}}
-{{{RESULT_ROW_36}}}
-{{{RESULT_ROW_37}}}
-{{{RESULT_ROW_38}}}
-{{{RESULT_ROW_39}}}
                   </table>
                 </div>
+                {{{TRUNCATION_NOTICE}}}
                 <table
                   role="presentation"
                   width="100%"
@@ -175,28 +162,7 @@
                     </td>
                   </tr>
                 </table>
-                <table
-                  role="presentation"
-                  width="100%"
-                  cellspacing="0"
-                  cellpadding="0"
-                  border="0"
-                  style="margin-top:20px;"
-                >
-                  <tr>
-                    <td align="center" bgcolor="#223F6D" style="background:#223F6D;border-radius:10px;">
-                      <!-- CODEX: Przed wysyłką podstaw w zmiennej Resend EMMA_SECURE_URL bezpieczny, czasowy link wygenerowany przez backend dla TEGO odbiorcy i TEJ sprawy/wizyty. Nie hardkoduj domeny, ścieżki ani przykładowych ID. Ten sam URL musi trafić do href CTA oraz — jeśli jest widoczny — do tekstowego linku awaryjnego. -->
-                      <a
-                        href="{{{EMMA_SECURE_URL}}}"
-                        style="display:block;padding:14px 20px;font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:20px;font-weight:800;color:#ffffff;text-decoration:none;"
-                        >Zobacz pełne wyniki w Emma</a
-                      >
-                    </td>
-                  </tr>
-                </table>
-                <p style="margin:9px 0 0;font-size:10px;line-height:15px;color:#66758A;word-break:break-all;">
-                  {{{EMMA_SECURE_URL}}}
-                </p>
+                {{{EMMA_SECURE_URL}}}
               </td>
             </tr>
             <tr>
@@ -206,7 +172,7 @@
                     <td style="padding-top:14px;">
                       <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
                         <tr>
-                          <td style="font-size:11px;line-height:17px;color:#66758A;">
+                          <td style="font-size:12px;line-height:18px;color:#66758A;">
                             <strong
                               style="display:block;margin-bottom:3px;color:#223F6D;font-size:12px;line-height:18px;"
                               >Poznaj platformę EMMA</strong
@@ -224,12 +190,8 @@
                     </td>
                   </tr>
                   <tr>
-                    <td style="padding-top:13px;font-size:10px;line-height:16px;color:#66758A;">
-                      <!-- CODEX: {{{EMMA_UNSUBSCRIBE_URL}}} ma być indywidualnym, podpisanym linkiem wygenerowanym dla konkretnego odbiorcy. Link ma wyłączyć dalsze automatyczne powiadomienia mailowe objęte tym mechanizmem zgodnie z ustawieniami odbiorcy. Nie używaj tu {{{EMMA_SECURE_URL}}} i nie wysyłaj maila z nierozwiązanym placeholderem. -->
-                      Nie chcesz otrzymywać takich powiadomień?
-                      <a href="{{{EMMA_UNSUBSCRIBE_URL}}}" style="color:#66758A;text-decoration:underline;"
-                        >Wyłącz otrzymywanie tych maili</a
-                      >.
+                    <td style="padding-top:13px;font-size:12px;line-height:18px;color:#66758A;">
+                      {{{EMMA_UNSUBSCRIBE_URL}}}
                     </td>
                   </tr>
                 </table>

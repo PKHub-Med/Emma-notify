@@ -14,6 +14,7 @@ import {
   encodePortalCaseCursor,
   encodePortalDeviceCursor,
   HospitalPortalViewModelService,
+  inspectionDisplayStatus,
   InvalidPortalCursorError,
   PrismaHospitalPortalStore,
   type HospitalPortalStore,
@@ -24,6 +25,11 @@ import {
 } from "./view-model.js";
 
 describe("paginated hospital portal", () => {
+  it("shows a neutral display status without hiding inspection dates", () => {
+    expect(inspectionDisplayStatus("DO REALIZACJI", new Date("2026-08-25T10:00:00Z")))
+      .toBe("Dane wymagają weryfikacji");
+    expect(inspectionDisplayStatus("DO REALIZACJI", null)).toBe("DO REALIZACJI");
+  });
   it("renders at most 30 of 3200 records while preserving DB counts", async () => {
     const store = memoryStore(2000, 1200);
     const service = new HospitalPortalViewModelService(store, "Tiemed", 30);
@@ -222,6 +228,7 @@ describe("paginated hospital portal", () => {
     expect(queries[0]!.values).toContain("hospital-A");
     expect(queries[1]!.strings.join("?")).toContain('FROM "TrackedDevice" d');
     expect(queries[1]!.strings.join("?")).toContain('d."sourceHospitalRecordId" =');
+    expect(queries[1]!.strings.join("?")).toContain("d.active = true");
     expect(queries[1]!.strings.join("?")).toContain('COALESCE(d."sourceModifiedAt", d."sourceCreatedAt"');
     expect(queries[1]!.strings.join("?")).not.toContain('d."updatedAt"');
     expect(queries[3]!.strings.join("?")).toContain('c."inspectionPerformedAt" IS NOT NULL');
@@ -437,6 +444,7 @@ describe("paginated hospital portal", () => {
     }
     const searchSql = queries[3]!.strings.join("?");
     expect(searchSql).toContain('JOIN "TrackedDevice" search_device');
+    expect(searchSql).toContain("search_device.active = true");
     expect(searchSql).toContain('search_device."serialNumber"');
   });
 
@@ -544,6 +552,13 @@ describe("paginated hospital portal", () => {
     const view = await new HospitalPortalViewModelService(store).build(auth());
     expect(view.initialCases.items[0]?.reportedAt).toBeNull();
     expect(renderHospitalPortal(view, "nonce")).toContain("reportedAt\":null");
+  });
+
+  it("renders the Service Order department on the repair list", async () => {
+    const view = await new HospitalPortalViewModelService(
+      memoryStore(1, 0, { department: "Blok operacyjny" }),
+    ).build(auth());
+    expect(renderHospitalPortal(view, "nonce")).toContain("Blok operacyjny");
   });
 
   it("escapes XSS and preserves Polish UTF-8", async () => {

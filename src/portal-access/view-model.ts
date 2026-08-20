@@ -61,6 +61,8 @@ export type PortalCaseListItem = {
   lastChangedAt: Date | null;
   requiresAction: boolean;
   reportedAt: Date | null;
+  reportedAtDateOnly?: boolean;
+  department?: string | null;
   inspectionPerformedAt: Date | null;
   validUntil: Date | null;
   description: string | null;
@@ -273,8 +275,8 @@ export class PrismaHospitalPortalStore implements HospitalPortalStore {
   constructor(private readonly prisma: PrismaClient) {}
 
   findHospital(scope: string): Promise<StoredHospital | null> {
-    return this.prisma.trackedHospital.findUnique({
-      where: { airtableRecordId: scope },
+    return this.prisma.trackedHospital.findFirst({
+      where: { airtableRecordId: scope, active: true },
       select: { shortName: true, name: true, address: true },
     });
   }
@@ -292,6 +294,7 @@ export class PrismaHospitalPortalStore implements HospitalPortalStore {
       this.prisma.$queryRaw<CountRow[]>(Prisma.sql`
         SELECT COUNT(*) AS count FROM "TrackedDevice" d
         WHERE d."sourceHospitalRecordId" = ${scope.hospitalId}
+          AND d.active = true
           ${visibleDeviceSql(scope)}
       `),
     ]);
@@ -315,7 +318,7 @@ export class PrismaHospitalPortalStore implements HospitalPortalStore {
         WHERE c.active = true AND c."sourceHospitalRecordId" = ${scope.hospitalId}
       `),
       this.prisma.trackedDevice.count({
-        where: { sourceHospitalRecordId: scope.hospitalId },
+        where: { sourceHospitalRecordId: scope.hospitalId, active: true },
       }),
     ]);
     const totalRepairs = Number(totals[0]?.repairs ?? 0n);
@@ -385,7 +388,7 @@ export class PrismaHospitalPortalStore implements HospitalPortalStore {
   async resolveFocusedCase(scope: PortalDataScope): Promise<PortalCaseListItem | null> {
     if (scope.contextType === "REPAIR") return this.findScopedCase(scope, scope.contextId);
     const task = await this.prisma.trackedTask.findFirst({
-      where: { airtableRecordId: scope.contextId, sourceHospitalRecordId: scope.hospitalId },
+      where: { airtableRecordId: scope.contextId, sourceHospitalRecordId: scope.hospitalId, active: true },
       select: { linkedInspectionRecordIds: true, linkedServiceOrderRecordIds: true },
     });
     if (!task) return null;
@@ -418,6 +421,7 @@ export class PrismaHospitalPortalStore implements HospitalPortalStore {
         FLOOR(EXTRACT(EPOCH FROM COALESCE(d."sourceModifiedAt", d."sourceCreatedAt", TIMESTAMP '1970-01-01')) * 1000)::bigint AS "sortKey"
       FROM "TrackedDevice" d
       WHERE d."sourceHospitalRecordId" = ${scope.hospitalId}
+        AND d.active = true
         ${visibleDeviceSql(scope)}
         ${searchSql} ${cursorSql}
       ORDER BY "sortKey" DESC, "sourceRecordId" DESC
@@ -453,6 +457,7 @@ export class PrismaHospitalPortalStore implements HospitalPortalStore {
   }
 
   async listDocuments(scope: PortalDataScope, query: string | null): Promise<PortalDocument[]> {
+    const assetScope = await this.assetAccessScope(scope);
     const matchingCaseIds = query ? await this.searchCaseIds(scope, query) : [];
     const searchWhere: Prisma.CommunicationAssetWhereInput = query ? {
       OR: [
@@ -465,7 +470,7 @@ export class PrismaHospitalPortalStore implements HospitalPortalStore {
     const assets = await this.prisma.communicationAsset.findMany({
       where: {
         AND: [
-          publicAssetAccessWhere(scope),
+          publicAssetAccessWhere(assetScope),
           { storedFile: { kind: StoredFileKind.DOCUMENT } },
           searchWhere,
         ],
@@ -517,6 +522,7 @@ export class PrismaHospitalPortalStore implements HospitalPortalStore {
     const authorizedRows = await this.prisma.$queryRaw<Array<{ airtableRecordId: string }>>(Prisma.sql`
       SELECT d."airtableRecordId" FROM "TrackedDevice" d
       WHERE d."sourceHospitalRecordId" = ${scope.hospitalId}
+        AND d.active = true
         AND d."airtableRecordId" IN (${Prisma.join(sourceRecordIds)})
         ${visibleDeviceSql(scope)}
     `);
@@ -526,6 +532,7 @@ export class PrismaHospitalPortalStore implements HospitalPortalStore {
       where: {
         airtableRecordId: { in: authorizedIds },
         sourceHospitalRecordId: scope.hospitalId,
+        active: true,
       },
       select: {
         airtableRecordId: true, name: true, manufacturer: true, model: true,
@@ -591,6 +598,7 @@ export class PrismaHospitalPortalStore implements HospitalPortalStore {
     const tasks = inspectionIds.length === 0 ? [] : await this.prisma.trackedTask.findMany({
       where: {
         sourceHospitalRecordId: scope.hospitalId,
+        active: true,
         OR: inspectionIds.map((id) => ({ linkedInspectionRecordIds: { array_contains: [id] } })),
       },
       orderBy: { updatedAt: "desc" },
@@ -607,6 +615,7 @@ export class PrismaHospitalPortalStore implements HospitalPortalStore {
       where: {
         airtableRecordId: { in: linkedDeviceIds },
         sourceHospitalRecordId: scope.hospitalId,
+        active: true,
       },
       select: {
         airtableRecordId: true, name: true, manufacturer: true, model: true,
@@ -655,11 +664,12 @@ export class PrismaHospitalPortalStore implements HospitalPortalStore {
     snapshots: StoredPortalCase[],
   ): Promise<void> {
     if (cases.length === 0) return;
+    const assetScope = await this.assetAccessScope(scope);
     const sourceIds = cases.map((item) => item.sourceRecordId);
     const assets = await this.prisma.communicationAsset.findMany({
       where: {
         AND: [
-          publicAssetAccessWhere(scope),
+          publicAssetAccessWhere(assetScope),
           {
             storedFile: {
               sourceRecordId: { in: sourceIds },
@@ -686,6 +696,16 @@ export class PrismaHospitalPortalStore implements HospitalPortalStore {
       item.documents = caseAssets.filter((asset) => asset.kind === "DOCUMENT");
       item.photos = caseAssets.filter((asset) => asset.kind === "IMAGE");
     }
+  }
+
+  private async assetAccessScope(scope: PortalDataScope) {
+    if (scope.accessLevel === PortalAccessLevel.FULL) return scope;
+    if (!this.prisma.communicationDelivery) return scope;
+    const delivery = await this.prisma.communicationDelivery.findUnique({
+      where: { id: scope.communicationDeliveryId },
+      select: { resendMessageId: true },
+    });
+    return { ...scope, communicationBatchMessageId: delivery?.resendMessageId ?? null };
   }
 
   private async searchCaseIds(scope: PortalDataScope, query: string): Promise<string[]> {
@@ -858,7 +878,8 @@ function scopedCasesSql(scope: PortalDataScope): Prisma.Sql {
       FLOOR(EXTRACT(EPOCH FROM COALESCE((SELECT MAX(e."detectedAt") FROM "CaseEvent" e
         WHERE e."trackedCaseId" = c.id AND e."visibleToCustomer" = true),
         c."sourceModifiedAt", c."sourceCreatedAt", TIMESTAMP '1970-01-01 00:00:00')) * 1000)::bigint AS "sortKey",
-      NULL::timestamp AS "validUntil", c."businessNumber", c."clientOrderNumber"
+      NULL::timestamp AS "validUntil", c."businessNumber", c."clientOrderNumber",
+      c."sourceSnapshot"->>'department' AS department
     FROM "TrackedCase" c
     WHERE c."caseType" = 'SERVICE_ORDER' AND c.active = true
       AND c."sourceHospitalRecordId" = ${scope.hospitalId}
@@ -869,6 +890,7 @@ function scopedCasesSql(scope: PortalDataScope): Prisma.Sql {
       c."serialNumber", c."inventoryNumber",
       COALESCE(c."currentStatus", (SELECT t."emmaCustomerStatus" FROM "TrackedTask" t
         WHERE t."sourceHospitalRecordId" = ${scope.hospitalId}
+          AND t.active = true
           AND t."linkedInspectionRecordIds" ? c."airtableRecordId"
         ORDER BY t."updatedAt" DESC LIMIT 1), 'Brak informacji') AS status,
       (CASE UPPER(TRIM(COALESCE(c."currentStatus", '')))
@@ -879,7 +901,8 @@ function scopedCasesSql(scope: PortalDataScope): Prisma.Sql {
       + FLOOR(EXTRACT(EPOCH FROM COALESCE((SELECT MAX(e."detectedAt") FROM "CaseEvent" e
         WHERE e."trackedCaseId" = c.id AND e."visibleToCustomer" = true),
         c."sourceModifiedAt", c."sourceCreatedAt", TIMESTAMP '1970-01-01 00:00:00')) * 1000)::bigint AS "sortKey",
-      c."inspectionValidUntil" AS "validUntil", c."businessNumber", c."clientOrderNumber"
+      c."inspectionValidUntil" AS "validUntil", c."businessNumber", c."clientOrderNumber",
+      c."sourceSnapshot"->>'department' AS department
     FROM "TrackedCase" c
     WHERE c."caseType" = 'INSPECTION' AND c.active = true
       AND c."sourceHospitalRecordId" = ${scope.hospitalId}
@@ -914,13 +937,14 @@ function searchFilterSql(query: string | null, hospitalId: string): Prisma.Sql {
   if (!query) return Prisma.empty;
   const pattern = `%${query.replaceAll("\\", "\\\\").replaceAll("%", "\\%").replaceAll("_", "\\_")}%`;
   return Prisma.sql`AND (
-    CONCAT_WS(' ', "deviceName", manufacturer, model, "serialNumber", "inventoryNumber", "businessNumber", "clientOrderNumber", status) ILIKE ${pattern} ESCAPE '\\'
+    CONCAT_WS(' ', "deviceName", manufacturer, model, "serialNumber", "inventoryNumber", "businessNumber", "clientOrderNumber", status, department) ILIKE ${pattern} ESCAPE '\\'
     OR EXISTS (
       SELECT 1 FROM "TrackedCaseDevice" search_link
       JOIN "TrackedDevice" search_device
         ON search_device."airtableRecordId" = search_link."deviceAirtableId"
       WHERE search_link."trackedCaseId" = scoped_case."trackedCaseId"
         AND search_device."sourceHospitalRecordId" = ${hospitalId}
+        AND search_device.active = true
         AND CONCAT_WS(' ', search_device.name, search_device.manufacturer, search_device.model,
           search_device."serialNumber", search_device."inventoryNumber") ILIKE ${pattern} ESCAPE '\\'
     )
@@ -938,9 +962,12 @@ function mapCase(
   type: "REPAIR" | "INSPECTION",
   devices: PortalCaseDevice[],
 ): PortalCaseListItem {
-  const currentStatus = type === "INSPECTION"
+  const rawCurrentStatus = type === "INSPECTION"
     ? stored.currentStatus || stored.taskCustomerStatus || stored.emmaCustomerStatus || "Brak informacji"
     : stored.emmaCustomerStatus || stored.currentStatus || "Brak informacji";
+  const currentStatus = type === "INSPECTION"
+    ? inspectionDisplayStatus(rawCurrentStatus, stored.inspectionPerformedAt)
+    : rawCurrentStatus;
   const history = stored.events.map((event) => ({
     title: event.eventType === "INSPECTION_STATUS_CHANGED" ? "Zmiana statusu przeglądu" : "Zmiana statusu",
     description: changeDescription(event.oldValue, event.newValue),
@@ -971,6 +998,8 @@ function mapCase(
     lastChangedAt: history.at(-1)?.changedAt ?? stored.sourceModifiedAt ?? stored.sourceCreatedAt,
     requiresAction: requiresCustomerAction(currentStatus),
     reportedAt: type === "REPAIR" ? stored.reportedAt : null,
+    reportedAtDateOnly: type === "REPAIR" && isDateOnlySnapshot(stored.sourceSnapshot, "reportedAtRaw"),
+    department: type === "REPAIR" ? snapshotText(stored.sourceSnapshot, "department") : null,
     inspectionPerformedAt: type === "INSPECTION" ? stored.inspectionPerformedAt : null,
     validUntil: type === "INSPECTION"
       ? stored.inspectionValidUntil ?? stored.inspectionDueDate ??
@@ -991,6 +1020,27 @@ function inspectionValidUntilFromSnapshot(snapshot: unknown): Date | null {
     if (parsed) return parsed;
   }
   return null;
+}
+
+function snapshotText(snapshot: unknown, key: string): string | null {
+  if (typeof snapshot !== "object" || snapshot === null || Array.isArray(snapshot)) return null;
+  const value = (snapshot as Record<string, unknown>)[key];
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function isDateOnlySnapshot(snapshot: unknown, key: string): boolean {
+  const value = snapshotText(snapshot, key);
+  return Boolean(value && /^\d{4}-\d{2}-\d{2}$/.test(value));
+}
+
+function inspectionStateInconsistent(status: string, performedAt: Date | null): boolean {
+  return Boolean(performedAt && /^(DO REALIZACJI|DO WYKONANIA|PLANOWAN|ZAPLANOWAN)/
+    .test(status.trim().toUpperCase()));
+}
+
+export function inspectionDisplayStatus(status: string, performedAt: Date | null): string {
+  return inspectionStateInconsistent(status, performedAt)
+    ? "Dane wymagają weryfikacji" : status;
 }
 
 function deduplicateAssets(assets: readonly PortalAssetRow[]): PortalAssetRow[] {

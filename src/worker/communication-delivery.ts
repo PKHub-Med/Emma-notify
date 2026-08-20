@@ -205,8 +205,8 @@ export class PrismaCommunicationDeliveryStore implements CommunicationDeliverySt
   }
 
   async getCurrentTask(sourceRecordId: string): Promise<CurrentTaskState | null> {
-    return this.prisma.trackedTask.findUnique({
-      where: { airtableRecordId: sourceRecordId },
+    return this.prisma.trackedTask.findFirst({
+      where: { airtableRecordId: sourceRecordId, active: true },
       select: {
         day: true,
         emmaCustomerStatus: true,
@@ -330,6 +330,7 @@ export function createDeliveryPlan(
     };
   }
   if (event.scenario === CommunicationScenario.REPAIR_RECEIVED ||
+      event.scenario === CommunicationScenario.REPAIR_DELAYED_PARTS ||
       event.scenario === CommunicationScenario.REPAIR_COMPLETED) {
     const scheduledFor = repairBatchScheduledFor(event.detectedAt, timeZone);
     const ready = now.getTime() >= scheduledFor.getTime();

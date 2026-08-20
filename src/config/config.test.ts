@@ -12,6 +12,7 @@ const workerEnvironment = {
   AIRTABLE_PAT: "patExample",
   ACCESS_LINK_SIGNING_SECRET: accessLinkSigningSecret,
   PUBLIC_BASE_URL: publicBaseUrl,
+  TIEMED_FALLBACK_EMAIL: "fallback@example.test",
 };
 
 describe("loadApiConfig", () => {
@@ -120,7 +121,7 @@ describe("loadWorkerConfig", () => {
       productionEmailsEnabled: false,
       linkTtlDays: 30,
       publicBaseUrl: "https://notify.example.org",
-      tiemedFallbackEmail: null,
+      tiemedFallbackEmail: "fallback@example.test",
       communicationTimezone: "Europe/Warsaw",
       communicationEmailsEnabled: false,
       communicationSendNotBefore: null,
@@ -166,6 +167,15 @@ describe("loadWorkerConfig", () => {
       COMMUNICATION_EMAILS_ENABLED: "true",
       COMMUNICATION_SEND_NOT_BEFORE: "invalid",
     }).communicationSendNotBefore).toBeNull();
+  });
+
+  it("requires the Tiemed fallback address only when communication is enabled", () => {
+    expect(() => loadWorkerConfig({
+      ...workerEnvironment, COMMUNICATION_EMAILS_ENABLED: "true", TIEMED_FALLBACK_EMAIL: "",
+    })).toThrow(/TIEMED_FALLBACK_EMAIL/);
+    expect(loadWorkerConfig({
+      ...workerEnvironment, COMMUNICATION_EMAILS_ENABLED: "false", TIEMED_FALLBACK_EMAIL: "",
+    }).tiemedFallbackEmail).toBeNull();
   });
 
   it("uses configurable Reply-To with the Tiemed default", () => {

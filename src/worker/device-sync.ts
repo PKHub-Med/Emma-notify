@@ -28,7 +28,7 @@ export interface DeviceSyncStore {
 }
 
 export class PrismaDeviceSyncStore implements DeviceSyncStore {
-  constructor(private readonly prisma: PrismaClient) {}
+  constructor(private readonly prisma: PrismaClient | Prisma.TransactionClient) {}
 
   getCheckpoint() {
     return this.prisma.syncState.findUnique({
@@ -60,7 +60,7 @@ export class PrismaDeviceSyncStore implements DeviceSyncStore {
       sourceCreatedAt: device.sourceCreatedAt?.toISOString() ?? null,
       sourceModifiedAt: device.sourceModifiedAt?.toISOString() ?? null,
     } as Prisma.InputJsonObject;
-    await this.prisma.$transaction(async (transaction) => {
+    await this.inTransaction(async (transaction) => {
       const current = await transaction.trackedDevice.findUnique({
         where: { airtableRecordId: device.airtableRecordId },
         select: { sourceSnapshot: true },
@@ -68,16 +68,21 @@ export class PrismaDeviceSyncStore implements DeviceSyncStore {
       if (current && isDeepStrictEqual(current.sourceSnapshot, snapshot)) {
         await transaction.trackedDevice.update({
           where: { airtableRecordId: device.airtableRecordId },
-          data: { lastSeenAt: seenAt },
+          data: { lastSeenAt: seenAt, active: true },
         });
       } else {
         await transaction.trackedDevice.upsert({
           where: { airtableRecordId: device.airtableRecordId },
-          create: { ...device, sourceSnapshot: snapshot, firstSeenAt: seenAt, lastSeenAt: seenAt },
-          update: { ...device, sourceSnapshot: snapshot, lastSeenAt: seenAt },
+          create: { ...device, sourceSnapshot: snapshot, firstSeenAt: seenAt, lastSeenAt: seenAt, active: true },
+          update: { ...device, sourceSnapshot: snapshot, lastSeenAt: seenAt, active: true },
         });
       }
     });
+  }
+
+  private inTransaction<T>(operation: (transaction: Prisma.TransactionClient) => Promise<T>): Promise<T> {
+    if ("$transaction" in this.prisma) return this.prisma.$transaction(operation);
+    return operation(this.prisma);
   }
 
   async markSuccessful(at: Date, completeBaseline: boolean): Promise<void> {

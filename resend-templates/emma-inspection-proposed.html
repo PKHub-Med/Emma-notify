@@ -6,14 +6,15 @@
 <div style="display:none;max-height:0;overflow:hidden;opacity:0;color:transparent;">Proponujemy termin wizyty serwisowej: {{{VISIT_DATE}}}.</div>
 <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" bgcolor="#F1F4F8"><tr><td align="center" style="padding:24px 10px;">
 <table role="presentation" class="wrap" width="640" cellspacing="0" cellpadding="0" border="0" style="width:640px;max-width:640px;background:#fff;border:1px solid #D9E1EB;border-radius:14px;overflow:hidden;">
-<tr><td class="px" style="padding:22px 28px;border-bottom:1px solid #E6EBF2;"><table role="presentation" width="100%"><tr><td><div style="font-size:25px;line-height:30px;color:#223F6D;font-weight:800;">{{{SERVICE_NAME}}}</div><div style="font-size:12px;line-height:18px;color:#66758A;margin-top:5px;">Obsługa serwisowa przez platformę <strong style="color:#223F6D;">EMMA</strong></div></td><td align="right" style="font-size:10px;line-height:15px;color:#66758A;">Data wysłania<br><strong style="color:#1F2F49;">{{{SENT_AT}}}</strong></td></tr></table></td></tr>
+<tr><td class="px" style="padding:22px 28px;border-bottom:1px solid #E6EBF2;"><table role="presentation" width="100%"><tr><td><div style="font-size:25px;line-height:30px;color:#223F6D;font-weight:800;">{{{SERVICE_NAME}}}</div><div style="font-size:12px;line-height:18px;color:#66758A;margin-top:5px;">Obsługa serwisowa przez platformę <strong style="color:#223F6D;">EMMA</strong></div></td><td align="right" style="font-size:12px;line-height:18px;color:#66758A;">Data wysłania<br><strong style="color:#1F2F49;">{{{SENT_AT}}}</strong></td></tr></table></td></tr>
 <tr><td class="px" style="padding:26px 28px 28px;">
+{{{BLOCKED_NOTICE}}}
 <h1 style="margin:0;font-size:25px;line-height:32px;">Proponujemy termin wizyty serwisowej</h1>
 <p style="margin:9px 0 0;font-size:14px;line-height:22px;">Proponujemy termin wizyty serwisowej: <strong>{{{VISIT_DATE}}}</strong>.<br>Jeżeli termin nie jest dla Państwa odpowiedni, prosimy o informację. W przypadku braku odpowiedzi wizyta odbędzie się w zaproponowanym terminie.</p>
-<div style="margin-top:18px;border:1px solid #D9E1EB;background:#F7F9FC;padding:16px 18px;font-size:13px;line-height:21px;"><strong>Termin: {{{VISIT_DATE}}}</strong><br>Oddział: {{{DEPARTMENT}}}<br>Liczba urządzeń: {{{DEVICE_COUNT}}}</div>
-<div style="margin-top:18px;border:1px solid #D9E1EB;background:#EAF0F9;padding:15px 18px;"><div style="font-size:15px;font-weight:800;">Kontakt z biurem serwisu</div><div style="margin-top:7px;font-size:12px;line-height:19px;"><strong>{{{COORDINATOR_NAME}}}</strong><br>tel. {{{COORDINATOR_PHONE}}}<br>{{{COORDINATOR_EMAIL}}}</div></div>
+<div style="margin-top:18px;border:1px solid #D9E1EB;background:#F7F9FC;padding:16px 18px;font-size:14px;line-height:22px;"><strong style="display:block;margin-bottom:6px;">Termin: {{{VISIT_DATE}}}</strong>Oddział: {{{DEPARTMENT}}}<br>Liczba urządzeń: {{{DEVICE_COUNT}}}</div>
+<div style="margin-top:18px;border:1px solid #D9E1EB;background:#EAF0F9;padding:15px 18px;"><div style="font-size:16px;line-height:22px;font-weight:800;">Kontakt z biurem serwisu</div><div style="margin-top:7px;font-size:12px;line-height:18px;"><strong>{{{COORDINATOR_NAME}}}</strong><br>tel. {{{COORDINATOR_PHONE}}}<br>{{{COORDINATOR_EMAIL}}}</div></div>
 <div style="margin-top:20px;font-size:16px;font-weight:800;">Urządzenia objęte przeglądem</div>
-<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin-top:8px;border:1px solid #D9E1EB;border-collapse:separate;border-spacing:0;table-layout:fixed;"><tr><td style="padding:9px 8px;border-bottom:1px solid #D9E1EB;border-right:1px solid #D9E1EB;background:#F7F9FC;font-size:10px;font-weight:800;width:34px;text-align:center;">LP.</td><td style="padding:9px 8px;border-bottom:1px solid #D9E1EB;border-right:1px solid #D9E1EB;background:#F7F9FC;font-size:10px;font-weight:800;">URZĄDZENIE I DANE</td><td style="padding:9px 8px;border-bottom:1px solid #D9E1EB;background:#F7F9FC;font-size:10px;font-weight:800;width:115px;text-align:center;">SZAC. CZAS</td></tr>{{{DEVICE_ROW_01}}}
+<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin-top:8px;border:1px solid #D9E1EB;border-collapse:separate;border-spacing:0;table-layout:fixed;"><tr><td style="padding:9px 8px;border-bottom:1px solid #D9E1EB;border-right:1px solid #D9E1EB;background:#F7F9FC;font-size:12px;line-height:18px;font-weight:800;width:34px;text-align:center;">LP.</td><td style="padding:9px 8px;border-bottom:1px solid #D9E1EB;border-right:1px solid #D9E1EB;background:#F7F9FC;font-size:12px;line-height:18px;font-weight:800;">URZĄDZENIE I DANE</td><td style="padding:9px 8px;border-bottom:1px solid #D9E1EB;background:#F7F9FC;font-size:12px;line-height:18px;font-weight:800;width:145px;text-align:center;">SZACUNKOWY CZAS</td></tr>{{{DEVICE_ROW_01}}}
 {{{DEVICE_ROW_02}}}
 {{{DEVICE_ROW_03}}}
 {{{DEVICE_ROW_04}}}
@@ -43,15 +44,8 @@
 {{{DEVICE_ROW_28}}}
 {{{DEVICE_ROW_29}}}
 {{{DEVICE_ROW_30}}}
-{{{DEVICE_ROW_31}}}
-{{{DEVICE_ROW_32}}}
-{{{DEVICE_ROW_33}}}
-{{{DEVICE_ROW_34}}}
-{{{DEVICE_ROW_35}}}
-{{{DEVICE_ROW_36}}}
-{{{DEVICE_ROW_37}}}
-{{{DEVICE_ROW_38}}}
-{{{DEVICE_ROW_39}}}</table>
-<table role="presentation" cellspacing="0" cellpadding="0" style="margin-top:20px;"><tr><td style="padding-right:10px;"><a href="{{{COORDINATOR_REPLY_URL}}}" style="display:inline-block;padding:11px 16px;border-radius:8px;background:#EAF0F9;color:#223F6D;text-decoration:none;font-size:12px;font-weight:800;">Odpowiedz w sprawie terminu</a></td><td><a href="{{{EMMA_SECURE_URL}}}" style="display:inline-block;padding:11px 16px;border-radius:8px;background:#223F6D;color:#fff;text-decoration:none;font-size:12px;font-weight:800;">Otwórz EMMA</a></td></tr></table></td></tr>
-<tr><td class="px" style="padding:18px 28px 24px;border-top:1px solid #E6EBF2;font-size:10px;line-height:16px;color:#7B8798;">Wiadomość automatyczna EMMA · <a href="{{{EMMA_UNSUBSCRIBE_URL}}}" style="color:#66758A;">wyłącz automatyczne powiadomienia</a></td></tr>
+ </table>
+{{{TRUNCATION_NOTICE}}}
+<table role="presentation" cellspacing="0" cellpadding="0" style="margin-top:20px;"><tr><td style="padding-right:10px;"><a href="{{{COORDINATOR_REPLY_URL}}}" style="display:inline-block;padding:12px 18px;border-radius:8px;background:#EAF0F9;color:#223F6D;text-decoration:none;font-size:14px;line-height:20px;font-weight:800;">Odpowiedz w sprawie terminu</a></td><td>{{{EMMA_SECURE_URL}}}</td></tr></table></td></tr>
+<tr><td class="px" style="padding:18px 28px 24px;border-top:1px solid #E6EBF2;font-size:12px;line-height:18px;color:#7B8798;">Wiadomość automatyczna EMMA {{{EMMA_UNSUBSCRIBE_URL}}}</td></tr>
 </table></td></tr></table></body></html>

@@ -14,12 +14,14 @@ import type { AirtableIncrementalSource } from "../airtable/types.js";
 import { normalizeEmail } from "../shared/normalize-email.js";
 
 const RESOLUTION_LIMIT = 25;
+export const MAX_RECIPIENT_RESOLUTION_ATTEMPTS = 4;
 
 export type RecipientResolutionEvent = {
   id: string;
   sourceEntityType: CommunicationSourceEntityType;
   scenario: CommunicationScenario;
   eventSnapshot: unknown;
+  recipientResolutionAttemptCount?: number;
 };
 
 export type CommunicationEventRecipientInput = {
@@ -69,6 +71,7 @@ export class PrismaRecipientResolutionStore implements RecipientResolutionStore 
         sourceEntityType: true,
         scenario: true,
         eventSnapshot: true,
+        recipientResolutionAttemptCount: true,
       },
     });
   }
@@ -191,12 +194,31 @@ export async function resolveCommunicationEventRecipients(input: {
         CONTACT_FIELD_IDS,
       );
     } catch {
+      const failedAt = (input.now ?? (() => new Date()))();
+      const failedAttempts = (input.event.recipientResolutionAttemptCount ?? 0) + 1;
+      if (failedAttempts >= MAX_RECIPIENT_RESOLUTION_ATTEMPTS && input.tiemedFallbackEmail) {
+        const normalizedEmail = normalizeEmail(input.tiemedFallbackEmail);
+        await input.store.markResolved(input.event.id, [{
+          recipientType: CommunicationRecipientType.TIEMED_FALLBACK,
+          sourceContactRecordId: null,
+          email: input.tiemedFallbackEmail,
+          normalizedEmail,
+          recipientKey: normalizedEmail,
+          resolutionStatus: CommunicationRecipientResolutionStatus.FALLBACK,
+          resolutionReason: `AIRTABLE_CONTACT_READ_FAILED:${failedAttempts}`,
+        }], failedAt);
+        input.log?.(
+          `COMMUNICATION_RECIPIENT_FALLBACK eventId=${input.event.id} ` +
+          `reason=AIRTABLE_CONTACT_READ_FAILED failedAttempts=${failedAttempts}`,
+        );
+        return;
+      }
       await input.store.markFailed(
         input.event.id,
         CommunicationRecipientType.CLIENT,
         contactRecordId,
         "AIRTABLE_CONTACT_READ_FAILED",
-        (input.now ?? (() => new Date()))(),
+        failedAt,
       );
       input.log?.(
         `COMMUNICATION_RECIPIENT_RESOLUTION_FAILED eventId=${input.event.id} reason=AIRTABLE_CONTACT_READ_FAILED`,

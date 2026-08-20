@@ -7,6 +7,7 @@ export const COMMUNICATION_TEMPLATE_ALIASES: Readonly<
   Record<CommunicationScenario, string>
 > = Object.freeze({
   [CommunicationScenario.REPAIR_RECEIVED]: "emma-repair-received",
+  [CommunicationScenario.REPAIR_DELAYED_PARTS]: "emma-repair-delayed-parts-phase1",
   [CommunicationScenario.REPAIR_COMPLETED]: "emma-repair-completed",
   [CommunicationScenario.INSPECTION_DATE_CONFIRMED]: "emma-inspection-confirmed",
   [CommunicationScenario.INSPECTION_DATE_PROPOSED]: "emma-inspection-proposed",
@@ -19,8 +20,9 @@ export function templateAliasForScenario(scenario: CommunicationScenario): strin
 }
 
 export const TEMPLATE_STRING_VALUE_MAX_LENGTH = 2_000;
-export const REPAIR_ROW_SLOT_COUNT = 20;
-export const INSPECTION_ROW_SLOT_COUNT = 39;
+export const REPAIR_ROW_SLOT_COUNT = 30;
+export const INSPECTION_ROW_SLOT_COUNT = 30;
+export const EMAIL_VISIBLE_ROW_LIMIT = 30;
 
 export function templateRowSlotKey(prefix: string, index: number): string {
   return `${prefix}_${String(index + 1).padStart(2, "0")}`;
@@ -29,6 +31,7 @@ export function templateRowSlotKey(prefix: string, index: number): string {
 const NUMBER_VARIABLES_BY_TEMPLATE: Readonly<Record<string, readonly string[]>> = Object.freeze({
   "emma-repair-received": ["REPAIR_COUNT"],
   "emma-repair-completed": ["REPAIR_COUNT"],
+  "emma-repair-delayed-parts-phase1": ["REPAIR_COUNT"],
   "emma-inspection-confirmed": ["DEVICE_COUNT"],
   "emma-inspection-proposed": ["DEVICE_COUNT"],
   "emma-inspection-reminder": ["DEVICE_COUNT"],
@@ -66,6 +69,7 @@ type RowSlotConfig = { legacyKey: string; prefix: string; count: number };
 const ROW_SLOTS_BY_TEMPLATE: Readonly<Record<string, RowSlotConfig>> = Object.freeze({
   "emma-repair-received": { legacyKey: "REPAIRS_ROWS", prefix: "REPAIR_ROW", count: REPAIR_ROW_SLOT_COUNT },
   "emma-repair-completed": { legacyKey: "REPAIRS_ROWS", prefix: "REPAIR_ROW", count: REPAIR_ROW_SLOT_COUNT },
+  "emma-repair-delayed-parts-phase1": { legacyKey: "REPAIRS_ROWS", prefix: "REPAIR_ROW", count: REPAIR_ROW_SLOT_COUNT },
   "emma-inspection-confirmed": { legacyKey: "DEVICES_ROWS", prefix: "DEVICE_ROW", count: INSPECTION_ROW_SLOT_COUNT },
   "emma-inspection-proposed": { legacyKey: "DEVICES_ROWS", prefix: "DEVICE_ROW", count: INSPECTION_ROW_SLOT_COUNT },
   "emma-inspection-reminder": { legacyKey: "DEVICES_ROWS", prefix: "DEVICE_ROW", count: INSPECTION_ROW_SLOT_COUNT },

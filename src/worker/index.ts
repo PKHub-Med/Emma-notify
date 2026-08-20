@@ -42,6 +42,7 @@ import {
 import {
   CommunicationAssetResolver,
   PrismaCommunicationAssetRegistrationStore,
+  PrismaInspectionHospitalScopeVerifier,
 } from "../assets/communication-assets.js";
 import {
   AirtableAttachmentDownloadSource,
@@ -108,6 +109,7 @@ const assetResolver = config.communicationAssetsEnabled
       airtable,
       new PrismaCommunicationAssetRegistrationStore(prisma),
       (message) => console.info(message),
+      new PrismaInspectionHospitalScopeVerifier(prisma),
     )
   : undefined;
 const assetPreflight = assetResolver
@@ -350,6 +352,7 @@ async function pollCommunicationEmail(): Promise<void> {
           phone: config.tiemedOfficePhone,
           email: config.tiemedOfficeEmail,
         },
+        tiemedFallbackEmail: config.tiemedFallbackEmail,
       },
       ...(assetPreflight ? { assetPreflight } : {}),
       log: (message) => console.info(message),

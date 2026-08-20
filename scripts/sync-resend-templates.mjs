@@ -38,12 +38,18 @@ const templates = [
   {
     alias: "emma-repair-delayed-parts-phase1",
     file: "emma-repair-delayed-parts-phase1.html",
-    subject: "Oczekiwanie na części · Sprawa {{{CASE_NUMBER}}}",
+    subject: "{{{EMAIL_TITLE}}}",
+    numberVariables: ["REPAIR_COUNT"],
+    extraVariables: [
+      "REPAIR_COUNT", "CASE_NUMBER", "CLIENT_ORDER_NUMBER", "REPORTED_AT",
+      "COMPLETED_AT", "DEVICE_NAME", "MANUFACTURER_MODEL", "SERIAL_NUMBER",
+      "INVENTORY_NUMBER", "REPAIR_STATUS", "DEVICE_STATUS",
+    ],
   },
   {
     alias: "emma-inspection-confirmed",
     file: "emma-inspection-confirmed.html",
-    subject: "Potwierdzony termin wizyty · {{{VISIT_DATE}}}",
+    subject: "Przeglądy techniczne zaplanowane na {{{VISIT_DATE}}}",
     numberVariables: ["DEVICE_COUNT"],
   },
   {

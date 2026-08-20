@@ -65,6 +65,7 @@ enum CommunicationSourceEntityType {
 
 enum CommunicationScenario {
   REPAIR_RECEIVED
+  REPAIR_DELAYED_PARTS
   REPAIR_COMPLETED
   INSPECTION_DATE_PROPOSED
   INSPECTION_DATE_CONFIRMED
@@ -156,6 +157,7 @@ model TrackedCase {
   @@unique([caseType, airtableRecordId])
   @@index([active, lastSeenAt])
   @@index([sourceModifiedAt])
+  @@index([active, sourceHospitalRecordId])
   @@index([sourceHospitalRecordId, caseType, active, sourceModifiedAt, airtableRecordId])
   @@index([sourceHospitalRecordId, caseType, active, reportedAt, airtableRecordId])
 }
@@ -191,6 +193,7 @@ model TrackedDevice {
   lastSeenAt             DateTime @default(now())
   createdAt              DateTime @default(now())
   updatedAt              DateTime @updatedAt
+  active                 Boolean  @default(true)
 
   @@index([sourceHospitalRecordId, sourceModifiedAt, sourceCreatedAt, airtableRecordId])
   @@index([sourceHospitalRecordId, name, airtableRecordId])
@@ -217,12 +220,14 @@ model TrackedTask {
   lastSeenAt                  DateTime @default(now())
   createdAt                   DateTime @default(now())
   updatedAt                   DateTime @updatedAt
+  active                      Boolean  @default(true)
 
   @@index([emmaMailTemplate])
   @@index([lastSeenAt])
   @@index([sourceHospitalRecordId])
   @@index([sourceHospitalRecordId, updatedAt])
   @@index([linkedInspectionRecordIds], type: Gin)
+  @@index([active, sourceHospitalRecordId])
 }
 
 model TrackedHospital {
@@ -235,6 +240,9 @@ model TrackedHospital {
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
   lastSeenAt        DateTime @default(now())
+  active            Boolean  @default(true)
+
+  @@index([active, airtableRecordId])
 }
 
 model HospitalPortalEntitlement {

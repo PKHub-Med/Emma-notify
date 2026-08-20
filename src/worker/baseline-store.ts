@@ -37,7 +37,7 @@ export interface BaselineStore {
 
 export class PrismaBaselineStore implements BaselineStore {
   constructor(
-    private readonly prisma: PrismaClient,
+    private readonly prisma: PrismaClient | Prisma.TransactionClient,
   ) {}
 
   async getCompletionState(
@@ -103,7 +103,7 @@ export class PrismaBaselineStore implements BaselineStore {
     const updateData = mappedCase.caseType === "INSPECTION"
       ? inspectionUpdateData
       : createData;
-    return this.prisma.$transaction(async (transaction) => {
+    return this.inTransaction(async (transaction) => {
       const trackedCase = await transaction.trackedCase.upsert({
         where: {
           caseType_airtableRecordId: {
@@ -121,6 +121,11 @@ export class PrismaBaselineStore implements BaselineStore {
       });
       return trackedCase.id;
     });
+  }
+
+  private inTransaction<T>(operation: (transaction: Prisma.TransactionClient) => Promise<T>): Promise<T> {
+    if ("$transaction" in this.prisma) return this.prisma.$transaction(operation);
+    return operation(this.prisma);
   }
 
   async syncRecipients(

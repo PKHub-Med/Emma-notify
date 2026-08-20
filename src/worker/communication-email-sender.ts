@@ -3,6 +3,7 @@ import {
   CommunicationDeliveryCancelReason,
   CommunicationDeliveryStatus,
   CommunicationRecipientType,
+  CommunicationRecipientResolutionStatus,
   CommunicationScenario,
 } from "../generated/prisma/enums.js";
 import type {
@@ -21,6 +22,9 @@ import type { UnsubscribeGrantRecord } from "../communication-unsubscribe/servic
 import {
   buildCommunicationRepairBatchPayload,
   buildCommunicationTemplatePayload,
+  buildBlockedClientFallbackPayload,
+  buildSecureCtaHtml,
+  buildUnsubscribeHtml,
   CommunicationTemplateDataError,
   type CommunicationTemplateDataSource,
 } from "./communication-template-data.js";
@@ -65,6 +69,7 @@ export type CommunicationSendCandidate = {
     recipientType: CommunicationRecipientType;
     email: string | null;
     normalizedEmail: string | null;
+    resolutionReason?: string | null;
   };
 };
 
@@ -101,6 +106,12 @@ export interface CommunicationEmailSendStore {
     reason: CommunicationDeliveryCancelReason,
     cancelledAt: Date,
   ): Promise<boolean>;
+  rerouteToFallback(
+    deliveryIds: readonly string[],
+    intendedEmail: string,
+    actualEmail: string,
+    reason: string,
+  ): Promise<void>;
 }
 
 export interface CommunicationPortalGrantProvider {
@@ -128,6 +139,7 @@ export type CommunicationEmailSenderConfig = {
   timeZone: string;
   communicationAssetsEnabled?: boolean;
   officeContact?: { name: string; phone: string; email: string };
+  tiemedFallbackEmail: string | null;
 };
 
 export class PrismaCommunicationEmailSendStore implements CommunicationEmailSendStore {
@@ -169,7 +181,7 @@ export class PrismaCommunicationEmailSendStore implements CommunicationEmailSend
           },
         },
         communicationEventRecipient: {
-          select: { recipientType: true, email: true, normalizedEmail: true },
+          select: { recipientType: true, email: true, normalizedEmail: true, resolutionReason: true },
         },
       },
     });
@@ -266,8 +278,8 @@ export class PrismaCommunicationEmailSendStore implements CommunicationEmailSend
   }
 
   getCurrentTask(sourceRecordId: string): Promise<CurrentTaskState | null> {
-    return this.prisma.trackedTask.findUnique({
-      where: { airtableRecordId: sourceRecordId },
+    return this.prisma.trackedTask.findFirst({
+      where: { airtableRecordId: sourceRecordId, active: true },
       select: {
         day: true,
         emmaCustomerStatus: true,
@@ -395,6 +407,38 @@ export class PrismaCommunicationEmailSendStore implements CommunicationEmailSend
     return result.count === 1;
   }
 
+  async rerouteToFallback(
+    deliveryIds: readonly string[],
+    intendedEmail: string,
+    actualEmail: string,
+    reason: string,
+  ): Promise<void> {
+    const normalizedEmail = intendedEmail.trim().toLowerCase();
+    await this.prisma.$transaction(async (transaction) => {
+      const deliveries = await transaction.communicationDelivery.findMany({
+        where: { id: { in: [...deliveryIds] } },
+        select: { id: true, communicationEventRecipientId: true },
+      });
+      for (const delivery of deliveries) {
+        await transaction.communicationEventRecipient.update({
+          where: { id: delivery.communicationEventRecipientId },
+          data: {
+            recipientType: CommunicationRecipientType.TIEMED_FALLBACK,
+            email: intendedEmail,
+            normalizedEmail,
+            recipientKey: `BLOCKED:${delivery.id}:${normalizedEmail}`,
+            resolutionStatus: CommunicationRecipientResolutionStatus.FALLBACK,
+            resolutionReason: reason,
+          },
+        });
+      }
+      await transaction.communicationDelivery.updateMany({
+        where: { id: { in: [...deliveryIds] } },
+        data: { actualRecipientEmail: actualEmail, lastError: `BLOCKED_CLIENT:${reason}` },
+      });
+    });
+  }
+
   private async markOrphanCandidates(deliveryId: string, at: Date): Promise<void> {
     await this.prisma.storedFile.updateMany({
       where: {
@@ -458,19 +502,15 @@ export async function runCommunicationEmailSender(input: {
         .filter((item) => !processed.has(item.id) && repairBatchKey(item) === key)
         .sort((a, b) => a.id.localeCompare(b.id));
 
-      for (let offset = 0; offset < matching.length; offset += REPAIR_ROW_SLOT_COUNT) {
-        const batch = matching.slice(offset, offset + REPAIR_ROW_SLOT_COUNT);
-        batch.forEach((item) => processed.add(item.id));
-
-        const outcome = await sendCommunicationRepairBatch({
-          ...input,
-          candidates: batch,
-          now: now(),
-        });
-        stats.sent += outcome.sent;
-        stats.failed += outcome.failed;
-        stats.cancelled += outcome.cancelled;
-      }
+      matching.forEach((item) => processed.add(item.id));
+      const outcome = await sendCommunicationRepairBatch({
+        ...input,
+        candidates: matching,
+        now: now(),
+      });
+      stats.sent += outcome.sent;
+      stats.failed += outcome.failed;
+      stats.cancelled += outcome.cancelled;
       continue;
     }
 
@@ -505,8 +545,14 @@ export async function sendCommunicationRepairBatch(input: {
       const reason = isPreActivation(candidate, activation)
         ? CommunicationDeliveryCancelReason.MISSING_HOSPITAL_SCOPE_LEGACY
         : CommunicationDeliveryCancelReason.MISSING_HOSPITAL_SCOPE;
-      if (await input.store.cancel(candidate.id, reason, input.now)) result.cancelled += 1;
-      input.log?.(`COMMUNICATION_DELIVERY_CANCELLED deliveryId=${candidate.id} reason=${reason}`);
+      const fallbackOutcome = !isPreActivation(candidate, activation)
+        ? await sendUnscopedFallback(input, candidate) : null;
+      if (fallbackOutcome === "SENT") result.sent += 1;
+      else if (fallbackOutcome === "FAILED") result.failed += 1;
+      else if (await input.store.cancel(candidate.id, reason, input.now)) {
+        result.cancelled += 1;
+        input.log?.(`COMMUNICATION_DELIVERY_CANCELLED deliveryId=${candidate.id} reason=${reason}`);
+      }
       continue;
     }
     if (isPreActivation(candidate, activation)) {
@@ -561,17 +607,6 @@ export async function sendCommunicationRepairBatch(input: {
     );
   }
 
-  if (input.config.communicationAssetsEnabled && input.assetPreflight) {
-    for (const candidate of claimed) {
-      await input.assetPreflight.prepare({
-        id: candidate.id,
-        scenario: candidate.scenario,
-        sourceRecordId: candidate.event.sourceRecordId,
-        eventSnapshot: candidate.event.eventSnapshot,
-      });
-    }
-  }
-
   if (!input.config.resendApiKey) {
     await failRepairBatch(input, claimed, "RESEND_API_KEY_MISSING", false);
     result.failed += claimed.length;
@@ -587,6 +622,12 @@ export async function sendCommunicationRepairBatch(input: {
     grantResult = await input.grants.getOrCreatePortalAccessGrant(owner.id, input.now);
   } catch (error: unknown) {
     const failure = portalGrantFailure(error);
+    if (!failure.retryable && input.config.tiemedFallbackEmail) {
+      const fallbackOutcome = await sendBlockedRepairBatch(input, claimed, owner,
+        { url: "" }, { url: "" },
+        new CommunicationTemplateDataError(failure.code, false, { code: failure.code }));
+      if (fallbackOutcome === "SENT") { result.sent += claimed.length; return result; }
+    }
     await failRepairBatch(input, claimed, failure.code, failure.retryable);
     result.failed += claimed.length;
     return result;
@@ -597,6 +638,12 @@ export async function sendCommunicationRepairBatch(input: {
     unsubscribeResult = await input.unsubscribeGrants.getOrCreateUnsubscribeGrant(owner.id, input.now);
   } catch (error: unknown) {
     const failure = portalGrantFailure(error);
+    if (!failure.retryable && input.config.tiemedFallbackEmail) {
+      const fallbackOutcome = await sendBlockedRepairBatch(input, claimed, owner,
+        grantResult, { url: "" },
+        new CommunicationTemplateDataError(failure.code, false, { code: failure.code }));
+      if (fallbackOutcome === "SENT") { result.sent += claimed.length; return result; }
+    }
     await failRepairBatch(input, claimed, failure.code, failure.retryable);
     result.failed += claimed.length;
     return result;
@@ -605,7 +652,7 @@ export async function sendCommunicationRepairBatch(input: {
   let snapshot = owner.sendSnapshot;
   if (!snapshot) {
     try {
-      const payload = await buildCommunicationRepairBatchPayload({
+      let payload = await buildCommunicationRepairBatchPayload({
         deliveries: claimed.map((candidate) => ({
           id: candidate.id,
           scenario: candidate.scenario,
@@ -618,6 +665,11 @@ export async function sendCommunicationRepairBatch(input: {
         preparedAt: owner.scheduledFor,
         timeZone: input.config.timeZone,
       });
+      payload = addRecipientFallbackNotice(payload, claimed.map((candidate) => ({
+        id: candidate.id, scenario: candidate.scenario,
+        sourceRecordId: candidate.event.sourceRecordId,
+        eventSnapshot: candidate.event.eventSnapshot,
+      })), owner, grantResult.url, unsubscribeResult.url, input.config.timeZone);
       const {
         EMMA_SECURE_URL: _secureUrl,
         EMMA_UNSUBSCRIBE_URL: _unsubscribeUrl,
@@ -636,6 +688,13 @@ export async function sendCommunicationRepairBatch(input: {
       }
       snapshot ??= prepared;
     } catch (error: unknown) {
+      if (error instanceof CommunicationTemplateDataError && !error.retryable &&
+          input.config.tiemedFallbackEmail) {
+        const fallbackOutcome = await sendBlockedRepairBatch(input, claimed, owner, grantResult,
+          unsubscribeResult, error);
+        if (fallbackOutcome === "SENT") { result.sent += claimed.length; return result; }
+        result.failed += claimed.length; return result;
+      }
       const failure = templateFailure(error);
       await failRepairBatch(input, claimed, failure.code, failure.retryable);
       result.failed += claimed.length;
@@ -654,12 +713,22 @@ export async function sendCommunicationRepairBatch(input: {
     return result;
   }
 
+  if (input.config.communicationAssetsEnabled && input.assetPreflight) {
+    for (const candidate of claimed) {
+      await input.assetPreflight.prepare({
+        id: candidate.id, scenario: candidate.scenario,
+        sourceRecordId: candidate.event.sourceRecordId,
+        eventSnapshot: candidate.event.eventSnapshot,
+      });
+    }
+  }
+
   let variables: Record<string, TemplateVariableValue>;
   try {
     variables = normalizeCommunicationTemplateVariables(snapshot.templateId, {
       ...snapshot.variables,
-      EMMA_SECURE_URL: grantResult.url,
-      EMMA_UNSUBSCRIBE_URL: unsubscribeResult.url,
+      EMMA_SECURE_URL: buildSecureCtaHtml(grantResult.url, owner.scenario),
+      EMMA_UNSUBSCRIBE_URL: buildUnsubscribeHtml(unsubscribeResult.url),
     });
   } catch {
     await failRepairBatch(input, claimed, "TEMPLATE_VARIABLES_INVALID", false);
@@ -712,6 +781,10 @@ export async function sendCommunicationDelivery(input: {
     const reason = isPreActivation(input.candidate, activation)
       ? CommunicationDeliveryCancelReason.MISSING_HOSPITAL_SCOPE_LEGACY
       : CommunicationDeliveryCancelReason.MISSING_HOSPITAL_SCOPE;
+    if (!isPreActivation(input.candidate, activation)) {
+      const fallbackOutcome = await sendUnscopedFallback(input, input.candidate);
+      if (fallbackOutcome) return fallbackOutcome;
+    }
     await input.store.cancel(input.candidate.id, reason, input.now);
     input.log?.(
       `COMMUNICATION_DELIVERY_CANCELLED deliveryId=${input.candidate.id} reason=${reason}`,
@@ -783,15 +856,6 @@ export async function sendCommunicationDelivery(input: {
     }
   }
 
-  if (input.config.communicationAssetsEnabled && input.assetPreflight) {
-    await input.assetPreflight.prepare({
-      id: input.candidate.id,
-      scenario: input.candidate.scenario,
-      sourceRecordId: input.candidate.event.sourceRecordId,
-      eventSnapshot: input.candidate.event.eventSnapshot,
-    });
-  }
-
   if (!input.config.resendApiKey) return fail(input, "RESEND_API_KEY_MISSING", false, attempt);
 
   let grantResult: Awaited<ReturnType<CommunicationPortalGrantProvider["getOrCreatePortalAccessGrant"]>>;
@@ -802,6 +866,10 @@ export async function sendCommunicationDelivery(input: {
     );
   } catch (error: unknown) {
     const failure = portalGrantFailure(error);
+    if (!failure.retryable && input.config.tiemedFallbackEmail) {
+      return sendBlockedDelivery(input, { url: "" }, { url: "" },
+        new CommunicationTemplateDataError(failure.code, false, { code: failure.code }), attempt);
+    }
     return fail(input, failure.code, failure.retryable, attempt);
   }
 
@@ -813,13 +881,17 @@ export async function sendCommunicationDelivery(input: {
     );
   } catch (error: unknown) {
     const failure = portalGrantFailure(error);
+    if (!failure.retryable && input.config.tiemedFallbackEmail) {
+      return sendBlockedDelivery(input, grantResult, { url: "" },
+        new CommunicationTemplateDataError(failure.code, false, { code: failure.code }), attempt);
+    }
     return fail(input, failure.code, failure.retryable, attempt);
   }
 
   let snapshot = input.candidate.sendSnapshot;
   if (!snapshot) {
     try {
-      const payload = await buildCommunicationTemplatePayload({
+      let payload = await buildCommunicationTemplatePayload({
         delivery: {
           id: input.candidate.id,
           scenario: input.candidate.scenario,
@@ -842,6 +914,10 @@ export async function sendCommunicationDelivery(input: {
         preparedAt: input.now.toISOString(),
       }, input.now);
     } catch (error: unknown) {
+      if (error instanceof CommunicationTemplateDataError && !error.retryable &&
+          input.config.tiemedFallbackEmail) {
+        return sendBlockedDelivery(input, grantResult, unsubscribeResult, error, attempt);
+      }
       const failure = templateFailure(error);
       return fail(input, failure.code, failure.retryable, attempt);
     }
@@ -853,12 +929,20 @@ export async function sendCommunicationDelivery(input: {
     return fail(input, "SEND_SNAPSHOT_UNSUBSCRIBE_GRANT_MISMATCH", false, attempt);
   }
 
+  if (input.config.communicationAssetsEnabled && input.assetPreflight) {
+    await input.assetPreflight.prepare({
+      id: input.candidate.id, scenario: input.candidate.scenario,
+      sourceRecordId: input.candidate.event.sourceRecordId,
+      eventSnapshot: input.candidate.event.eventSnapshot,
+    });
+  }
+
   let variables: Record<string, TemplateVariableValue>;
   try {
     variables = normalizeCommunicationTemplateVariables(snapshot.templateId, {
       ...snapshot.variables,
-      EMMA_SECURE_URL: grantResult.url,
-      EMMA_UNSUBSCRIBE_URL: unsubscribeResult.url,
+      EMMA_SECURE_URL: buildSecureCtaHtml(grantResult.url, input.candidate.scenario),
+      EMMA_UNSUBSCRIBE_URL: buildUnsubscribeHtml(unsubscribeResult.url),
     });
   } catch {
     return fail(input, "TEMPLATE_VARIABLES_INVALID", false, attempt);
@@ -892,7 +976,206 @@ export async function sendCommunicationDelivery(input: {
 
 function isRepairScenario(scenario: CommunicationScenario): boolean {
   return scenario === CommunicationScenario.REPAIR_RECEIVED ||
+    scenario === CommunicationScenario.REPAIR_DELAYED_PARTS ||
     scenario === CommunicationScenario.REPAIR_COMPLETED;
+}
+
+function resolveFallbackRecipient(config: CommunicationEmailSenderConfig, fallback: string): string {
+  const actual = resolveActualRecipient({
+    mode: config.mode, intendedRecipientEmail: fallback, testEmail: config.testEmail,
+    productionEmailsEnabled: config.productionEmailsEnabled,
+  });
+  assertTestRecipient({ mode: config.mode, actualRecipientEmail: actual, testEmail: config.testEmail });
+  return actual;
+}
+
+async function sendUnscopedFallback(
+  input: {
+    store: CommunicationEmailSendStore;
+    provider: EmailProvider;
+    config: CommunicationEmailSenderConfig;
+    now: Date;
+    log?: (message: string) => void;
+  },
+  candidate: CommunicationSendCandidate,
+): Promise<"SENT" | "FAILED" | null> {
+  const fallback = input.config.tiemedFallbackEmail;
+  if (!fallback || !input.config.resendApiKey) return null;
+  let actualFallback: string;
+  try { actualFallback = resolveFallbackRecipient(input.config, fallback); } catch { return null; }
+  const claimed = await input.store.claim(candidate, input.now, input.config.mode, actualFallback);
+  if (!claimed) return null;
+  const error = new CommunicationTemplateDataError("MISSING_HOSPITAL_SCOPE", false, {
+    code: "MISSING_HOSPITAL_SCOPE", expected: "one hospital", found: null,
+    recordIds: [candidate.event.sourceRecordId], safeRecordIds: [],
+  });
+  const payload = buildBlockedClientFallbackPayload({
+    deliveries: [{ id: candidate.id, scenario: candidate.scenario,
+      sourceRecordId: candidate.event.sourceRecordId,
+      eventSnapshot: candidate.event.eventSnapshot }],
+    secureUrl: "", unsubscribeUrl: "", preparedAt: input.now,
+    timeZone: input.config.timeZone, error,
+  });
+  const variables = normalizeCommunicationTemplateVariables(payload.templateId, payload.variables);
+  await input.store.rerouteToFallback([candidate.id], fallback, actualFallback, error.code);
+  let response: ProviderEmailResult;
+  try {
+    response = await input.provider.send({
+      to: actualFallback, replyTo: input.config.replyTo,
+      template: { id: payload.templateId, variables },
+      idempotencyKey: `emma-communication-blocked-unscoped/${candidate.id}`,
+    });
+  } catch {
+    const retryAt = candidate.attemptCount < MAX_ATTEMPTS
+      ? new Date(input.now.getTime() + RETRY_DELAYS_MS[Math.max(0, candidate.attemptCount - 1)]!) : null;
+    await input.store.markFailed(candidate.id, "EMAIL_NETWORK_ERROR", input.now, retryAt);
+    return "FAILED";
+  }
+  if (!response.ok) {
+    const failure = classifyProviderFailure(response);
+    const attempt = candidate.attemptCount;
+    const retryAt = failure.retryable && attempt < MAX_ATTEMPTS
+      ? new Date(input.now.getTime() + RETRY_DELAYS_MS[Math.max(0, attempt - 1)]!) : null;
+    await input.store.markFailed(candidate.id, failure.code, input.now, retryAt);
+    return "FAILED";
+  }
+  await input.store.markSent(candidate.id, response.id, input.now);
+  input.log?.(`COMMUNICATION_BLOCKED_CLIENT_FALLBACK_SENT deliveryId=${candidate.id} code=${error.code}`);
+  return "SENT";
+}
+
+function addRecipientFallbackNotice(
+  payload: { templateId: string; variables: Record<string, TemplateVariableValue> },
+  deliveries: Parameters<typeof buildBlockedClientFallbackPayload>[0]["deliveries"],
+  candidate: CommunicationSendCandidate,
+  secureUrl: string,
+  unsubscribeUrl: string,
+  timeZone: string,
+) {
+  if (candidate.recipient.recipientType !== CommunicationRecipientType.TIEMED_FALLBACK) {
+    return payload;
+  }
+  const rawReason = candidate.recipient.resolutionReason ?? "NO_VALID_CLIENT_EMAIL";
+  const exhaustedContactRead = /^AIRTABLE_CONTACT_READ_FAILED:(\d+)$/.exec(rawReason);
+  const reason = exhaustedContactRead ? "AIRTABLE_CONTACT_READ_FAILED" : rawReason;
+  const diagnostic = buildBlockedClientFallbackPayload({
+    deliveries, secureUrl, unsubscribeUrl, preparedAt: candidate.scheduledFor,
+    timeZone, error: new CommunicationTemplateDataError(reason, false, {
+      code: reason,
+      ...(exhaustedContactRead ? { found: {
+        failedAttempts: Number(exhaustedContactRead[1]),
+      }, failedAttemptCount: Number(exhaustedContactRead[1]) } : {}),
+    }),
+  });
+  return { ...payload, variables: {
+    ...payload.variables, BLOCKED_NOTICE: diagnostic.variables.BLOCKED_NOTICE ?? "",
+  } };
+}
+
+async function sendBlockedDelivery(
+  input: Parameters<typeof sendCommunicationDelivery>[0],
+  grantResult: { url: string },
+  unsubscribeResult: { url: string },
+  error: CommunicationTemplateDataError,
+  attempt: number,
+): Promise<"SENT" | "FAILED"> {
+  const fallback = input.config.tiemedFallbackEmail;
+  if (!fallback) return "FAILED";
+  let payload = buildBlockedClientFallbackPayload({
+    deliveries: [{ id: input.candidate.id, scenario: input.candidate.scenario,
+      sourceRecordId: input.candidate.event.sourceRecordId,
+      eventSnapshot: input.candidate.event.eventSnapshot }],
+    secureUrl: grantResult.url, unsubscribeUrl: unsubscribeResult.url,
+    preparedAt: input.now, timeZone: input.config.timeZone, error,
+  });
+  if (!isRepairScenario(input.candidate.scenario) && error.diagnostic?.safeRecordIds) {
+    try {
+      const safeSnapshot = {
+        ...(input.candidate.event.eventSnapshot as Record<string, unknown>),
+        linkedInspectionRecordIds: [...error.diagnostic.safeRecordIds],
+      };
+      const safePayload = await buildCommunicationTemplatePayload({
+        delivery: { id: input.candidate.id, scenario: input.candidate.scenario,
+          sourceRecordId: input.candidate.event.sourceRecordId, eventSnapshot: safeSnapshot },
+        dataSource: input.dataSource, secureUrl: grantResult.url,
+        unsubscribeUrl: unsubscribeResult.url, preparedAt: input.now,
+        timeZone: input.config.timeZone,
+        ...(input.config.officeContact ? { officeContact: input.config.officeContact } : {}),
+      });
+      payload = addRecipientFallbackNotice(payload, [{ id: input.candidate.id,
+        scenario: input.candidate.scenario, sourceRecordId: input.candidate.event.sourceRecordId,
+        eventSnapshot: input.candidate.event.eventSnapshot }], input.candidate,
+      grantResult.url, unsubscribeResult.url, input.config.timeZone);
+      payload = { ...safePayload, variables: {
+        ...safePayload.variables,
+        BLOCKED_NOTICE: payload.variables.BLOCKED_NOTICE ?? "",
+      } };
+    } catch { /* Generic diagnostic-only payload remains safe. */ }
+  }
+  const variables = normalizeCommunicationTemplateVariables(payload.templateId, payload.variables);
+  const actualFallback = resolveFallbackRecipient(input.config, fallback);
+  await input.store.rerouteToFallback([input.candidate.id], fallback, actualFallback, error.code);
+  let response: ProviderEmailResult;
+  try {
+    response = await input.provider.send({
+      to: actualFallback, replyTo: input.config.replyTo,
+      template: { id: payload.templateId, variables },
+      idempotencyKey: `emma-communication-blocked/${input.candidate.event.sourceRecordId}/${input.candidate.scenario}`,
+    });
+  } catch {
+    await fail(input, "EMAIL_NETWORK_ERROR", true, attempt);
+    return "FAILED";
+  }
+  if (!response.ok) {
+    const failure = classifyProviderFailure(response);
+    await fail(input, failure.code, failure.retryable, attempt);
+    return "FAILED";
+  }
+  await input.store.markSent(input.candidate.id, response.id, input.now);
+  input.log?.(`COMMUNICATION_BLOCKED_CLIENT_FALLBACK_SENT deliveryId=${input.candidate.id} code=${error.code}`);
+  return "SENT";
+}
+
+async function sendBlockedRepairBatch(
+  input: Parameters<typeof sendCommunicationRepairBatch>[0],
+  candidates: readonly CommunicationSendCandidate[],
+  owner: CommunicationSendCandidate,
+  grantResult: { url: string },
+  unsubscribeResult: { url: string },
+  error: CommunicationTemplateDataError,
+): Promise<"SENT" | "FAILED"> {
+  const fallback = input.config.tiemedFallbackEmail;
+  if (!fallback) return "FAILED";
+  const payload = buildBlockedClientFallbackPayload({
+    deliveries: candidates.map((candidate) => ({ id: candidate.id,
+      scenario: candidate.scenario, sourceRecordId: candidate.event.sourceRecordId,
+      eventSnapshot: candidate.event.eventSnapshot })),
+    secureUrl: grantResult.url, unsubscribeUrl: unsubscribeResult.url,
+    preparedAt: owner.scheduledFor, timeZone: input.config.timeZone, error,
+  });
+  const variables = normalizeCommunicationTemplateVariables(payload.templateId, payload.variables);
+  const ids = candidates.map((candidate) => candidate.id);
+  const actualFallback = resolveFallbackRecipient(input.config, fallback);
+  await input.store.rerouteToFallback(ids, fallback, actualFallback, error.code);
+  let response: ProviderEmailResult;
+  try {
+    response = await input.provider.send({
+      to: actualFallback, replyTo: input.config.replyTo,
+      template: { id: payload.templateId, variables },
+      idempotencyKey: `${communicationBatchIdempotencyKey(ids)}-blocked`,
+    });
+  } catch {
+    await failRepairBatch(input, candidates, "EMAIL_NETWORK_ERROR", true);
+    return "FAILED";
+  }
+  if (!response.ok) {
+    const failure = classifyProviderFailure(response);
+    await failRepairBatch(input, candidates, failure.code, failure.retryable);
+    return "FAILED";
+  }
+  await input.store.markBatchSent(ids, response.id, input.now);
+  input.log?.(`COMMUNICATION_BLOCKED_CLIENT_FALLBACK_SENT deliveries=${ids.length} code=${error.code}`);
+  return "SENT";
 }
 
 function repairBatchKey(candidate: CommunicationSendCandidate): string {

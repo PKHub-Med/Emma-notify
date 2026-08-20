@@ -49,6 +49,7 @@ export type MappedCase = {
 };
 
 export function mapServiceOrder(record: AirtableRecord): MappedCase {
+  const reportedAtRaw = rawString(record.fields[SERVICE_ORDER_FIELDS.reportedAt]);
   const values = {
     businessNumber: toBusinessNumber(record.fields[SERVICE_ORDER_FIELDS.businessNumber]),
     clientOrderNumber: toOptionalString(
@@ -76,12 +77,18 @@ export function mapServiceOrder(record: AirtableRecord): MappedCase {
       record.fields[SERVICE_ORDER_FIELDS.faultDescription],
     ),
     department: toOptionalString(record.fields[SERVICE_ORDER_FIELDS.department]),
+    reportedAtRaw,
     completedAt: parseAirtableDate(
       record.fields[SERVICE_ORDER_FIELDS.completedAt],
     )?.toISOString() ?? null,
   };
 
-  const { department: _department, completedAt: _completedAt, ...storedValues } = values;
+  const {
+    department: _department,
+    completedAt: _completedAt,
+    reportedAtRaw: _reportedAtRaw,
+    ...storedValues
+  } = values;
 
   return {
     caseType: CaseType.SERVICE_ORDER,
@@ -192,5 +199,8 @@ function rawString(value: unknown): string | null {
 }
 
 function optionalFiniteNumber(value: unknown): number | null {
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+  if (typeof value !== "string" || !value.trim()) return null;
+  const parsed = Number(value.trim().replace(",", "."));
+  return Number.isFinite(parsed) ? parsed : null;
 }

@@ -46,7 +46,7 @@ export interface CommunicationEventStore {
 }
 
 export class PrismaCommunicationEventStore implements CommunicationEventStore {
-  constructor(private readonly prisma: PrismaClient) {}
+  constructor(private readonly prisma: PrismaClient | Prisma.TransactionClient) {}
 
   async isBaselineCompleted(
     sourceEntityType: CommunicationSourceEntityType,
@@ -96,7 +96,7 @@ export class PrismaCommunicationEventStore implements CommunicationEventStore {
   ): Promise<CommunicationObservationResult> {
     for (let attempt = 1; attempt <= 3; attempt += 1) {
       try {
-        return await this.prisma.$transaction(
+        return await this.inTransaction(
           async (transaction) => {
             const cursor = await transaction.communicationCursor.findUnique({
               where: {
@@ -169,7 +169,6 @@ export class PrismaCommunicationEventStore implements CommunicationEventStore {
             });
             return { outcome: "CREATED", revision, fingerprint };
           },
-          { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
         );
       } catch (error: unknown) {
         if (isRetryableTransactionError(error) && attempt < 3) continue;
@@ -177,6 +176,15 @@ export class PrismaCommunicationEventStore implements CommunicationEventStore {
       }
     }
     throw new Error("Communication event transaction retry limit reached");
+  }
+
+  private inTransaction<T>(operation: (transaction: Prisma.TransactionClient) => Promise<T>): Promise<T> {
+    if ("$transaction" in this.prisma) {
+      return this.prisma.$transaction(operation, {
+        isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+      });
+    }
+    return operation(this.prisma);
   }
 }
 
@@ -237,6 +245,7 @@ export function buildServiceOrderObservation(
       businessNumber: serviceOrder.businessNumber,
       clientOrderNumber: serviceOrder.clientOrderNumber,
       reportedAt: serviceOrder.reportedAt?.toISOString() ?? null,
+      reportedAtRaw: snapshotString(serviceOrder.sourceSnapshot, "reportedAtRaw"),
       completedAt: snapshotString(serviceOrder.sourceSnapshot, "completedAt"),
       department: snapshotString(serviceOrder.sourceSnapshot, "department"),
       currentStatus: serviceOrder.currentStatus,

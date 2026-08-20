@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { readFileSync } from "node:fs";
 import {
   CommunicationDeliveryCancelReason,
   CommunicationDeliveryStatus,
@@ -58,18 +59,25 @@ describe("communication email activation and recipient safety", () => {
     expect(prepare).not.toHaveBeenCalled();
   });
 
-  it("does not retry a FAILED missing-scope delivery even if nextRetryAt was set", async () => {
+  it("routes a post-activation missing-scope delivery to the Tiemed fallback", async () => {
     const fixture = setup({
       status: CommunicationDeliveryStatus.FAILED,
       nextRetryAt: new Date(now.getTime() - 1),
       eventSnapshot: {},
     });
     await run(fixture);
-    expect(fixture.candidate.status).toBe(CommunicationDeliveryStatus.CANCELLED);
-    expect(fixture.store.cancelReason).toBe(
-      CommunicationDeliveryCancelReason.MISSING_HOSPITAL_SCOPE,
-    );
-    expect(fixture.candidate.attemptCount).toBe(0);
+    expect(fixture.candidate.status).toBe(CommunicationDeliveryStatus.SENT);
+    expect(fixture.provider.requests[0]?.to).toBe("test@example.test");
+    expect(fixture.provider.requests[0]?.template.variables.BLOCKED_NOTICE)
+      .toContain("MISSING_HOSPITAL_SCOPE");
+    const variables = fixture.provider.requests[0]!.template.variables;
+    expect(variables).toMatchObject({ EMMA_SECURE_URL: "", EMMA_UNSUBSCRIBE_URL: "" });
+    const template = readFileSync("resend-templates/emma-repair-received.html", "utf8");
+    const html = renderConditionalTemplate(template, variables);
+    expect(html).not.toMatch(/href=(?:""|"#"|'')/);
+    expect(html).not.toContain("Zobacz naprawy w Emma");
+    expect(html).not.toContain("wyłącz automatyczne powiadomienia");
+    expect(html).toContain("MISSING_HOSPITAL_SCOPE");
   });
 
   it("runs bounded asset preflight before sending when explicitly enabled", async () => {
@@ -317,8 +325,8 @@ describe("claim, JIT grant and deterministic retry", () => {
     expect(second.status).toBe(CommunicationDeliveryStatus.SENT);
   });
 
-  it("splits repair groups larger than the Resend row-slot capacity", async () => {
-    const candidates = Array.from({ length: 21 }, (_, index) => communicationCandidate({
+  it("keeps one repair batch and truncates only the visible table", async () => {
+    const candidates = Array.from({ length: 47 }, (_, index) => communicationCandidate({
       id: `delivery-${String(index + 1).padStart(2, "0")}`,
       event: { detectedAt: activation, sourceRecordId: `recService${index + 1}`, eventSnapshot: {
         ...repairSnapshot(), businessNumber: `SO-${index + 1}`,
@@ -326,14 +334,16 @@ describe("claim, JIT grant and deterministic retry", () => {
       } },
     }));
     const store = new MultiMemorySendStore(candidates);
-    const provider = new MockProvider([{ ok: true, id: "resend-batch-1" }, { ok: true, id: "resend-batch-2" }]);
+    const provider = new MockProvider([{ ok: true, id: "resend-batch-1" }]);
     const stats = await runCommunicationEmailSender({
       store, provider, grants: new FixedGrants(), unsubscribeGrants: new FixedUnsubscribeGrants(),
       dataSource: dataSource(), config: config(), now: () => now,
     });
-    expect(provider.requests).toHaveLength(2);
-    expect(provider.requests.map((request) => request.template.variables.REPAIR_COUNT)).toEqual([20, 1]);
-    expect(stats.sent).toBe(21);
+    expect(provider.requests).toHaveLength(1);
+    expect(provider.requests[0]!.template.variables.REPAIR_COUNT).toBe(47);
+    expect(provider.requests[0]!.template.variables.REPAIR_ROW_30).toContain("Urządzenie 30");
+    expect(provider.requests[0]!.template.variables.TRUNCATION_NOTICE).toContain("30 z 47");
+    expect(stats.sent).toBe(47);
     expect(candidates.every((candidate) => candidate.status === CommunicationDeliveryStatus.SENT)).toBe(true);
   });
 
@@ -375,14 +385,102 @@ describe("provider result and retry classification", () => {
     expect(fixture.candidate.nextRetryAt).toBeNull();
   });
 
-  it("keeps fallback content identical to client content", async () => {
+  it("marks fallback content as not delivered to the client", async () => {
     const client = setup();
     const fallback = setup({ recipientType: CommunicationRecipientType.TIEMED_FALLBACK });
     await run(client);
     await run(fallback);
-    expect(fallback.provider.requests[0]?.template).toEqual(client.provider.requests[0]?.template);
+    expect(fallback.provider.requests[0]?.template.variables.BLOCKED_NOTICE)
+      .toContain("Wiadomość nie została wysłana do klienta");
+    expect(fallback.provider.requests[0]?.template.variables.REPAIR_ROW_01)
+      .toEqual(client.provider.requests[0]?.template.variables.REPAIR_ROW_01);
+  });
+
+  it("includes exhausted Airtable contact-read attempts in the fallback diagnostic", async () => {
+    const fixture = setup({ recipient: {
+      recipientType: CommunicationRecipientType.TIEMED_FALLBACK,
+      email: "fallback@tiemed.pl", normalizedEmail: "fallback@tiemed.pl",
+      resolutionReason: "AIRTABLE_CONTACT_READ_FAILED:4",
+    } });
+    await run(fixture);
+    const notice = String(fixture.provider.requests[0]!.template.variables.BLOCKED_NOTICE);
+    expect(notice).toContain("AIRTABLE_CONTACT_READ_FAILED");
+    expect(notice).toContain("Liczba nieudanych prób: 4");
+  });
+
+  it("sends a diagnostic fallback without CTA when portal grant scope is unavailable", async () => {
+    const fixture = setup();
+    fixture.grants.getOrCreatePortalAccessGrant = async () => {
+      throw new Error("MISSING_HOSPITAL_SCOPE");
+    };
+    await run(fixture);
+    expect(fixture.provider.requests).toHaveLength(1);
+    expect(fixture.provider.requests[0]!.template.variables).toMatchObject({
+      EMMA_SECURE_URL: "", EMMA_UNSUBSCRIBE_URL: "",
+    });
+    expect(fixture.provider.requests[0]!.template.variables.BLOCKED_NOTICE)
+      .toContain("MISSING_HOSPITAL_SCOPE");
+    expect(fixture.provider.requests[0]!.template.variables.REPAIR_ROW_01).toContain("USG");
+  });
+
+  it.each([
+    ["INSPECTION_HOSPITAL_SCOPE_MISMATCH", ["inspectionA"], "otherHospital"],
+    ["INSPECTION_SET_INCOMPLETE", ["inspectionA", "inspectionMissing"], "recHospital"],
+  ])("routes blocked client communication to Tiemed for %s", async (code, linkedIds, hospital) => {
+    const fixture = setup({
+      scenario: CommunicationScenario.INSPECTION_DATE_CONFIRMED,
+      eventSnapshot: { ...reminderSnapshot(), linkedInspectionRecordIds: linkedIds },
+    });
+    fixture.dataSource.getInspections = async () => [{
+      airtableRecordId: "inspectionA", businessNumber: "I-1", clientOrderNumber: null,
+      currentStatus: "PLANOWANY", inspectionResult: null,
+      sourceHospitalRecordId: hospital, inspectionPerformedAt: null, inspectionDueDate: null,
+      deviceName: "USG", manufacturer: "Philips", model: "Epiq", serialNumber: "SN",
+      inventoryNumber: null, estimatedDurationSeconds: 1200,
+    }];
+    await run(fixture);
+    expect(fixture.provider.requests).toHaveLength(1);
+    expect(fixture.provider.requests[0]!.to).toBe("test@example.test");
+    expect(fixture.provider.requests[0]!.template.variables.BLOCKED_NOTICE).toContain(code);
+    expect(fixture.candidate.status).toBe(CommunicationDeliveryStatus.SENT);
+    expect(fixture.store.lastError).toBe(`BLOCKED_CLIENT:${code}`);
+  });
+
+  it("sends no partial inspection summary when one result is null", async () => {
+    const fixture = setup({
+      scenario: CommunicationScenario.INSPECTION_COMPLETED,
+      eventSnapshot: { ...reminderSnapshot(), linkedInspectionRecordIds: ["good", "bad", "missing"] },
+    });
+    fixture.dataSource.getInspections = async () => [
+      inspectionFixture("good", "SPRAWNY"), inspectionFixture("bad", "NIESPRAWNY"),
+      { ...inspectionFixture("missing", "ZAKOŃCZONY"), inspectionResult: null },
+    ];
+    await run(fixture);
+    expect(fixture.provider.requests).toHaveLength(1);
+    expect(fixture.provider.requests[0]!.to).toBe("test@example.test");
+    expect(fixture.provider.requests[0]!.template.variables.BLOCKED_NOTICE)
+      .toContain("INSPECTION_RESULT_INCOMPLETE");
+    expect(fixture.store.lastError).toBe("BLOCKED_CLIENT:INSPECTION_RESULT_INCOMPLETE");
   });
 });
+
+function renderConditionalTemplate(
+  template: string,
+  variables: Record<string, string | number>,
+): string {
+  return template.replace(/\{\{\{([A-Z0-9_]+)\}\}\}/g,
+    (_match, key: string) => String(variables[key] ?? ""));
+}
+
+function inspectionFixture(id: string, result: string) {
+  return {
+    airtableRecordId: id, businessNumber: `I-${id}`, clientOrderNumber: null,
+    currentStatus: "ZAKOŃCZONY", inspectionResult: result,
+    sourceHospitalRecordId: "recHospital", inspectionPerformedAt: null,
+    inspectionDueDate: null, deviceName: `Device ${id}`, manufacturer: null,
+    model: null, serialNumber: null, inventoryNumber: null, estimatedDurationSeconds: 300,
+  };
+}
 
 class MemorySendStore implements CommunicationEmailSendStore {
   findCalls = 0;
@@ -442,6 +540,9 @@ class MemorySendStore implements CommunicationEmailSendStore {
     this.cancelReason = reason;
     return true;
   }
+  async rerouteToFallback(_ids: readonly string[], _intended: string, actual: string, reason: string) {
+    this.actualRecipientEmail = actual; this.lastError = `BLOCKED_CLIENT:${reason}`;
+  }
 }
 
 class MultiMemorySendStore implements CommunicationEmailSendStore {
@@ -467,6 +568,7 @@ class MultiMemorySendStore implements CommunicationEmailSendStore {
   async markBatchSent(ids: readonly string[]) { for (const id of ids) await this.markSent(id); }
   async markFailed(id: string, _reason: string, _at: Date, next: Date | null) { const item=this.candidates.find((value)=>value.id===id)!; item.status=CommunicationDeliveryStatus.FAILED; item.nextRetryAt=next; }
   async cancel(id: string) { this.candidates.find((item) => item.id === id)!.status = CommunicationDeliveryStatus.CANCELLED; return true; }
+  async rerouteToFallback(_ids: readonly string[], _intended: string, _actual: string, _reason: string) {}
 }
 
 class MockProvider implements EmailProvider {
@@ -568,6 +670,7 @@ function config(): CommunicationEmailSenderConfig {
     resendApiKey: "re_test_mock",
     replyTo: "serwis@tiemed.pl",
     timeZone: "Europe/Warsaw",
+    tiemedFallbackEmail: "fallback@tiemed.pl",
   };
 }
 
@@ -636,7 +739,14 @@ function currentTask(overrides = {}) {
 function dataSource(): CommunicationTemplateDataSource {
   return {
     async getEmployees() { return []; },
-    async getInspections() { return []; },
+    async getInspections(recordIds) { return recordIds.map((airtableRecordId) => ({
+      airtableRecordId, businessNumber: "I-1", clientOrderNumber: null,
+      currentStatus: "PLANOWANY", inspectionResult: null,
+      sourceHospitalRecordId: "recHospital", inspectionPerformedAt: null,
+      inspectionDueDate: null, deviceName: "USG", manufacturer: "Philips",
+      model: "Epiq", serialNumber: "SN-1", inventoryNumber: null,
+      estimatedDurationSeconds: 1200,
+    })); },
     async getDevices() { return []; },
   };
 }

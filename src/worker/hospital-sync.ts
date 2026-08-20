@@ -19,7 +19,7 @@ export interface HospitalSyncStore {
 }
 
 export class PrismaHospitalSyncStore implements HospitalSyncStore {
-  constructor(private readonly prisma: PrismaClient) {}
+  constructor(private readonly prisma: PrismaClient | Prisma.TransactionClient) {}
 
   async upsert(hospital: MappedHospital, seenAt: Date): Promise<void> {
     const { linkedInspectionRecordIds: _linkedInspectionRecordIds, ...hospitalData } = hospital;
@@ -30,8 +30,8 @@ export class PrismaHospitalSyncStore implements HospitalSyncStore {
     } as Prisma.InputJsonObject;
     await this.prisma.trackedHospital.upsert({
       where: { airtableRecordId: hospital.airtableRecordId },
-      create: { ...hospitalData, sourceSnapshot: snapshot, lastSeenAt: seenAt },
-      update: { ...hospitalData, sourceSnapshot: snapshot, lastSeenAt: seenAt },
+      create: { ...hospitalData, sourceSnapshot: snapshot, lastSeenAt: seenAt, active: true },
+      update: { ...hospitalData, sourceSnapshot: snapshot, lastSeenAt: seenAt, active: true },
     });
   }
 
@@ -130,7 +130,7 @@ export function buildInspectionHospitalScopeIndex(
 }
 
 export async function synchronizeInspectionHospitalScopes(
-  prisma: PrismaClient,
+  prisma: PrismaClient | Prisma.TransactionClient,
   index: InspectionHospitalScopeIndex,
   log: (message: string) => void = console.warn,
 ): Promise<InspectionHospitalScopeStats> {

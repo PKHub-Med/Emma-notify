@@ -44,7 +44,7 @@ export type TaskSyncStats = {
 };
 
 export class PrismaTaskSyncStore implements TaskSyncStore {
-  constructor(private readonly prisma: PrismaClient) {}
+  constructor(private readonly prisma: PrismaClient | Prisma.TransactionClient) {}
 
   async markRunning(at: Date): Promise<void> {
     await this.prisma.syncState.upsert({
@@ -62,7 +62,7 @@ export class PrismaTaskSyncStore implements TaskSyncStore {
   }
 
   async upsertTask(task: MappedTask, seenAt: Date): Promise<TaskUpsertOutcome> {
-    return this.prisma.$transaction(async (transaction) => {
+    return this.inTransaction(async (transaction) => {
       const existing = await transaction.trackedTask.findUnique({
         where: { airtableRecordId: task.airtableRecordId }, select: { sourceSnapshot: true },
       });
@@ -76,6 +76,13 @@ export class PrismaTaskSyncStore implements TaskSyncStore {
       if (!existing) return "FIRST_SEEN";
       return isDeepStrictEqual(existing.sourceSnapshot, snapshot) ? "UNCHANGED" : "CHANGED";
     });
+  }
+
+  private inTransaction<T>(operation: (transaction: Prisma.TransactionClient) => Promise<T>): Promise<T> {
+    if ("$transaction" in this.prisma) {
+      return this.prisma.$transaction(operation);
+    }
+    return operation(this.prisma);
   }
 
   async markSuccessful(at: Date, ensureBaseline: boolean, advanceCursor: boolean): Promise<void> {
@@ -269,7 +276,7 @@ function taskData(task: MappedTask, snapshot: ReturnType<typeof buildTaskSnapsho
     linkedInspectionRecordIds: task.linkedInspectionRecordIds as Prisma.InputJsonArray,
     linkedServiceOrderRecordIds: task.linkedServiceOrderRecordIds as Prisma.InputJsonArray,
     performerRecordIds: task.performerRecordIds as Prisma.InputJsonArray,
-    sourceSnapshot: snapshot as Prisma.InputJsonObject, lastSeenAt: seenAt,
+    sourceSnapshot: snapshot as Prisma.InputJsonObject, lastSeenAt: seenAt, active: true,
   };
 }
 

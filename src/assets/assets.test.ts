@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import {
   AssetProcessingStatus,
+  CommunicationDeliveryStatus,
   CommunicationAssetRole,
   CommunicationScenario,
   CommunicationSourceEntityType,
@@ -68,6 +69,8 @@ describe("communication asset discovery", () => {
         registered = assets;
         return assets.map((_, index) => ({ storedFileId: `file-${index}`, reused: false, status: "PENDING" }));
       } },
+      undefined,
+      { hospitalScope: async () => "recHospital" },
     );
     await resolver.resolve(delivery(CommunicationScenario.REPAIR_COMPLETED));
     expect(fetchRecord).toHaveBeenCalledWith(
@@ -107,6 +110,8 @@ describe("communication asset discovery", () => {
         registered = assets;
         return assets.map((_, index) => ({ storedFileId: `file-${index}`, reused: false, status: "PENDING" }));
       } },
+      undefined,
+      { hospitalScope: async () => "recHospital" },
     );
     await resolver.resolve({
       id: "delivery-inspection",
@@ -383,17 +388,18 @@ describe("bounded preflight and public access", () => {
     await expect(service.signedUrl(authorization, "asset-1", "document")).resolves.toBeNull();
   });
 
-  it("builds COMMUNICATION asset visibility as exact grant delivery OR SENT CLIENT history", async () => {
+  it("builds COMMUNICATION asset visibility as exact grant delivery or the same batch", async () => {
     const where = publicAssetAccessWhere({
       hospitalId: "hospital-A",
       accessLevel: PortalAccessLevel.COMMUNICATION,
       communicationDeliveryId: "delivery-A",
+      communicationBatchMessageId: "resend-batch-A",
     });
     expect(where).toMatchObject({
       exposedAt: { not: null },
       OR: [
         { deliveryId: "delivery-A", delivery: { status: "SENT" } },
-        { delivery: { status: "SENT", communicationEventRecipient: { recipientType: "CLIENT" } } },
+        { delivery: { status: "SENT", resendMessageId: "resend-batch-A" } },
       ],
       storedFile: { sourceHospitalRecordId: "hospital-A" },
     });
@@ -428,7 +434,30 @@ describe("bounded preflight and public access", () => {
     }));
   });
 
-  it("keeps SENT CLIENT assets available as Hospital communication history", async () => {
+  it.each(["CLIENT", "TIEMED_FALLBACK"] as const)(
+    "allows %s sibling documents only inside the same Resend batch",
+    async (recipientType) => {
+      const findUnique = vi.fn().mockResolvedValue(databaseAsset({
+        deliveryId: "delivery-B", recipientType, resendMessageId: "batch-ABC",
+      }));
+      const grantDelivery = vi.fn(async ({ where }: { where: { id: string } }) => ({
+        status: CommunicationDeliveryStatus.SENT,
+        resendMessageId: where.id === "delivery-A" ? "batch-ABC" : "batch-D",
+      }));
+      const store = new PrismaPublicAssetStore({
+        communicationAsset: { findUnique },
+        communicationDelivery: { findUnique: grantDelivery },
+      } as never, { resolve: async (hospitalId) => ({ hospitalId,
+        accessLevel: PortalAccessLevel.COMMUNICATION }) });
+      const authorization = { ...publicAuthorization(), communicationDeliveryId: "delivery-A" };
+      await expect(store.findAuthorized("asset-B", authorization)).resolves.not.toBeNull();
+      await expect(store.findAuthorized("asset-B", {
+        ...authorization, communicationDeliveryId: "delivery-D",
+      })).resolves.toBeNull();
+    },
+  );
+
+  it("does not expose an asset from another client message", async () => {
     const findUnique = vi.fn().mockResolvedValue(databaseAsset({
       deliveryId: "earlier-delivery", recipientType: "CLIENT",
     }));
@@ -443,7 +472,7 @@ describe("bounded preflight and public access", () => {
         type: "SERVICE_ORDER", sourceRecordId: "recOrder-B",
         scenario: CommunicationScenario.REPAIR_RECEIVED,
       },
-    })).resolves.toMatchObject({ documentObjectKey: "hospital-A/protocol.pdf" });
+    })).resolves.toBeNull();
   });
 
   it("does not authorize an H2 asset for an H1 portal token", async () => {
@@ -546,6 +575,7 @@ function databaseAsset(overrides: {
   exposedAt?: Date | null;
   processingStatus?: AssetProcessingStatus;
   orphanedAt?: Date | null;
+  resendMessageId?: string | null;
 } = {}) {
   const hospitalId = overrides.hospitalId ?? "hospital-A";
   return {
@@ -554,6 +584,7 @@ function databaseAsset(overrides: {
       ? new Date("2026-08-14T10:00:00Z") : overrides.exposedAt,
     delivery: {
       status: "SENT",
+      resendMessageId: overrides.resendMessageId ?? null,
       communicationEventRecipient: { recipientType: overrides.recipientType ?? "TIEMED_FALLBACK" },
       communicationEvent: { eventSnapshot: { sourceHospitalRecordId: hospitalId } },
     },

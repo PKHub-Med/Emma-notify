@@ -1,5 +1,6 @@
 export const COMMUNICATION_SCENARIOS = {
   REPAIR_RECEIVED: "REPAIR_RECEIVED",
+  REPAIR_DELAYED_PARTS: "REPAIR_DELAYED_PARTS",
   REPAIR_COMPLETED: "REPAIR_COMPLETED",
   INSPECTION_DATE_PROPOSED: "INSPECTION_DATE_PROPOSED",
   INSPECTION_DATE_CONFIRMED: "INSPECTION_DATE_CONFIRMED",
@@ -17,6 +18,7 @@ export const EMMA_COMMUNICATION_CONTRACT = {
     template: "Naprawa-zmiana_stanu",
     receivedState: "Diagnostyka",
     completedState: "Naprawa zakończona",
+    delayedPartsState: "Oczekiwanie na części",
   },
   inspection: {
     dateProposed: {
@@ -54,6 +56,9 @@ export function resolveCommunicationScenario(input: {
     }
     if (state === EMMA_COMMUNICATION_CONTRACT.repair.completedState) {
       return COMMUNICATION_SCENARIOS.REPAIR_COMPLETED;
+    }
+    if (state === EMMA_COMMUNICATION_CONTRACT.repair.delayedPartsState) {
+      return COMMUNICATION_SCENARIOS.REPAIR_DELAYED_PARTS;
     }
     return null;
   }

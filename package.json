@@ -20,6 +20,7 @@
     "db:inspect-case": "node dist/db/inspect-case.js",
     "db:latest-digest": "node dist/db/latest-digest.js",
     "db:retry-detail-url-failures": "node dist/db/retry-detail-url-failures.js",
+    "backfill:data": "npm run build && node dist/worker/data-only-backfill.js",
     "db:migrate:deploy": "prisma migrate deploy",
     "prisma:validate": "prisma validate",
     "prisma:generate": "prisma generate"

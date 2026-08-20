@@ -50,6 +50,7 @@ describe("case mappers", () => {
     });
     expect(mapped.sourceSnapshot).not.toHaveProperty("contactRecordIds");
     expect(mapped.reportedAt?.toISOString()).toBe("2026-08-02T07:30:00.000Z");
+    expect(mapped.sourceSnapshot.reportedAtRaw).toBe("2026-08-02T07:30:00.000Z");
   });
 
   it("does not fall back to source or sync timestamps when reportedAt is absent", () => {
@@ -82,6 +83,7 @@ describe("case mappers", () => {
       [INSPECTION_FIELDS.scheduledDate]: "2026-09-01T09:00:00.000Z",
       [INSPECTION_FIELDS.performedAt]: "2026-08-31",
       [INSPECTION_FIELDS.result]: "SPRAWNY",
+      [INSPECTION_FIELDS.estimatedDuration]: "720",
     }));
 
     expect(mapped).toMatchObject({
@@ -93,6 +95,7 @@ describe("case mappers", () => {
       inspectionBookingStatus: "Nowe, Potwierdzone",
       invalidDueDate: true,
       inspectionResult: "SPRAWNY",
+      sourceSnapshot: { estimatedDurationSeconds: 720 },
     });
     expect(mapped.inspectionScheduledDate?.toISOString()).toBe(
       "2026-09-01T09:00:00.000Z",
@@ -109,6 +112,15 @@ describe("case mappers", () => {
     expect(mapped.inspectionPerformedAt).toBeNull();
     expect(mapped.inspectionValidUntil).toBeNull();
     expect(mapped.inspectionResult).toBeNull();
+  });
+
+  it.each([
+    [1200, 1200], ["1200", 1200], [null, null], ["", null], ["abc", null],
+  ])("maps estimated duration safely from %j", (input, expected) => {
+    const mapped = mapInspection(record("recDuration", {
+      [INSPECTION_FIELDS.estimatedDuration]: input,
+    }));
+    expect(mapped.sourceSnapshot.estimatedDurationSeconds).toBe(expected);
   });
 
   it("preserves every linked Device ID without silently truncating", () => {

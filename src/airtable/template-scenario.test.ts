@@ -20,6 +20,12 @@ describe("communication scenario resolver", () => {
       COMMUNICATION_SCENARIOS.REPAIR_COMPLETED,
     ],
     [
+      "SERVICE_ORDER",
+      EMMA_COMMUNICATION_CONTRACT.repair.delayedPartsState,
+      EMMA_COMMUNICATION_CONTRACT.repair.template,
+      COMMUNICATION_SCENARIOS.REPAIR_DELAYED_PARTS,
+    ],
+    [
       "TASK",
       EMMA_COMMUNICATION_CONTRACT.inspection.dateProposed.state,
       EMMA_COMMUNICATION_CONTRACT.inspection.dateProposed.template,

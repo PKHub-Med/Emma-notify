@@ -6,17 +6,18 @@
 <div style="display:none;max-height:0;overflow:hidden;opacity:0;color:transparent;">Przypomnienie o zaplanowanym przeglądzie: {{{VISIT_DATE}}}.</div>
 <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" bgcolor="#F1F4F8"><tr><td align="center" style="padding:24px 10px;">
 <table role="presentation" class="wrap" width="640" cellspacing="0" cellpadding="0" border="0" style="width:640px;max-width:640px;background:#fff;border:1px solid #D9E1EB;border-radius:14px;overflow:hidden;">
-<tr><td class="px" style="padding:22px 28px;border-bottom:1px solid #E6EBF2;"><table role="presentation" width="100%"><tr><td><div style="font-size:25px;line-height:30px;color:#223F6D;font-weight:800;">{{{SERVICE_NAME}}}</div><div style="font-size:12px;line-height:18px;color:#66758A;margin-top:5px;">Obsługa serwisowa przez platformę <strong style="color:#223F6D;">EMMA</strong></div></td><td align="right" style="font-size:10px;line-height:15px;color:#66758A;">Data wysłania<br><strong style="color:#1F2F49;">{{{SENT_AT}}}</strong></td></tr></table></td></tr>
+<tr><td class="px" style="padding:22px 28px;border-bottom:1px solid #E6EBF2;"><table role="presentation" width="100%"><tr><td><div style="font-size:25px;line-height:30px;color:#223F6D;font-weight:800;">{{{SERVICE_NAME}}}</div><div style="font-size:12px;line-height:18px;color:#66758A;margin-top:5px;">Obsługa serwisowa przez platformę <strong style="color:#223F6D;">EMMA</strong></div></td><td align="right" style="font-size:12px;line-height:18px;color:#66758A;">Data wysłania<br><strong style="color:#1F2F49;">{{{SENT_AT}}}</strong></td></tr></table></td></tr>
 <tr><td class="px" style="padding:26px 28px 28px;">
+{{{BLOCKED_NOTICE}}}
 <h1 style="margin:0;font-size:25px;line-height:32px;color:#1F2F49;">Przypomnienie o zaplanowanym przeglądzie</h1>
-<p style="margin:9px 0 0;font-size:14px;line-height:22px;">Przypominamy o zaplanowanej wizycie serwisowej. Poniżej znajdziesz najważniejsze informacje organizacyjne.</p>
+<p style="margin:9px 0 0;font-size:14px;line-height:22px;">Poniżej znajdziesz termin wizyty, dane serwisanta oraz listę urządzeń objętych przeglądem.</p>
 <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin-top:18px;table-layout:fixed;"><tr>
-<td class="two-col" width="49%" valign="top" style="border:1px solid #D9E1EB;background:#F7F9FC;padding:16px 18px;"><div style="font-size:16px;font-weight:800;margin-bottom:9px;">Termin wizyty</div><div style="font-size:13px;line-height:21px;"><strong>{{{VISIT_DATE}}}</strong><br>Oddział: <strong>{{{DEPARTMENT}}}</strong><br>Liczba urządzeń: <strong>{{{DEVICE_COUNT}}}</strong></div></td>
+<td class="two-col" width="49%" valign="top" style="border:1px solid #D9E1EB;background:#F7F9FC;padding:16px 18px;"><div style="font-size:16px;line-height:22px;font-weight:800;margin-bottom:9px;">Termin wizyty</div><div style="font-size:14px;line-height:22px;"><strong style="display:block;margin-bottom:6px;">{{{VISIT_DATE}}}</strong>Oddział: <strong>{{{DEPARTMENT}}}</strong><br>Liczba urządzeń: <strong>{{{DEVICE_COUNT}}}</strong></div></td>
 <td class="col-gap" width="14" style="width:14px;font-size:0;line-height:0;">&nbsp;</td>
-<td class="two-col" width="49%" valign="top" style="border:1px solid #D9E1EB;background:#F7F9FC;padding:16px 18px;"><div style="font-size:16px;font-weight:800;margin-bottom:9px;">Serwisant</div><div style="font-size:13px;line-height:21px;"><strong>{{{TECHNICIAN_NAME}}}</strong><br>tel. {{{TECHNICIAN_PHONE}}}<br>email: {{{TECHNICIAN_EMAIL}}}</div><div style="font-size:11px;line-height:17px;color:#66758A;margin-top:8px;">{{{TECHNICIAN_NAME}}} będzie odpowiedzialny za realizację przeglądu oraz koordynację prac na miejscu.</div></td>
+<td class="two-col" width="49%" valign="top" style="border:1px solid #D9E1EB;background:#F7F9FC;padding:16px 18px;"><div style="font-size:16px;line-height:22px;font-weight:800;margin-bottom:9px;">Serwisant</div><div style="font-size:14px;line-height:22px;"><strong>{{{TECHNICIAN_NAME}}}</strong><br>tel. {{{TECHNICIAN_PHONE}}}<br>email: {{{TECHNICIAN_EMAIL}}}</div><div style="font-size:12px;line-height:18px;color:#66758A;margin-top:8px;">{{{TECHNICIAN_NAME}}} będzie odpowiedzialny za realizację przeglądu oraz koordynację prac na miejscu.</div></td>
 </tr></table>
 <div style="margin-top:20px;font-size:16px;line-height:22px;font-weight:800;">Urządzenia objęte przeglądem</div>
-<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin-top:8px;border:1px solid #D9E1EB;border-collapse:separate;border-spacing:0;table-layout:fixed;"><tr><td style="padding:9px 8px;border-bottom:1px solid #D9E1EB;border-right:1px solid #D9E1EB;background:#F7F9FC;font-size:10px;font-weight:800;width:34px;text-align:center;">LP.</td><td style="padding:9px 8px;border-bottom:1px solid #D9E1EB;border-right:1px solid #D9E1EB;background:#F7F9FC;font-size:10px;font-weight:800;">URZĄDZENIE I DANE</td><td style="padding:9px 8px;border-bottom:1px solid #D9E1EB;background:#F7F9FC;font-size:10px;font-weight:800;width:115px;text-align:center;">SZAC. CZAS</td></tr>{{{DEVICE_ROW_01}}}
+<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin-top:8px;border:1px solid #D9E1EB;border-collapse:separate;border-spacing:0;table-layout:fixed;"><tr><td style="padding:9px 8px;border-bottom:1px solid #D9E1EB;border-right:1px solid #D9E1EB;background:#F7F9FC;font-size:12px;line-height:18px;font-weight:800;width:34px;text-align:center;">LP.</td><td style="padding:9px 8px;border-bottom:1px solid #D9E1EB;border-right:1px solid #D9E1EB;background:#F7F9FC;font-size:12px;line-height:18px;font-weight:800;">URZĄDZENIE I DANE</td><td style="padding:9px 8px;border-bottom:1px solid #D9E1EB;background:#F7F9FC;font-size:12px;line-height:18px;font-weight:800;width:145px;text-align:center;">SZACUNKOWY CZAS</td></tr>{{{DEVICE_ROW_01}}}
 {{{DEVICE_ROW_02}}}
 {{{DEVICE_ROW_03}}}
 {{{DEVICE_ROW_04}}}
@@ -46,17 +47,10 @@
 {{{DEVICE_ROW_28}}}
 {{{DEVICE_ROW_29}}}
 {{{DEVICE_ROW_30}}}
-{{{DEVICE_ROW_31}}}
-{{{DEVICE_ROW_32}}}
-{{{DEVICE_ROW_33}}}
-{{{DEVICE_ROW_34}}}
-{{{DEVICE_ROW_35}}}
-{{{DEVICE_ROW_36}}}
-{{{DEVICE_ROW_37}}}
-{{{DEVICE_ROW_38}}}
-{{{DEVICE_ROW_39}}}</table>
-<div style="margin-top:20px;border:1px solid #D9E1EB;background:#F7F9FC;padding:16px 18px;"><div style="font-size:15px;font-weight:800;">Przed wizytą</div><ul style="margin:9px 0 0;padding-left:20px;font-size:12px;line-height:20px;"><li>Zapewnij dostęp do wszystkich urządzeń objętych przeglądem.</li><li>Przygotuj paszporty techniczne lub dokumentację urządzeń, jeśli są dostępne.</li><li>Zapewnij dostęp do pomieszczeń i wskaż osobę do kontaktu na miejscu.</li></ul></div>
-<table role="presentation" cellspacing="0" cellpadding="0" style="margin-top:20px;"><tr><td style="padding-right:10px;"><a href="{{{TECHNICIAN_PHONE_TEL}}}" style="display:inline-block;padding:11px 16px;border-radius:8px;background:#EAF0F9;color:#223F6D;text-decoration:none;font-size:12px;font-weight:800;">Zadzwoń do serwisanta</a></td><td><a href="{{{EMMA_SECURE_URL}}}" style="display:inline-block;padding:11px 16px;border-radius:8px;background:#223F6D;color:#fff;text-decoration:none;font-size:12px;font-weight:800;">Otwórz przeglądy w EMMA</a></td></tr></table>
-<p style="margin:12px 0 0;font-size:11px;line-height:18px;color:#66758A;">Szczegóły urządzeń, historia przeglądów, dokumentacja i raporty dostępne na platformie.</p></td></tr>
-<tr><td class="px" style="padding:18px 28px 24px;border-top:1px solid #E6EBF2;font-size:10px;line-height:16px;color:#7B8798;">Wiadomość automatyczna EMMA · <a href="{{{EMMA_UNSUBSCRIBE_URL}}}" style="color:#66758A;">wyłącz automatyczne powiadomienia</a></td></tr>
+ </table>
+{{{TRUNCATION_NOTICE}}}
+<div style="margin-top:20px;border:1px solid #D9E1EB;background:#F7F9FC;padding:16px 18px;"><div style="font-size:16px;line-height:22px;font-weight:800;">Przed wizytą</div><ul style="margin:9px 0 0;padding-left:20px;font-size:14px;line-height:22px;"><li>Zapewnij dostęp do wszystkich urządzeń objętych przeglądem.</li><li>Przygotuj paszporty techniczne lub dokumentację urządzeń, jeśli są dostępne.</li><li>Zapewnij dostęp do pomieszczeń i wskaż osobę do kontaktu na miejscu.</li></ul></div>
+<table role="presentation" cellspacing="0" cellpadding="0" style="margin-top:20px;"><tr><td style="padding-right:10px;"><a href="{{{TECHNICIAN_PHONE_TEL}}}" style="display:inline-block;padding:12px 18px;border-radius:8px;background:#EAF0F9;color:#223F6D;text-decoration:none;font-size:14px;line-height:20px;font-weight:800;">Zadzwoń do serwisanta</a></td><td>{{{EMMA_SECURE_URL}}}</td></tr></table>
+<p style="margin:12px 0 0;font-size:12px;line-height:18px;color:#66758A;">Szczegóły urządzeń, historia przeglądów, dokumentacja i raporty dostępne na platformie.</p></td></tr>
+<tr><td class="px" style="padding:18px 28px 24px;border-top:1px solid #E6EBF2;font-size:12px;line-height:18px;color:#7B8798;">Wiadomość automatyczna EMMA {{{EMMA_UNSUBSCRIBE_URL}}}</td></tr>
 </table></td></tr></table></body></html>

@@ -43,6 +43,23 @@ export interface CommunicationAssetRegistrationStore {
   register(deliveryId: string, assets: readonly DiscoveredAsset[]): Promise<RegisteredAsset[]>;
 }
 
+export interface InspectionHospitalScopeVerifier {
+  hospitalScope(inspectionRecordId: string): Promise<string | null>;
+}
+
+export class PrismaInspectionHospitalScopeVerifier implements InspectionHospitalScopeVerifier {
+  constructor(private readonly prisma: PrismaClient) {}
+  async hospitalScope(inspectionRecordId: string): Promise<string | null> {
+    const record = await this.prisma.trackedCase.findUnique({
+      where: { caseType_airtableRecordId: {
+        caseType: "INSPECTION", airtableRecordId: inspectionRecordId,
+      } },
+      select: { sourceHospitalRecordId: true },
+    });
+    return record?.sourceHospitalRecordId ?? null;
+  }
+}
+
 export class PrismaCommunicationAssetRegistrationStore implements CommunicationAssetRegistrationStore {
   constructor(private readonly prisma: PrismaClient) {}
 
@@ -127,6 +144,7 @@ export class CommunicationAssetResolver {
     private readonly airtable: AirtableIncrementalSource,
     private readonly store: CommunicationAssetRegistrationStore,
     private readonly log?: (message: string) => void,
+    private readonly inspectionScopeVerifier?: InspectionHospitalScopeVerifier,
   ) {}
 
   async resolve(delivery: CommunicationAssetDelivery): Promise<RegisteredAsset[]> {
@@ -147,6 +165,10 @@ export class CommunicationAssetResolver {
     } else if (delivery.scenario === CommunicationScenario.INSPECTION_COMPLETED) {
       const inspectionIds = snapshotStringArray(delivery.eventSnapshot, "linkedInspectionRecordIds");
       for (const inspectionId of inspectionIds) {
+        const actualHospital = await this.inspectionScopeVerifier?.hospitalScope(inspectionId);
+        if (!this.inspectionScopeVerifier || actualHospital !== sourceHospitalRecordId) {
+          throw new Error("INSPECTION_ASSET_HOSPITAL_SCOPE_MISMATCH");
+        }
         const record = await this.airtable.fetchRecord(
           AIRTABLE_TABLE_IDS.inspections,
           inspectionId,
