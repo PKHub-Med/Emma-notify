@@ -115,7 +115,8 @@ describe("case mappers", () => {
   });
 
   it.each([
-    [1200, 1200], ["1200", 1200], [null, null], ["", null], ["abc", null],
+    [1800, 1800], [3600, 3600], [5400, 5400], ["1200", 1200],
+    [undefined, null], [null, null], ["", null], ["abc", null],
   ])("maps estimated duration safely from %j", (input, expected) => {
     const mapped = mapInspection(record("recDuration", {
       [INSPECTION_FIELDS.estimatedDuration]: input,

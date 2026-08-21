@@ -82,6 +82,7 @@ class FakeAirtable implements AirtableIncrementalSource {
 }
 
 class MemoryStore implements IncrementalStore {
+  readonly mappedCases: MappedCase[] = [];
   readonly cases = new Map<string, StoredCase>();
   readonly recipients = new Map<string, ResolvedRecipient[]>();
   readonly events: Array<StatusChangeCommand & { triggersNotification: true }> = [];
@@ -112,6 +113,7 @@ class MemoryStore implements IncrementalStore {
     return this.cases.get(caseKey(mappedCase.caseType, mappedCase.airtableRecordId)) ?? null;
   }
   async upsertCaseWithoutEvent(mappedCase: MappedCase): Promise<string> {
+    this.mappedCases.push(mappedCase);
     const key = caseKey(mappedCase.caseType, mappedCase.airtableRecordId);
     const existing = this.cases.get(key);
     if (existing) {
@@ -393,6 +395,18 @@ describe("incremental status sync", () => {
     source.inspections = [inspectionRecord("recInspection", "B")];
     await run(source, store, date(0));
     expect(store.events[0]?.eventType).toBe(EventType.INSPECTION_STATUS_CHANGED);
+  });
+
+  it("persists Airtable inspection duration in sourceSnapshot during incremental upsert", async () => {
+    const source = new FakeAirtable();
+    const store = new MemoryStore();
+    source.inspections = [{ ...inspectionRecord("recDuration", "A"), fields: {
+      ...inspectionRecord("recDuration", "A").fields,
+      [INSPECTION_FIELDS.estimatedDuration]: 5400,
+    } }];
+    await run(source, store, date(0));
+    expect(store.mappedCases.find((item) => item.airtableRecordId === "recDuration")
+      ?.sourceSnapshot.estimatedDurationSeconds).toBe(5400);
   });
 
   it("regression: inspection with refreshed eligible linked contact creates event, OPEN buffer and item", async () => {

@@ -223,6 +223,31 @@ describe("dynamic HTML and source mapping", () => {
     expect(row).not.toContain("Ă‚Â·");
   });
 
+  it.each([
+    [1800, "30 min"], [3600, "1 godz."], [5400, "1 godz. 30 min"], [null, "-"],
+  ])("formats inspection duration %j consistently in device and result rows", async (seconds, expected) => {
+    const one = { ...inspection("only", "SPRAWNY"), estimatedDurationSeconds: seconds };
+    const dataSource: CommunicationTemplateDataSource = {
+      async getEmployees() { return []; }, async getDevices() { return []; },
+      async getInspections() { return [one]; },
+    };
+    for (const scenario of [
+      CommunicationScenario.INSPECTION_DATE_PROPOSED,
+      CommunicationScenario.INSPECTION_DATE_CONFIRMED,
+      CommunicationScenario.INSPECTION_REMINDER,
+      CommunicationScenario.INSPECTION_COMPLETED,
+    ]) {
+      const payload = await buildCommunicationTemplatePayload({
+        delivery: { id: "d", scenario, sourceRecordId: "task",
+          eventSnapshot: { ...taskSnapshot(), linkedInspectionRecordIds: ["only"] } },
+        dataSource, secureUrl, unsubscribeUrl, preparedAt, timeZone: "Europe/Warsaw",
+      });
+      const row = String(scenario === CommunicationScenario.INSPECTION_COMPLETED
+        ? payload.variables.RESULT_ROW_01 : payload.variables.DEVICE_ROW_01);
+      expect(row).toContain(`>${expected}</td></tr>`);
+    }
+  });
+
   it("renders repair dates in a separate column and completed statuses as colored badges", async () => {
     const received = String((await build(CommunicationScenario.REPAIR_RECEIVED)).variables.REPAIR_ROW_01);
     expect(received).toContain("16.06.2026</td></tr>");

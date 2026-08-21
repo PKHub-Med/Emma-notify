@@ -144,7 +144,7 @@ export function mapInspection(record: AirtableRecord): MappedCase {
       parseAirtableDate(record.fields[INSPECTION_FIELDS.scheduledDate])?.toISOString() ??
       null,
     department: toOptionalString(record.fields[INSPECTION_FIELDS.department]),
-    estimatedDurationSeconds: optionalFiniteNumber(
+    estimatedDurationSeconds: toEstimatedDurationSeconds(
       record.fields[INSPECTION_FIELDS.estimatedDuration],
     ),
   };
@@ -198,9 +198,9 @@ function rawString(value: unknown): string | null {
   return toOptionalString(value);
 }
 
-function optionalFiniteNumber(value: unknown): number | null {
-  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+export function toEstimatedDurationSeconds(value: unknown): number | null {
+  if (typeof value === "number") return Number.isFinite(value) && value >= 0 ? value : null;
   if (typeof value !== "string" || !value.trim()) return null;
   const parsed = Number(value.trim().replace(",", "."));
-  return Number.isFinite(parsed) ? parsed : null;
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
 }

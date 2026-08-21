@@ -692,7 +692,7 @@ function resultRows(
       ? "border-bottom:1px solid #D9E1EB;"
       : "";
     const details = `<div style="font-size:14px;line-height:20px;font-weight:800;color:#1F2F49;">${htmlEscape(display(inspection.deviceName, "Urządzenie"))}</div><div style="margin-top:3px;font-size:12px;line-height:18px;color:#34445D;">${htmlEscape(display(inspection.manufacturer, "—"))} &#183; ${htmlEscape(display(inspection.model, "—"))}</div><div style="margin-top:4px;font-size:12px;line-height:18px;color:#66758A;">SN: ${htmlEscape(display(inspection.serialNumber, "—"))} &#183; Nr inw.: ${htmlEscape(display(inspection.inventoryNumber, "—"))}<br>Numer sprawy: ${htmlEscape(display(inspection.businessNumber, "—"))}<br>Nr zlecenia klienta: ${htmlEscape(display(inspection.clientOrderNumber, "brak numeru"))}</div>`;
-    return `<tr><td style="padding:13px 8px;${bottomBorder}border-right:1px solid #D9E1EB;text-align:center;vertical-align:middle;font-size:12px;line-height:18px;color:#34445D;">${index + 1}</td><td style="padding:13px 12px;${bottomBorder}border-right:1px solid #D9E1EB;vertical-align:top;">${details}</td><td style="padding:13px 10px;${bottomBorder}text-align:center;vertical-align:middle;">${statusBadge(result.label, inspectionResultTone(result.key))}</td></tr>`;
+    return `<tr><td style="padding:13px 8px;${bottomBorder}border-right:1px solid #D9E1EB;text-align:center;vertical-align:middle;font-size:12px;line-height:18px;color:#34445D;">${index + 1}</td><td style="padding:13px 12px;${bottomBorder}border-right:1px solid #D9E1EB;vertical-align:top;">${details}</td><td style="padding:13px 10px;${bottomBorder}border-right:1px solid #D9E1EB;text-align:center;vertical-align:middle;">${statusBadge(result.label, inspectionResultTone(result.key))}</td><td style="padding:13px 8px;${bottomBorder}text-align:center;vertical-align:middle;font-size:12px;line-height:18px;font-weight:700;color:#1F2F49;white-space:nowrap;">${htmlEscape(formatDuration(inspection.estimatedDurationSeconds))}</td></tr>`;
   });
 }
 
@@ -889,7 +889,7 @@ function finiteSnapshotNumber(snapshot: unknown, key: string): number | null {
 }
 
 function formatDuration(seconds: number | null): string {
-  if (seconds === null || seconds < 0) return "—";
+  if (seconds === null || seconds < 0) return "-";
   if (seconds < 60) return `${Math.round(seconds)} s`;
 
   const minutes = Math.round(seconds / 60);
@@ -897,7 +897,7 @@ function formatDuration(seconds: number | null): string {
 
   const hours = Math.floor(minutes / 60);
   const rest = minutes % 60;
-  return rest === 0 ? `${hours} h` : `${hours} h ${rest} min`;
+  return rest === 0 ? `${hours} godz.` : `${hours} godz. ${rest} min`;
 }
 
 function isRepairScenario(scenario: CommunicationScenario): boolean {

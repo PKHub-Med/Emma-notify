@@ -92,5 +92,6 @@ describe("central Airtable contract", () => {
     expect(INSPECTION_FIELDS.performedAt).toBe("fld3knASxSRaBdDVt");
     expect(INSPECTION_FIELDS.result).toBe("fldWQzKcmaHodBwLF");
     expect(INSPECTION_FIELDS.dueDate).toBe("fldNMzupWUaEKzn7u");
+    expect(INSPECTION_FIELDS.estimatedDuration).toBe("fldxx69OVN0ML7ZJG");
   });
 });
