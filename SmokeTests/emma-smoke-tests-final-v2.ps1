@@ -1,6 +1,6 @@
 ﻿param(
     [ValidateRange(1, 365)]
-    [int]$WindowDays = 30
+    [int]$WindowDays = 5
 )
 
 # Railway CLI writes informational SSH messages to stderr on Windows.
@@ -26,19 +26,85 @@ Write-Host ""
 function Get-RailwayEnvValue {
     param([Parameter(Mandatory = $true)][string]$Name)
 
-    $value = railway ssh -- printenv $Name 2>$null | Select-Object -Last 1
-    $code = $LASTEXITCODE
+    $maxAttempts = 3
 
-    if ($code -ne 0) {
+    for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
+        $raw = @(railway ssh -- printenv $Name 2>&1)
+        $code = $LASTEXITCODE
+        $joined = $raw -join "`n"
+
+        if ($code -eq 0) {
+            $value = $raw | Select-Object -Last 1
+
+            if ($null -eq $value) {
+                return ""
+            }
+
+            return ([string]$value).Trim()
+        }
+
+        $transient =
+            $joined -match "backboard\.railway\.com" -or
+            $joined -match "Failed to fetch" -or
+            $joined -match "client error \(Connect\)" -or
+            $joined -match "os error 10054" -or
+            $joined -match "gwa.*townie zamkni"
+
+        if ($transient -and $attempt -lt $maxAttempts) {
+            Write-Host "Railway chwilowo niedostepne przy odczycie $Name. Retry $attempt/$maxAttempts..." -ForegroundColor Yellow
+            Start-Sleep -Seconds (3 * $attempt)
+            continue
+        }
+
+        $raw | ForEach-Object { Write-Host $_ }
         Write-Host "STOP: Nie udalo sie odczytac $Name z Railway (exit=$code)." -ForegroundColor Red
         exit $code
     }
+}
 
-    if ($null -eq $value) {
-        return ""
+function Invoke-RailwaySmokeScenario {
+    param(
+        [Parameter(Mandatory = $true)][string]$RemoteCommand,
+        [Parameter(Mandatory = $true)][string]$Scenario
+    )
+
+    $maxAttempts = 3
+
+    for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
+        $output = @(railway ssh -- sh -lc $RemoteCommand 2>&1)
+        $exitCode = $LASTEXITCODE
+        $joined = $output -join "`n"
+
+        # Retry only when Railway failed BEFORE the remote smoke runner started.
+        # If Event ID already exists, retrying could create a duplicate email.
+        $remoteStarted =
+            $joined -match "=== EMMA SMOKE TEST ===" -or
+            $joined -match "Event ID:"
+
+        $transientRailwayFailure =
+            $joined -match "backboard\.railway\.com" -or
+            $joined -match "Failed to fetch" -or
+            $joined -match "client error \(Connect\)" -or
+            $joined -match "os error 10054" -or
+            $joined -match "gwa.*townie zamkni"
+
+        if (
+            $exitCode -ne 0 -and
+            $transientRailwayFailure -and
+            -not $remoteStarted -and
+            $attempt -lt $maxAttempts
+        ) {
+            Write-Host "Railway connection error przed startem $Scenario. Retry $attempt/$maxAttempts..." -ForegroundColor Yellow
+            Start-Sleep -Seconds (4 * $attempt)
+            continue
+        }
+
+        return [PSCustomObject]@{
+            Output = $output
+            ExitCode = $exitCode
+            Attempts = $attempt
+        }
     }
-
-    return ([string]$value).Trim()
 }
 
 # ---------------------------------------------------------------------------
@@ -79,6 +145,9 @@ Write-Host ""
 Write-Host "Dobor kandydatow:" -ForegroundColor DarkGray
 Write-Host " - naprawy: SERVICE_ORDER.sourceModifiedAt >= cutoff" -ForegroundColor DarkGray
 Write-Host " - przeglady: linked INSPECTION.sourceModifiedAt >= cutoff" -ForegroundColor DarkGray
+Write-Host " - reminder: tylko Task z bezpieczna przyszla data wizyty (min. pojutrze)" -ForegroundColor DarkGray
+Write-Host " - completed: co najmniej 1 wykonany przeglad z rozpoznawalnym wynikiem" -ForegroundColor DarkGray
+Write-Host " - maile z czasem: wybrane przeglady musza miec estimatedDurationSeconds" -ForegroundColor DarkGray
 Write-Host " - fallback dla taskow: TASK.firstSeenAt >= cutoff" -ForegroundColor DarkGray
 Write-Host " - najpierw exact business state/template, potem bezpieczny generic fallback" -ForegroundColor DarkGray
 Write-Host ""
@@ -103,7 +172,7 @@ if (!process.env.TEST_EMAIL) {
 }
 
 const scenario = process.argv[2];
-const WINDOW_DAYS = Number(process.argv[3] ?? 30);
+const WINDOW_DAYS = Number(process.argv[3] ?? 5);
 
 if (!Number.isInteger(WINDOW_DAYS) || WINDOW_DAYS < 1 || WINDOW_DAYS > 365) {
   throw new Error(`INVALID_WINDOW_DAYS:${process.argv[3]}`);
@@ -199,6 +268,49 @@ function recognizedResult(v) {
     s === "SPRAWNY" ||
     s.startsWith("SPRAWNY ")
   );
+}
+
+const TIME_ZONE = process.env.COMMUNICATION_TIMEZONE || "Europe/Warsaw";
+
+function localDateString(date = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: TIME_ZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  }).formatToParts(date);
+
+  const map = Object.fromEntries(
+    parts.filter(p => p.type !== "literal").map(p => [p.type, p.value])
+  );
+
+  return `${map.year}-${map.month}-${map.day}`;
+}
+
+function addDaysToIsoDate(isoDate, days) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(isoDate ?? "");
+  if (!match) return null;
+
+  const d = new Date(Date.UTC(
+    Number(match[1]),
+    Number(match[2]) - 1,
+    Number(match[3])
+  ));
+
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
+function hasEstimatedDuration(inspection) {
+  const value = obj(inspection.sourceSnapshot).estimatedDurationSeconds;
+  return typeof value === "number" && Number.isFinite(value) && value >= 0;
+}
+
+function reminderDayIsSafe(day) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day ?? "")) return false;
+
+  const safeReminderDay = addDaysToIsoDate(localDateString(), 2);
+  return safeReminderDay !== null && day >= safeReminderDay;
 }
 
 // ---------------------------------------------------------------------------
@@ -344,18 +456,46 @@ async function findTask() {
     take: 1000
   });
 
+  const diagnostics = {
+    checked: 0,
+    missingDayLinksOrContacts: 0,
+    tooManyInspections: 0,
+    reminderDateNotFuture: 0,
+    missingLinkedInspections: 0,
+    hospitalMismatch: 0,
+    inconsistent: 0,
+    missingEstimatedDuration: 0,
+    completedWithoutUsableResults: 0,
+    notRecent: 0
+  };
+
   async function collect(tasks) {
     const shuffled = [...tasks].sort(() => Math.random() - 0.5);
     const candidates = [];
 
     for (const task of shuffled) {
+      diagnostics.checked++;
+
       const ids = arr(task.linkedInspectionRecordIds);
       const contacts = arr(task.selectedContactRecordIds);
 
-      if (!task.day || !ids.length || !contacts.length) continue;
+      if (!task.day || !ids.length || !contacts.length) {
+        diagnostics.missingDayLinksOrContacts++;
+        continue;
+      }
 
-      // Keep smoke payloads compact. Large-list behavior is covered elsewhere.
-      if (ids.length > 30) continue;
+      if (
+        scenario === "INSPECTION_REMINDER" &&
+        !reminderDayIsSafe(task.day)
+      ) {
+        diagnostics.reminderDateNotFuture++;
+        continue;
+      }
+
+      if (ids.length > 30) {
+        diagnostics.tooManyInspections++;
+        continue;
+      }
 
       const inspections = await prisma.trackedCase.findMany({
         where: {
@@ -368,34 +508,64 @@ async function findTask() {
           sourceHospitalRecordId: true,
           currentStatus: true,
           sourceModifiedAt: true,
+          sourceSnapshot: true,
           inspectionPerformedAt: true,
           inspectionResult: true
         }
       });
 
-      // Task must point only to currently tracked active inspections.
-      if (inspections.length !== ids.length) continue;
+      if (inspections.length !== ids.length) {
+        diagnostics.missingLinkedInspections++;
+        continue;
+      }
 
-      // Tenant / hospital consistency.
       if (
         inspections.some(
           i => i.sourceHospitalRecordId !== task.sourceHospitalRecordId
         )
       ) {
+        diagnostics.hospitalMismatch++;
         continue;
       }
 
-      if (inspections.some(inconsistentInspection)) continue;
+      let selectedInspections = inspections;
 
-      // Summary mail needs usable inspection results.
-      if (
-        scenario === "INSPECTION_COMPLETED" &&
-        inspections.some(i => !recognizedResult(i.inspectionResult))
-      ) {
+      if (scenario === "INSPECTION_COMPLETED") {
+        selectedInspections = inspections.filter(
+          i =>
+            i.inspectionPerformedAt &&
+            !inconsistentInspection(i) &&
+            recognizedResult(i.inspectionResult)
+        );
+
+        if (!selectedInspections.length) {
+          diagnostics.completedWithoutUsableResults++;
+          continue;
+        }
+      } else if (inspections.some(inconsistentInspection)) {
+        diagnostics.inconsistent++;
         continue;
       }
 
-      const recentInspectionDates = inspections
+      if ([
+        "INSPECTION_DATE_PROPOSED",
+        "INSPECTION_DATE_CONFIRMED",
+        "INSPECTION_REMINDER"
+      ].includes(scenario)) {
+        const withDuration = selectedInspections.filter(hasEstimatedDuration);
+
+        if (!withDuration.length) {
+          diagnostics.missingEstimatedDuration++;
+          continue;
+        }
+
+        // For smoke purposes use the coherent subset that already has the
+        // synchronized per-device duration. This tests the current template/data
+        // pipeline without one legacy linked record forcing a '-' row.
+        selectedInspections = withDuration;
+      }
+
+      const recentInspectionDates = selectedInspections
         .map(i => i.sourceModifiedAt)
         .filter(isRecentDate)
         .sort((a, b) => b.getTime() - a.getTime());
@@ -403,6 +573,7 @@ async function findTask() {
       const taskFirstSeenRecent = isRecentDate(task.firstSeenAt);
 
       if (!taskFirstSeenRecent && recentInspectionDates.length === 0) {
+        diagnostics.notRecent++;
         continue;
       }
 
@@ -413,7 +584,7 @@ async function findTask() {
 
       candidates.push({
         task,
-        inspections,
+        inspections: selectedInspections,
         recentAt,
         recentBy
       });
@@ -433,15 +604,15 @@ async function findTask() {
   const selectedCandidate = pickRandom(candidates);
 
   if (!selectedCandidate) {
-    throw new Error(
-      `NO_SAFE_TASK_CANDIDATE_IN_LAST_${WINDOW_DAYS}_DAYS`
-    );
+    console.log("Candidate diagnostics:", JSON.stringify(diagnostics));
+    throw new Error(`NO_SAFE_TASK_CANDIDATE_IN_LAST_${WINDOW_DAYS}_DAYS`);
   }
 
-  const { task, recentAt, recentBy } = selectedCandidate;
-  const ids = arr(task.linkedInspectionRecordIds);
+  const { task, inspections, recentAt, recentBy } = selectedCandidate;
   const contacts = arr(task.selectedContactRecordIds);
   const source = obj(task.sourceSnapshot);
+  const selectedInspectionIds = inspections.map(i => i.airtableRecordId);
+  const originalInspectionCount = arr(task.linkedInspectionRecordIds).length;
 
   return {
     sourceRecordId: task.airtableRecordId,
@@ -450,8 +621,9 @@ async function findTask() {
     recentAt: recentAt?.toISOString() ?? null,
     recentBy,
     description:
-      `Task ${task.airtableRecordId} / ${ids.length} przegladow / ${task.day} / ` +
-      `recent ${recentAt?.toISOString() ?? "?"}`,
+      `Task ${task.airtableRecordId} / ${selectedInspectionIds.length}` +
+      `${selectedInspectionIds.length !== originalInspectionCount ? ` z ${originalInspectionCount}` : ""}` +
+      ` przegladow / ${task.day} / recent ${recentAt?.toISOString() ?? "?"}`,
     snapshot: {
       sourceEntityType: "TASK",
       sourceRecordId: task.airtableRecordId,
@@ -463,19 +635,18 @@ async function findTask() {
       day: task.day,
       department: source.department ?? null,
       durationSeconds: source.durationSeconds ?? null,
-      completed: task.completed,
+      completed: scenario === "INSPECTION_COMPLETED" ? true : task.completed,
 
-      // One logical hospital contact is enough; EMAIL_MODE=TEST controls
-      // the physical destination.
       selectedContactRecordIds: [contacts[0]],
 
       sourceHospitalRecordId: task.sourceHospitalRecordId,
-      linkedInspectionRecordIds: task.linkedInspectionRecordIds,
+      linkedInspectionRecordIds: selectedInspectionIds,
       linkedServiceOrderRecordIds: task.linkedServiceOrderRecordIds,
       performerRecordIds: task.performerRecordIds,
 
       manualSmokeTest: true,
-      smokeWindowDays: WINDOW_DAYS
+      smokeWindowDays: WINDOW_DAYS,
+      smokeOriginalInspectionCount: originalInspectionCount
     }
   };
 }
@@ -634,6 +805,7 @@ try {
     finalDelivery?.actualRecipientEmail ?? "-"
   );
   console.log("Resend ID:", finalDelivery?.resendMessageId ?? "-");
+  console.log("Cancel reason:", finalDelivery?.cancelReason ?? "-");
   console.log("Error:", finalDelivery?.lastError ?? "-");
   console.log("");
 
@@ -671,8 +843,13 @@ foreach ($scenario in $scenarios) {
 
     $remote = "'echo $b64 | base64 -d > /tmp/emma-smoke-runner.mjs && /mise/shims/node /tmp/emma-smoke-runner.mjs $scenario $WindowDays'"
 
-    $output = railway ssh -- sh -lc $remote 2>&1
-    $exitCode = $LASTEXITCODE
+    $run = Invoke-RailwaySmokeScenario -RemoteCommand $remote -Scenario $scenario
+    $output = @($run.Output)
+    $exitCode = $run.ExitCode
+
+    if ($run.Attempts -gt 1) {
+        Write-Host "Railway SSH attempts: $($run.Attempts)" -ForegroundColor DarkGray
+    }
 
     $output | ForEach-Object { Write-Host $_ }
 
@@ -684,11 +861,25 @@ foreach ($scenario in $scenarios) {
     if (-not $sent) {
         if ($joined -match "(NO_SAFE_[A-Z0-9_]+)") {
             $failureReason = $Matches[1]
-        } elseif ($joined -match "Error:\s*(.+)") {
-            $failureReason = $Matches[1].Trim()
-        } elseif ($exitCode -ne 0) {
+        } elseif ($joined -match "Cancel reason:\s*([^\r\n]+)") {
+            $cancel = $Matches[1].Trim()
+            if ($cancel -ne "-") {
+                $failureReason = $cancel
+            }
+        }
+
+        if ([string]::IsNullOrWhiteSpace($failureReason) -and $joined -match "Error:\s*([^\r\n]+)") {
+            $err = $Matches[1].Trim()
+            if ($err -ne "-") {
+                $failureReason = $err
+            }
+        }
+
+        if ([string]::IsNullOrWhiteSpace($failureReason) -and $exitCode -ne 0) {
             $failureReason = "REMOTE_EXIT_$exitCode"
-        } else {
+        }
+
+        if ([string]::IsNullOrWhiteSpace($failureReason)) {
             $failureReason = "NOT_SENT"
         }
     }

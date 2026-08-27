@@ -1,11 +1,12 @@
 @echo off
 setlocal
+chcp 65001 >nul
 
 title EMMA Final Smoke Tests
 cd /d "C:\Users\pawel\Documents\GitHub\Emma-notify"
 
 set "WINDOW_DAYS=%~1"
-if "%WINDOW_DAYS%"=="" set "WINDOW_DAYS=30"
+if "%WINDOW_DAYS%"=="" set "WINDOW_DAYS=5"
 
 echo.
 echo ==========================================
@@ -14,12 +15,12 @@ echo  RANDOM LAST %WINDOW_DAYS% DAYS
 echo ==========================================
 echo.
 echo Usage:
-echo   run-emma-smoke-tests-final.cmd
-echo   run-emma-smoke-tests-final.cmd 30
-echo   run-emma-smoke-tests-final.cmd 7
+echo   run-emma-smoke-tests-final-v2.cmd
+echo   run-emma-smoke-tests-final-v2.cmd 5
+echo   run-emma-smoke-tests-final-v2.cmd 30
 echo.
 
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0emma-smoke-tests-final.ps1" -WindowDays %WINDOW_DAYS%
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0emma-smoke-tests-final-v2.ps1" -WindowDays %WINDOW_DAYS%
 
 set "EXIT_CODE=%ERRORLEVEL%"
 

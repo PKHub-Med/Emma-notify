@@ -114,6 +114,26 @@ describe("case mappers", () => {
     expect(mapped.inspectionResult).toBeNull();
   });
 
+  it("ignores DATA PRZEGLĄDU when DATA WYKONANIA PRZEGLĄDU is empty", () => {
+    const mapped = mapInspection(record("recZSwJTzztiigVv1", {
+      fld3knASxSRaBdDVt: "2026-08-04",
+      [INSPECTION_FIELDS.currentStatus]: "DO REALIZACJI",
+    }));
+
+    expect(mapped.inspectionPerformedAt).toBeNull();
+  });
+
+  it("maps DATA WYKONANIA PRZEGLĄDU independently from DATA PRZEGLĄDU", () => {
+    const mapped = mapInspection(record("recPerformed", {
+      fld3knASxSRaBdDVt: "2026-08-04",
+      [INSPECTION_FIELDS.performedAt]: "2026-08-05",
+    }));
+
+    expect(mapped.inspectionPerformedAt?.toISOString()).toBe(
+      "2026-08-05T00:00:00.000Z",
+    );
+  });
+
   it.each([
     [1800, 1800], [3600, 3600], [5400, 5400], ["1200", 1200],
     [undefined, null], [null, null], ["", null], ["abc", null],

@@ -104,7 +104,7 @@ export const INSPECTION_FIELDS = {
   sourceModifiedAt: "fldd2z5eJg2GsHLgD",
   bookingStatus: "fldZnO530QNvWM4I8",
   scheduledDate: "fldsN3Yu1qFao8B87",
-  performedAt: "fld3knASxSRaBdDVt",
+  performedAt: "fldKnyZZ2YdDADoI9",
   result: "fldWQzKcmaHodBwLF",
   department: "fldhWkH5UBqAPmj6m",
   // Airtable Metadata API: "Czas realizacji", type=duration, format=h:mm.

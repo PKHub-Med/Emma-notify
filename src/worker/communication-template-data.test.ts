@@ -283,6 +283,46 @@ describe("dynamic HTML and source mapping", () => {
     });
   });
 
+  it("builds a normal eight-device reminder with the first task performer", async () => {
+    const ids = Array.from({ length: 8 }, (_, index) => `inspection-${index + 1}`);
+    const dataSource: CommunicationTemplateDataSource = {
+      async getEmployees() {
+        return [
+          { name: "Adrian Pieńkowski", phone: null, email: "adrian@tiemed.pl" },
+          { name: "Dariusz Dzwonkowski", phone: null, email: "dariusz@tiemed.pl" },
+        ];
+      },
+      async getInspections() {
+        return ids.map((id) => inspection(id, "DO REALIZACJI"));
+      },
+      async getDevices() { return []; },
+    };
+    const payload = await buildCommunicationTemplatePayload({
+      delivery: {
+        id: "delivery",
+        scenario: CommunicationScenario.INSPECTION_REMINDER,
+        sourceRecordId: "task",
+        eventSnapshot: {
+          ...taskSnapshot(),
+          performerRecordIds: ["adrian", "dariusz"],
+          linkedInspectionRecordIds: ids,
+        },
+      },
+      dataSource,
+      secureUrl,
+      unsubscribeUrl,
+      preparedAt,
+      timeZone: "Europe/Warsaw",
+    });
+
+    expect(payload.variables.DEVICE_COUNT).toBe(8);
+    expect(payload.variables.TECHNICIAN_NAME).toBe("Adrian Pieńkowski");
+    for (let index = 0; index < 8; index += 1) {
+      expect(String(payload.variables[templateRowSlotKey("DEVICE_ROW", index)])).not.toBe("");
+    }
+    expect(payload.variables.DEVICE_ROW_09).toBe("");
+  });
+
   it("uses office contact for proposed visits instead of a technician", async () => {
     const payload = await buildCommunicationTemplatePayload({
       delivery: {

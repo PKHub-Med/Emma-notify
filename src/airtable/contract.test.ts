@@ -89,7 +89,7 @@ describe("central Airtable contract", () => {
       deviceStatus: "fldWbzAsP0qK4t5ud",
       sourceModifiedAt: "fldE4CsBR20ba22Qv",
     });
-    expect(INSPECTION_FIELDS.performedAt).toBe("fld3knASxSRaBdDVt");
+    expect(INSPECTION_FIELDS.performedAt).toBe("fldKnyZZ2YdDADoI9");
     expect(INSPECTION_FIELDS.result).toBe("fldWQzKcmaHodBwLF");
     expect(INSPECTION_FIELDS.dueDate).toBe("fldNMzupWUaEKzn7u");
     expect(INSPECTION_FIELDS.estimatedDuration).toBe("fldxx69OVN0ML7ZJG");
