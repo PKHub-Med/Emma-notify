@@ -23,6 +23,10 @@ import { createS3ObjectStorage } from "../assets/object-storage.js";
 import { PrismaPublicAssetStore, StoredPublicFileService } from "../assets/public-files.js";
 import { PrismaPortalAccessPolicy } from "../portal-access/policy.js";
 import { hasAssetStorageConfig } from "../config/assets.js";
+import {
+  PrismaAnalyticsAdminService,
+  PrismaPortalAnalyticsWriter,
+} from "../analytics/service.js";
 
 const config = loadApiConfig(process.env);
 const prisma = createPrismaClient(config.databaseUrl);
@@ -49,6 +53,13 @@ const publicFiles = hasAssetStorageConfig(config)
     )
   : undefined;
 const app = createApp(prisma, accessLinks, portalAccess, unsubscribe, {
+  analytics: new PrismaPortalAnalyticsWriter(prisma),
+  analyticsAdmin: new PrismaAnalyticsAdminService(prisma),
+  analyticsAuth: {
+    enabled: config.analyticsAdminEnabled,
+    user: config.analyticsAdminUser,
+    password: config.analyticsAdminPassword,
+  },
   portalViews: new HospitalPortalViewModelService(
     new PrismaHospitalPortalStore(prisma),
     config.serviceName,

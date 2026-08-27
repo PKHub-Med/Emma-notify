@@ -18,6 +18,7 @@ describe("PublicPortalAccessService", () => {
     expect(result).toEqual({
       outcome: "VALID",
       authorization: {
+        portalAccessGrantId: "grantId",
         communicationDeliveryId: "deliveryId",
         sourceHospitalRecordId: "recHospital",
         entryContext: grant.entryContext,

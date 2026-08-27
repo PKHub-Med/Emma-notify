@@ -1,5 +1,5 @@
 import express, { type Express } from "express";
-import { randomBytes } from "node:crypto";
+import { randomBytes, timingSafeEqual } from "node:crypto";
 import {
   notFoundPage,
   PUBLIC_PAGE_HEADERS,
@@ -23,6 +23,16 @@ import {
   type PublicUnsubscribeService,
 } from "../communication-unsubscribe/public.js";
 import type { PublicAssetVariant, PublicFileService } from "../assets/public-files.js";
+import type {
+  AnalyticsFilters,
+  PortalAnalyticsInput,
+  PortalAnalyticsWriter,
+  PrismaAnalyticsAdminService,
+} from "../analytics/service.js";
+import {
+  ANALYTICS_HEADERS,
+  analyticsDashboardPage,
+} from "../analytics/dashboard-page.js";
 
 export function createApp(
   prisma: PrismaClient,
@@ -34,9 +44,14 @@ export function createApp(
       "build" | "listCases" | "getCase" | "listDevices" | "getDevice" | "listDocuments">;
     serviceName?: string;
     publicFiles?: PublicFileService;
+    analytics?: PortalAnalyticsWriter;
+    analyticsAdmin?: Pick<PrismaAnalyticsAdminService,
+      "summary" | "hospitals" | "hospital" | "deliveries" | "activity">;
+    analyticsAuth?: { enabled: boolean; user: string | null; password: string | null };
   } = {},
 ): Express {
   const app = express();
+  app.use("/api/portal", express.json({ limit: "8kb", strict: true }));
   const portalViews = options.portalViews ?? new HospitalPortalViewModelService(
     new PrismaHospitalPortalStore(prisma),
     options.serviceName,
@@ -62,6 +77,7 @@ export function createApp(
     try {
       const portalResult = await portalAccess.open(request.params.token ?? "");
       if (portalResult.outcome === "VALID") {
+        await safeLinkClick(options.analytics, portalResult.authorization);
         const view = await portalViews.build(portalResult.authorization);
         const nonce = randomBytes(18).toString("base64url");
         response.set(portalPageHeaders(nonce));
@@ -98,6 +114,7 @@ export function createApp(
         response.redirect(302, "/link-expired");
         return;
       }
+      await safeLinkClick(options.analytics, result.authorization);
       const view = await portalViews.build(result.authorization);
       const nonce = randomBytes(18).toString("base64url");
       response.set(portalPageHeaders(nonce));
@@ -129,6 +146,21 @@ export function createApp(
       response.status(200).json(page);
     } catch (error: unknown) {
       sendPortalDataError(response, error, "cases", filter, hasCursor, hasQuery);
+    }
+  });
+
+  app.post("/api/portal/:token/analytics", async (request, response) => {
+    response.set(PORTAL_DATA_HEADERS);
+    try {
+      const authorization = await authorizePortalData(portalAccess, request.params.token ?? "");
+      if (!authorization) { response.status(404).json({ error: "NOT_FOUND" }); return; }
+      const input = portalAnalyticsInput(request.body);
+      if (!input) { response.status(400).json({ error: "INVALID_ANALYTICS_EVENT" }); return; }
+      if (options.analytics) await options.analytics.recordPortalEvent(authorization, input);
+      response.status(204).send();
+    } catch {
+      console.error("PORTAL_ANALYTICS_WRITE_FAILED errorCode=INTERNAL_ERROR status=500");
+      response.status(500).json({ error: "INTERNAL_ERROR" });
     }
   });
 
@@ -282,7 +314,119 @@ export function createApp(
     response.status(200).type("html").send(unsubscribeDonePage());
   });
 
+  const analyticsGuard = analyticsBasicAuth(options.analyticsAuth);
+  app.get("/ops/analytics", analyticsGuard, (_request, response) => {
+    const nonce = randomBytes(18).toString("base64url");
+    response.set(ANALYTICS_HEADERS);
+    response.set("Content-Security-Policy",
+      `default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}'; ` +
+      "connect-src 'self'; img-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'");
+    response.status(200).type("html").send(analyticsDashboardPage(nonce));
+  });
+  app.get("/api/ops/analytics/summary", analyticsGuard, analyticsApi(async (filters) =>
+    options.analyticsAdmin?.summary(filters)));
+  app.get("/api/ops/analytics/hospitals", analyticsGuard, analyticsApi(async (filters) =>
+    options.analyticsAdmin?.hospitals(filters)));
+  app.get("/api/ops/analytics/hospitals/:hospitalId", analyticsGuard, analyticsApi(async (filters, request) =>
+    options.analyticsAdmin?.hospital(filters,
+      typeof request.params.hospitalId === "string" ? request.params.hospitalId : "")));
+  app.get("/api/ops/analytics/deliveries", analyticsGuard, analyticsApi(async (filters) =>
+    options.analyticsAdmin?.deliveries(filters)));
+  app.get("/api/ops/analytics/activity", analyticsGuard, analyticsApi(async (filters) =>
+    options.analyticsAdmin?.activity(filters)));
+
   return app;
+}
+
+async function safeLinkClick(
+  analytics: PortalAnalyticsWriter | undefined,
+  authorization: import("../portal-access/public.js").PortalAuthorizationContext,
+): Promise<void> {
+  if (!analytics) return;
+  try {
+    await analytics.recordLinkClick(authorization);
+  } catch {
+    console.error("PORTAL_ANALYTICS_WRITE_FAILED eventType=EMAIL_LINK_CLICK errorCode=INTERNAL_ERROR");
+  }
+}
+
+function portalAnalyticsInput(value: unknown): PortalAnalyticsInput | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const body = value as Record<string, unknown>;
+  const allowed = new Set(["eventType", "sessionId", "screen", "entityType", "entityRecordId"]);
+  if (Object.keys(body).some((key) => !allowed.has(key))) return null;
+  if (!(["PORTAL_VIEW_CONFIRMED", "SCREEN_VIEW", "UPGRADE_CLICK"] as unknown[]).includes(body.eventType)) return null;
+  if (typeof body.sessionId !== "string" ||
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(body.sessionId)) return null;
+  if (body.screen !== undefined && (typeof body.screen !== "string" ||
+      body.screen.length < 1 || body.screen.length > 64 || !/^[a-z0-9_-]+$/i.test(body.screen))) return null;
+  if (body.eventType === "SCREEN_VIEW" && typeof body.screen !== "string") return null;
+  if (body.entityType !== undefined && body.entityType !== "CASE" && body.entityType !== "DEVICE") return null;
+  if (body.entityRecordId !== undefined && (typeof body.entityRecordId !== "string" ||
+      body.entityRecordId.length < 1 || body.entityRecordId.length > 128)) return null;
+  return {
+    eventType: body.eventType as PortalAnalyticsInput["eventType"],
+    sessionId: body.sessionId,
+    ...(typeof body.screen === "string" ? { screen: body.screen } : {}),
+    ...(body.entityType === "CASE" || body.entityType === "DEVICE" ? { entityType: body.entityType } : {}),
+    ...(typeof body.entityRecordId === "string" ? { entityRecordId: body.entityRecordId } : {}),
+  };
+}
+
+function analyticsBasicAuth(configuration: { enabled: boolean; user: string | null; password: string | null } | undefined) {
+  return (request: import("express").Request, response: import("express").Response,
+    next: import("express").NextFunction): void => {
+    response.set(ANALYTICS_HEADERS);
+    if (!configuration?.enabled || !configuration.user || !configuration.password) {
+      response.status(404).type("text").send("Not found"); return;
+    }
+    const header = request.headers.authorization;
+    const encoded = header?.startsWith("Basic ") ? header.slice(6) : "";
+    let supplied = "";
+    try { supplied = Buffer.from(encoded, "base64").toString("utf8"); } catch { supplied = ""; }
+    const expected = `${configuration.user}:${configuration.password}`;
+    const left = Buffer.from(supplied); const right = Buffer.from(expected);
+    if (left.length !== right.length || !timingSafeEqual(left, right)) {
+      response.set("WWW-Authenticate", 'Basic realm="EMMA Analytics", charset="UTF-8"');
+      response.status(401).type("text").send("Authentication required"); return;
+    }
+    next();
+  };
+}
+
+function analyticsApi(
+  handler: (filters: AnalyticsFilters, request: import("express").Request) => Promise<unknown>,
+) {
+  return async (request: import("express").Request, response: import("express").Response) => {
+    response.set(ANALYTICS_HEADERS);
+    try {
+      const filters = analyticsFilters(request.query);
+      if (!filters) { response.status(400).json({ error: "INVALID_FILTERS" }); return; }
+      const result = await handler(filters, request);
+      if (!result) { response.status(404).json({ error: "NOT_FOUND" }); return; }
+      response.status(200).json(result);
+    } catch {
+      console.error("ANALYTICS_DASHBOARD_QUERY_FAILED errorCode=INTERNAL_ERROR status=500");
+      response.status(500).json({ error: "INTERNAL_ERROR" });
+    }
+  };
+}
+
+function analyticsFilters(query: import("express").Request["query"]): AnalyticsFilters | null {
+  const now = new Date();
+  const defaultFrom = new Date(now.getTime() - 30 * 86_400_000);
+  const from = typeof query.from === "string" ? new Date(`${query.from}T00:00:00.000Z`) : defaultFrom;
+  const to = typeof query.to === "string" ? new Date(`${query.to}T23:59:59.999Z`) : now;
+  const mode = typeof query.mode === "string" ? query.mode : "PRODUCTION";
+  const scenario = typeof query.scenario === "string" && query.scenario ? query.scenario : undefined;
+  const hospitalId = typeof query.hospitalId === "string" && query.hospitalId ? query.hospitalId : undefined;
+  const scenarios = new Set(["REPAIR_RECEIVED", "REPAIR_DELAYED_PARTS", "REPAIR_COMPLETED",
+    "INSPECTION_DATE_PROPOSED", "INSPECTION_DATE_CONFIRMED", "INSPECTION_REMINDER", "INSPECTION_COMPLETED"]);
+  if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime()) || from > to ||
+      !["PRODUCTION", "TEST", "ALL"].includes(mode) ||
+      (scenario && !scenarios.has(scenario)) || (hospitalId && hospitalId.length > 128)) return null;
+  return { from, to, mode: mode as AnalyticsFilters["mode"],
+    ...(scenario ? { scenario } : {}), ...(hospitalId ? { hospitalId } : {}) };
 }
 
 function fileVariant(value: unknown): PublicAssetVariant | null {

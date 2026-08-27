@@ -49,6 +49,7 @@ export class PrismaPublicPortalAccessStore implements PublicPortalAccessStore {
 }
 
 export type PortalAuthorizationContext = {
+  portalAccessGrantId: string;
   communicationDeliveryId: string;
   sourceHospitalRecordId: string;
   entryContext: PortalEntryContext;
@@ -96,6 +97,7 @@ export class PublicPortalAccessService {
     return {
       outcome: "VALID",
       authorization: {
+        portalAccessGrantId: grant.id,
         communicationDeliveryId: grant.communicationDeliveryId,
         sourceHospitalRecordId: grant.sourceHospitalRecordId,
         entryContext: grant.entryContext,

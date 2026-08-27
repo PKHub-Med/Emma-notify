@@ -114,6 +114,13 @@ enum PortalAccessLevel {
   FULL
 }
 
+enum AnalyticsEventType {
+  EMAIL_LINK_CLICK
+  PORTAL_VIEW_CONFIRMED
+  SCREEN_VIEW
+  UPGRADE_CLICK
+}
+
 model TrackedCase {
   id                  String          @id @default(cuid())
   caseType            CaseType
@@ -340,6 +347,7 @@ model CommunicationDelivery {
   portalAccessGrant             PortalAccessGrant?
   unsubscribeGrant             CommunicationUnsubscribeGrant?
   assets                       CommunicationAsset[]
+  analyticsEvents              AnalyticsEvent[]
 
   @@unique([communicationEventId, communicationEventRecipientId])
   @@index([status, scheduledFor])
@@ -465,10 +473,34 @@ model PortalAccessGrant {
   createdAt               DateTime              @default(now())
   updatedAt               DateTime              @updatedAt
   communicationDelivery   CommunicationDelivery @relation(fields: [communicationDeliveryId], references: [id], onDelete: Cascade)
+  analyticsEvents         AnalyticsEvent[]
 
   @@index([sourceHospitalRecordId])
   @@index([expiresAt])
   @@index([revokedAt])
+}
+
+model AnalyticsEvent {
+  id                      String             @id @default(cuid())
+  createdAt               DateTime           @default(now())
+  eventType               AnalyticsEventType
+  sessionId               String?
+  portalAccessGrantId     String
+  communicationDeliveryId String
+  sourceHospitalRecordId  String
+  screen                  String?
+  entityType              String?
+  entityRecordId          String?
+  metadata                Json?
+  portalAccessGrant       PortalAccessGrant  @relation(fields: [portalAccessGrantId], references: [id], onDelete: Cascade)
+  communicationDelivery   CommunicationDelivery @relation(fields: [communicationDeliveryId], references: [id], onDelete: Cascade)
+
+  @@index([createdAt])
+  @@index([eventType, createdAt])
+  @@index([portalAccessGrantId, createdAt])
+  @@index([communicationDeliveryId, createdAt])
+  @@index([sourceHospitalRecordId, createdAt])
+  @@index([sessionId])
 }
 
 model CaseRecipient {

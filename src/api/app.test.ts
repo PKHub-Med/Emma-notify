@@ -31,6 +31,7 @@ import {
 } from "../portal-access/view-model.js";
 import type { PortalAuthorizationContext } from "../portal-access/public.js";
 import type { PublicFileService } from "../assets/public-files.js";
+import type { PortalAnalyticsInput, PortalAnalyticsWriter } from "../analytics/service.js";
 
 const secret = "test-access-link-signing-secret-with-at-least-32-bytes";
 let server: Server | null = null;
@@ -43,6 +44,77 @@ afterEach(async () => {
 });
 
 describe("public API", () => {
+  it("records a mail link click for a valid portal grant without creating a confirmed view", async () => {
+    const grant = portalRecord();
+    const analytics = new MemoryAnalytics();
+    const { baseUrl } = await startApp(new MemoryStore(null), grant,
+      new MemoryUnsubscribeStore(null), async () => emptyPortalView(), { analytics });
+    const token = signPortalGrantToken(grant, secret);
+    expect((await fetch(`${baseUrl}/d/${token}`)).status).toBe(200);
+    expect(analytics.linkClicks).toEqual([expect.objectContaining({
+      portalAccessGrantId: "portalGrantId", communicationDeliveryId: "deliveryId",
+      sourceHospitalRecordId: "recHospital",
+    })]);
+    expect(analytics.events).toEqual([]);
+  });
+
+  it("accepts only a separate validated JS analytics request for a real portal view", async () => {
+    const grant = portalRecord();
+    const analytics = new MemoryAnalytics();
+    const { baseUrl } = await startApp(new MemoryStore(null), grant,
+      new MemoryUnsubscribeStore(null), async () => emptyPortalView(), { analytics });
+    const token = signPortalGrantToken(grant, secret);
+    const response = await fetch(`${baseUrl}/api/portal/${token}/analytics`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ eventType: "PORTAL_VIEW_CONFIRMED",
+        sessionId: "123e4567-e89b-42d3-a456-426614174000" }),
+    });
+    expect(response.status).toBe(204);
+    expect(analytics.events).toEqual([expect.objectContaining({ input: {
+      eventType: "PORTAL_VIEW_CONFIRMED",
+      sessionId: "123e4567-e89b-42d3-a456-426614174000",
+    } })]);
+  });
+
+  it("does not write analytics for invalid tokens or client-supplied identity fields", async () => {
+    const analytics = new MemoryAnalytics();
+    const grant = portalRecord();
+    const { baseUrl } = await startApp(new MemoryStore(null), grant,
+      new MemoryUnsubscribeStore(null), async () => emptyPortalView(), { analytics });
+    const invalid = await fetch(`${baseUrl}/api/portal/invalid/analytics`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ eventType: "SCREEN_VIEW", screen: "inspections",
+        sessionId: "123e4567-e89b-42d3-a456-426614174000" }),
+    });
+    expect(invalid.status).toBe(404);
+    const token = signPortalGrantToken(grant, secret);
+    const spoofed = await fetch(`${baseUrl}/api/portal/${token}/analytics`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ eventType: "SCREEN_VIEW", screen: "inspections",
+        sessionId: "123e4567-e89b-42d3-a456-426614174000", hospitalId: "other" }),
+    });
+    expect(spoofed.status).toBe(400);
+    expect(analytics.events).toEqual([]);
+  });
+
+  it("protects the dashboard and defaults its API filter to PRODUCTION", async () => {
+    const summary = vi.fn().mockResolvedValue({ ok: true });
+    const admin = { summary, hospitals: vi.fn(), hospital: vi.fn(),
+      deliveries: vi.fn(), activity: vi.fn() };
+    const { baseUrl } = await startApp(new MemoryStore(null), null,
+      new MemoryUnsubscribeStore(null), async () => emptyPortalView(), {
+        analyticsAdmin: admin, analyticsAuth: { enabled: true, user: "ops", password: "secret" },
+      });
+    expect((await fetch(`${baseUrl}/ops/analytics`)).status).toBe(401);
+    const authorization = `Basic ${Buffer.from("ops:secret").toString("base64")}`;
+    const response = await fetch(`${baseUrl}/api/ops/analytics/summary`, {
+      headers: { authorization },
+    });
+    expect(response.status).toBe(200);
+    expect(summary).toHaveBeenCalledWith(expect.objectContaining({ mode: "PRODUCTION" }));
+    expect(response.headers.get("cache-control")).toBe("no-store");
+  });
+
   it("keeps /health independent from Airtable configuration", async () => {
     const { baseUrl } = await startApp(new MemoryStore(null));
     const response = await fetch(`${baseUrl}/health`);
@@ -73,6 +145,7 @@ describe("public API", () => {
     const grant = portalRecord();
     const { baseUrl } = await startApp(new MemoryStore(null), grant);
     const response = await fetch(`${baseUrl}/p/${signPortalGrantToken(grant, secret)}`);
+    const html = await response.text();
     expect(response.status).toBe(200);
     expect(response.headers.get("cache-control")).toBe("no-store");
     expect(response.headers.get("x-robots-tag")).toBe(
@@ -82,6 +155,9 @@ describe("public API", () => {
     expect(response.headers.get("content-security-policy")).toContain(
       "default-src 'none'",
     );
+    expect(html).toContain("sessionStorage.getItem('emmaAnalyticsSessionId')");
+    expect(html).toContain("sendAnalytics('UPGRADE_CLICK')");
+    expect(html).toContain("navigator.sendBeacon");
   });
 
   it("serves a new context-scoped portal from /d/:token", async () => {
@@ -95,7 +171,9 @@ describe("public API", () => {
 
   it("redirects expired portal tokens to /link-expired", async () => {
     const grant = portalRecord({ expiresAt: new Date(Date.now() - 1) });
-    const { baseUrl } = await startApp(new MemoryStore(null), grant);
+    const analytics = new MemoryAnalytics();
+    const { baseUrl } = await startApp(new MemoryStore(null), grant,
+      new MemoryUnsubscribeStore(null), async () => emptyPortalView(), { analytics });
     const response = await fetch(
       `${baseUrl}/p/${signPortalGrantToken(grant, secret)}`,
       { redirect: "manual" },
@@ -105,6 +183,14 @@ describe("public API", () => {
     const expiredPage = await fetch(`${baseUrl}/link-expired`);
     expect(expiredPage.status).toBe(200);
     expect(await expiredPage.text()).toContain("Ten link wygasł");
+    expect(analytics.linkClicks).toEqual([]);
+    expect(analytics.events).toEqual([]);
+  });
+
+  it("keeps the analytics dashboard fail-closed when admin ENV is absent", async () => {
+    const { baseUrl } = await startApp(new MemoryStore(null));
+    expect((await fetch(`${baseUrl}/ops/analytics`)).status).toBe(404);
+    expect((await fetch(`${baseUrl}/api/ops/analytics/summary`)).status).toBe(404);
   });
 
   it("returns 404 for an invalid portal token", async () => {
@@ -446,6 +532,13 @@ async function startApp(
       options: { query?: string },
     ) => Promise<{ items: PortalDocument[]; nextCursor: null }>;
     publicFiles?: PublicFileService;
+    analytics?: PortalAnalyticsWriter;
+    analyticsAdmin?: {
+      summary: (...args: any[]) => Promise<unknown>; hospitals: (...args: any[]) => Promise<unknown>;
+      hospital: (...args: any[]) => Promise<unknown>; deliveries: (...args: any[]) => Promise<unknown>;
+      activity: (...args: any[]) => Promise<unknown>;
+    };
+    analyticsAuth?: { enabled: boolean; user: string | null; password: string | null };
   } = {},
 ): Promise<{ baseUrl: string }> {
   const prisma = {
@@ -463,12 +556,24 @@ async function startApp(
       listDevices: async () => ({ items: [], nextCursor: null }),
       getDevice: dataViews.getDevice ?? (async () => null),
       listDocuments: dataViews.listDocuments ?? (async () => ({ items: [], nextCursor: null })),
-    }, ...(dataViews.publicFiles ? { publicFiles: dataViews.publicFiles } : {}) },
+    }, ...(dataViews.publicFiles ? { publicFiles: dataViews.publicFiles } : {}),
+      ...(dataViews.analytics ? { analytics: dataViews.analytics } : {}),
+      ...(dataViews.analyticsAdmin ? { analyticsAdmin: dataViews.analyticsAdmin } : {}),
+      ...(dataViews.analyticsAuth ? { analyticsAuth: dataViews.analyticsAuth } : {}) },
   );
   server = app.listen(0, "127.0.0.1");
   await new Promise<void>((resolve) => server?.once("listening", resolve));
   const address = server.address() as AddressInfo;
   return { baseUrl: `http://127.0.0.1:${address.port}` };
+}
+
+class MemoryAnalytics implements PortalAnalyticsWriter {
+  linkClicks: PortalAuthorizationContext[] = [];
+  events: Array<{ authorization: PortalAuthorizationContext; input: PortalAnalyticsInput }> = [];
+  async recordLinkClick(authorization: PortalAuthorizationContext) { this.linkClicks.push(authorization); }
+  async recordPortalEvent(authorization: PortalAuthorizationContext, input: PortalAnalyticsInput) {
+    this.events.push({ authorization, input });
+  }
 }
 
 function portalCase(sourceRecordId: string, caseNumber: string): PortalCaseListItem {

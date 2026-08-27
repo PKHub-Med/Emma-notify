@@ -20,6 +20,12 @@ const apiEnvironmentSchema = z.object({
       return false;
     }
   }, "PORTAL_UPGRADE_URL_INVALID"),
+  ANALYTICS_ADMIN_ENABLED: z.preprocess(
+    (value) => typeof value === "string" ? value.trim().toLowerCase() : value ?? "false",
+    z.enum(["true", "false"]),
+  ).transform((value) => value === "true"),
+  ANALYTICS_ADMIN_USER: z.string().default(""),
+  ANALYTICS_ADMIN_PASSWORD: z.string().default(""),
   ...assetEnvironmentShape,
 });
 
@@ -28,6 +34,9 @@ export type ApiConfig = BaseConfig & AssetConfig & {
   accessLinkSigningSecret: string;
   portalPageSize: number;
   portalUpgradeUrl: string | null;
+  analyticsAdminEnabled: boolean;
+  analyticsAdminUser: string | null;
+  analyticsAdminPassword: string | null;
 };
 
 export function loadApiConfig(environment: NodeJS.ProcessEnv): ApiConfig {
@@ -44,6 +53,9 @@ export function loadApiConfig(environment: NodeJS.ProcessEnv): ApiConfig {
     accessLinkSigningSecret: parsed.data.ACCESS_LINK_SIGNING_SECRET,
     portalPageSize: parsed.data.PORTAL_PAGE_SIZE,
     portalUpgradeUrl: parsed.data.PORTAL_UPGRADE_URL || null,
+    analyticsAdminEnabled: parsed.data.ANALYTICS_ADMIN_ENABLED,
+    analyticsAdminUser: parsed.data.ANALYTICS_ADMIN_USER || null,
+    analyticsAdminPassword: parsed.data.ANALYTICS_ADMIN_PASSWORD || null,
     timezone: parsed.data.TIMEZONE,
     emailMode: parsed.data.EMAIL_MODE,
     testEmail: parsed.data.TEST_EMAIL || null,
