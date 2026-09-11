@@ -88,7 +88,7 @@ export type PortalDevice = {
   model: string | null;
   serialNumber: string | null;
   inventoryNumber: string | null;
-  currentStatus: string;
+  department: string | null;
   validUntil: Date | null;
   inspectionPerformedAt: Date | null;
   inspectionResult: string | null;
@@ -125,6 +125,14 @@ export type PortalDataScope = {
   communicationDeliveryId: string;
   contextType: "REPAIR" | "INSPECTION_TASK";
   contextId: string;
+};
+
+export type PortalRefreshScopeRecordIds = {
+  scope: PortalDataScope;
+  serviceOrderRecordIds: string[];
+  inspectionRecordIds: string[];
+  deviceRecordIds: string[];
+  taskRecordIds: string[];
 };
 
 type StoredHospital = { shortName: string | null; name: string | null; address: string | null };
@@ -181,6 +189,33 @@ export class InvalidPortalCursorError extends Error {
   constructor() { super("INVALID_PORTAL_CURSOR"); }
 }
 
+export function portalRetentionCutoffDate(now: Date): string {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Europe/Warsaw",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(now);
+  const year = Number(parts.find((part) => part.type === "year")?.value);
+  const month = Number(parts.find((part) => part.type === "month")?.value);
+  const day = Number(parts.find((part) => part.type === "day")?.value);
+  const targetMonthIndex = year * 12 + month - 1 - 3;
+  const targetYear = Math.floor(targetMonthIndex / 12);
+  const targetMonth = targetMonthIndex - targetYear * 12 + 1;
+  const lastDay = new Date(Date.UTC(targetYear, targetMonth, 0)).getUTCDate();
+  return `${targetYear.toString().padStart(4, "0")}-${targetMonth
+    .toString().padStart(2, "0")}-${Math.min(day, lastDay).toString().padStart(2, "0")}`;
+}
+
+export function isPortalCaseRetained(
+  type: "REPAIR" | "INSPECTION",
+  completedOrPerformedAt: Date | null,
+  now: Date,
+): boolean {
+  if (!completedOrPerformedAt) return true;
+  return warsawDateKey(completedOrPerformedAt) >= portalRetentionCutoffDate(now);
+}
+
 export interface HospitalPortalStore {
   findHospital(scope: string): Promise<StoredHospital | null>;
   getSummaryCounts(scope: PortalDataScope): Promise<HospitalPortalViewModel["summary"]>;
@@ -207,6 +242,7 @@ export interface HospitalPortalStore {
     cursor?: string | null,
   ): Promise<PortalDeviceDetail | null>;
   listDocuments?(scope: PortalDataScope, query: string | null): Promise<PortalDocument[]>;
+  resolveRefreshRecordIds?(scope: PortalDataScope): Promise<Omit<PortalRefreshScopeRecordIds, "scope">>;
 }
 
 type PortalAssetRow = {
@@ -272,7 +308,10 @@ const CASE_LIST_SELECT = {
 } satisfies Prisma.TrackedCaseSelect;
 
 export class PrismaHospitalPortalStore implements HospitalPortalStore {
-  constructor(private readonly prisma: PrismaClient) {}
+  constructor(
+    private readonly prisma: PrismaClient,
+    private readonly now: () => Date = () => new Date(),
+  ) {}
 
   findHospital(scope: string): Promise<StoredHospital | null> {
     return this.prisma.trackedHospital.findFirst({
@@ -284,7 +323,7 @@ export class PrismaHospitalPortalStore implements HospitalPortalStore {
   async getSummaryCounts(scope: PortalDataScope): Promise<HospitalPortalViewModel["summary"]> {
     const [rows, visibleDeviceRows] = await Promise.all([
       this.prisma.$queryRaw<SummaryCountRow[]>(Prisma.sql`
-      WITH scoped AS (${scopedCasesSql(scope)})
+      WITH scoped AS (${scopedCasesSql(scope, portalRetentionCutoffDate(this.now()))})
       SELECT
         COUNT(*) FILTER (WHERE type = 'REPAIR') AS repairs,
         COUNT(*) FILTER (WHERE type = 'INSPECTION') AS inspections,
@@ -316,6 +355,7 @@ export class PrismaHospitalPortalStore implements HospitalPortalStore {
           COUNT(*) FILTER (WHERE c."caseType" = 'INSPECTION') AS inspections
         FROM "TrackedCase" c
         WHERE c.active = true AND c."sourceHospitalRecordId" = ${scope.hospitalId}
+          AND ${retainedCasePredicateSql(portalRetentionCutoffDate(this.now()))}
       `),
       this.prisma.trackedDevice.count({
         where: { sourceHospitalRecordId: scope.hospitalId, active: true },
@@ -358,7 +398,7 @@ export class PrismaHospitalPortalStore implements HospitalPortalStore {
         )`
       : Prisma.empty;
     const keys = await this.prisma.$queryRaw<PageKey[]>(Prisma.sql`
-      WITH scoped AS (${scopedCasesSql(scope)})
+      WITH scoped AS (${scopedCasesSql(scope, portalRetentionCutoffDate(this.now()))})
       SELECT type, "sourceRecordId", "sortKey"
       FROM scoped scoped_case
       WHERE 1=1 ${filterSql} ${searchSql} ${deviceSql} ${cursorSql}
@@ -377,7 +417,7 @@ export class PrismaHospitalPortalStore implements HospitalPortalStore {
 
   async findScopedCase(scope: PortalDataScope, sourceRecordId: string): Promise<PortalCaseListItem | null> {
     const keys = await this.prisma.$queryRaw<PageKey[]>(Prisma.sql`
-      WITH scoped AS (${scopedCasesSql(scope)})
+      WITH scoped AS (${scopedCasesSql(scope, portalRetentionCutoffDate(this.now()))})
       SELECT type, "sourceRecordId", "sortKey" FROM scoped
       WHERE "sourceRecordId" = ${sourceRecordId}
       LIMIT 1
@@ -496,9 +536,10 @@ export class PrismaHospitalPortalStore implements HospitalPortalStore {
         JOIN "TrackedCaseDevice" cd ON cd."trackedCaseId" = c.id
         WHERE c.active = true AND c."sourceHospitalRecordId" = ${scope.hospitalId}
           AND cd."deviceAirtableId" = ${sourceRecordId}
+          AND ${retainedCasePredicateSql(portalRetentionCutoffDate(this.now()))}
       `),
       this.prisma.$queryRaw<CountRow[]>(Prisma.sql`
-        WITH scoped AS (${scopedCasesSql(scope)})
+        WITH scoped AS (${scopedCasesSql(scope, portalRetentionCutoffDate(this.now()))})
         SELECT COUNT(*) AS count FROM scoped
         JOIN "TrackedCaseDevice" cd ON cd."trackedCaseId" = scoped."trackedCaseId"
         WHERE cd."deviceAirtableId" = ${sourceRecordId}
@@ -536,7 +577,7 @@ export class PrismaHospitalPortalStore implements HospitalPortalStore {
       },
       select: {
         airtableRecordId: true, name: true, manufacturer: true, model: true,
-        serialNumber: true, inventoryNumber: true, deviceStatus: true,
+        serialNumber: true, inventoryNumber: true, department: true,
       },
     });
     const inspections = await this.prisma.$queryRaw<Array<{
@@ -572,7 +613,7 @@ export class PrismaHospitalPortalStore implements HospitalPortalStore {
         model: device.model,
         serialNumber: device.serialNumber,
         inventoryNumber: device.inventoryNumber,
-        currentStatus: device.deviceStatus || "Brak informacji",
+        department: device.department,
         validUntil: inspection?.inspectionValidUntil ?? null,
         inspectionPerformedAt: inspection?.inspectionPerformedAt ?? null,
         inspectionResult: inspection?.inspectionResult ?? null,
@@ -698,6 +739,61 @@ export class PrismaHospitalPortalStore implements HospitalPortalStore {
     }
   }
 
+  async resolveRefreshRecordIds(
+    scope: PortalDataScope,
+  ): Promise<Omit<PortalRefreshScopeRecordIds, "scope">> {
+    const communicationDeviceScope = scope.accessLevel === PortalAccessLevel.FULL
+      ? Prisma.empty
+      : Prisma.sql`AND EXISTS (
+          SELECT 1 FROM "TrackedCaseDevice" refresh_device_link
+          JOIN scoped refresh_case
+            ON refresh_case."trackedCaseId" = refresh_device_link."trackedCaseId"
+          WHERE refresh_device_link."deviceAirtableId" = d."airtableRecordId"
+        )`;
+    const rows = await this.prisma.$queryRaw<Array<{
+      entityType: "SERVICE_ORDER" | "INSPECTION" | "DEVICE" | "TASK";
+      sourceRecordId: string;
+    }>>(Prisma.sql`
+      WITH scoped AS (${authorizedCasesSql(scope)})
+      SELECT CASE WHEN type = 'REPAIR' THEN 'SERVICE_ORDER' ELSE 'INSPECTION' END AS "entityType",
+        "sourceRecordId" FROM scoped
+      UNION
+      SELECT 'DEVICE'::text AS "entityType", d."airtableRecordId" AS "sourceRecordId"
+      FROM "TrackedDevice" d
+      WHERE d.active = true
+        AND d."sourceHospitalRecordId" = ${scope.hospitalId}
+        ${communicationDeviceScope}
+      UNION
+      SELECT 'DEVICE'::text AS "entityType",
+        refresh_device_link."deviceAirtableId" AS "sourceRecordId"
+      FROM "TrackedCaseDevice" refresh_device_link
+      JOIN scoped refresh_case
+        ON refresh_case."trackedCaseId" = refresh_device_link."trackedCaseId"
+      UNION
+      SELECT 'TASK'::text AS "entityType", t."airtableRecordId" AS "sourceRecordId"
+      FROM "TrackedTask" t
+      WHERE t.active = true
+        AND t."sourceHospitalRecordId" = ${scope.hospitalId}
+        AND EXISTS (
+          SELECT 1 FROM scoped refresh_case
+          WHERE (refresh_case.type = 'INSPECTION'
+              AND t."linkedInspectionRecordIds" ? refresh_case."sourceRecordId")
+             OR (refresh_case.type = 'REPAIR'
+              AND t."linkedServiceOrderRecordIds" ? refresh_case."sourceRecordId")
+        )
+      ORDER BY "entityType", "sourceRecordId"
+    `);
+    const ids = (entityType: typeof rows[number]["entityType"]) => rows
+      .filter((row) => row.entityType === entityType)
+      .map((row) => row.sourceRecordId);
+    return {
+      serviceOrderRecordIds: ids("SERVICE_ORDER"),
+      inspectionRecordIds: ids("INSPECTION"),
+      deviceRecordIds: ids("DEVICE"),
+      taskRecordIds: ids("TASK"),
+    };
+  }
+
   private async assetAccessScope(scope: PortalDataScope) {
     if (scope.accessLevel === PortalAccessLevel.FULL) return scope;
     if (!this.prisma.communicationDelivery) return scope;
@@ -710,7 +806,7 @@ export class PrismaHospitalPortalStore implements HospitalPortalStore {
 
   private async searchCaseIds(scope: PortalDataScope, query: string): Promise<string[]> {
     const rows = await this.prisma.$queryRaw<Array<{ sourceRecordId: string }>>(Prisma.sql`
-      WITH scoped AS (${scopedCasesSql(scope)})
+      WITH scoped AS (${scopedCasesSql(scope, portalRetentionCutoffDate(this.now()))})
       SELECT "sourceRecordId" FROM scoped scoped_case
       WHERE 1=1 ${searchFilterSql(query, scope.hospitalId)}
     `);
@@ -724,7 +820,7 @@ export class PrismaHospitalPortalStore implements HospitalPortalStore {
     if (sourceRecordIds.length === 0) return new Map();
     const uniqueIds = [...new Set(sourceRecordIds)];
     const keys = await this.prisma.$queryRaw<PageKey[]>(Prisma.sql`
-      WITH scoped AS (${scopedCasesSql(scope)})
+      WITH scoped AS (${scopedCasesSql(scope, portalRetentionCutoffDate(this.now()))})
       SELECT type, "sourceRecordId", "sortKey" FROM scoped
       WHERE "sourceRecordId" IN (${Prisma.join(uniqueIds)})
     `);
@@ -809,6 +905,16 @@ export class HospitalPortalViewModelService {
     };
   }
 
+  async resolveRefreshScope(
+    authorization: PortalAuthorizationContext,
+  ): Promise<PortalRefreshScopeRecordIds> {
+    const scope = await this.resolveScope(authorization);
+    if (!this.store.resolveRefreshRecordIds) {
+      throw new Error("PORTAL_REFRESH_SCOPE_UNAVAILABLE");
+    }
+    return { scope, ...await this.store.resolveRefreshRecordIds(scope) };
+  }
+
   async listCases(authorization: PortalAuthorizationContext, options: {
     filter?: string; query?: string; cursor?: string; limit?: number;
   }): Promise<PortalPage<PortalCaseListItem>> {
@@ -869,7 +975,41 @@ export class HospitalPortalViewModelService {
   }
 }
 
-function scopedCasesSql(scope: PortalDataScope): Prisma.Sql {
+function retainedCaseTypePredicateSql(
+  caseType: "SERVICE_ORDER" | "INSPECTION",
+  retentionCutoffDate: string,
+): Prisma.Sql {
+  return caseType === "SERVICE_ORDER"
+    ? Prisma.sql`(c."completedAt" IS NULL OR c."completedAt" >= CAST(${retentionCutoffDate} AS date))`
+    : Prisma.sql`(c."inspectionPerformedAt" IS NULL OR c."inspectionPerformedAt" >= CAST(${retentionCutoffDate} AS date))`;
+}
+
+function retainedCasePredicateSql(retentionCutoffDate: string): Prisma.Sql {
+  return Prisma.sql`(
+    (c."caseType" = 'SERVICE_ORDER' AND ${retainedCaseTypePredicateSql("SERVICE_ORDER", retentionCutoffDate)})
+    OR
+    (c."caseType" = 'INSPECTION' AND ${retainedCaseTypePredicateSql("INSPECTION", retentionCutoffDate)})
+  )`;
+}
+
+function scopedCasesSql(scope: PortalDataScope, retentionCutoffDate: string): Prisma.Sql {
+  return portalCasesSql(scope, retentionCutoffDate);
+}
+
+function authorizedCasesSql(scope: PortalDataScope): Prisma.Sql {
+  return portalCasesSql(scope, null);
+}
+
+function portalCasesSql(
+  scope: PortalDataScope,
+  retentionCutoffDate: string | null,
+): Prisma.Sql {
+  const serviceOrderRetention = retentionCutoffDate === null
+    ? Prisma.empty
+    : Prisma.sql`AND ${retainedCaseTypePredicateSql("SERVICE_ORDER", retentionCutoffDate)}`;
+  const inspectionRetention = retentionCutoffDate === null
+    ? Prisma.empty
+    : Prisma.sql`AND ${retainedCaseTypePredicateSql("INSPECTION", retentionCutoffDate)}`;
   return Prisma.sql`
     SELECT 'REPAIR'::text AS type, c.id AS "trackedCaseId",
       c."airtableRecordId" AS "sourceRecordId", c."deviceName", c.manufacturer, c.model,
@@ -883,6 +1023,7 @@ function scopedCasesSql(scope: PortalDataScope): Prisma.Sql {
     FROM "TrackedCase" c
     WHERE c."caseType" = 'SERVICE_ORDER' AND c.active = true
       AND c."sourceHospitalRecordId" = ${scope.hospitalId}
+      ${serviceOrderRetention}
       ${visibleCaseSql(scope, "SERVICE_ORDER")}
     UNION ALL
     SELECT 'INSPECTION'::text AS type, c.id AS "trackedCaseId",
@@ -906,8 +1047,18 @@ function scopedCasesSql(scope: PortalDataScope): Prisma.Sql {
     FROM "TrackedCase" c
     WHERE c."caseType" = 'INSPECTION' AND c.active = true
       AND c."sourceHospitalRecordId" = ${scope.hospitalId}
+      ${inspectionRetention}
       ${visibleCaseSql(scope, "INSPECTION")}
   `;
+}
+
+function warsawDateKey(value: Date): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Europe/Warsaw",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(value);
 }
 
 export function portalDataScope(
@@ -999,7 +1150,7 @@ function mapCase(
     requiresAction: requiresCustomerAction(currentStatus),
     reportedAt: type === "REPAIR" ? stored.reportedAt : null,
     reportedAtDateOnly: type === "REPAIR" && isDateOnlySnapshot(stored.sourceSnapshot, "reportedAtRaw"),
-    department: type === "REPAIR" ? snapshotText(stored.sourceSnapshot, "department") : null,
+    department: snapshotText(stored.sourceSnapshot, "department"),
     inspectionPerformedAt: type === "INSPECTION" ? stored.inspectionPerformedAt : null,
     validUntil: type === "INSPECTION"
       ? stored.inspectionValidUntil ?? stored.inspectionDueDate ??

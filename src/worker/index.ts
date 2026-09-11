@@ -59,10 +59,15 @@ import {
   PrismaCaseHospitalScopeRepairStore,
   runCaseHospitalScopeRepair,
 } from "./case-hospital-scope-repair.js";
+import {
+  PrismaPortalRefreshWorkerStore,
+  runPortalRefreshWorkerOnce,
+} from "./portal-refresh.js";
 
 const HEARTBEAT_INTERVAL_MS = 30_000;
 const DELIVERY_PLANNER_INTERVAL_MS = 15_000;
 const COMMUNICATION_EMAIL_INTERVAL_MS = 15_000;
+const PORTAL_REFRESH_INTERVAL_MS = 1_000;
 const WORKER_ID = "main";
 
 const config = loadWorkerConfig(process.env);
@@ -82,6 +87,7 @@ const recipientResolutionStore = new PrismaRecipientResolutionStore(prisma);
 const communicationDeliveryStore = new PrismaCommunicationDeliveryStore(prisma);
 const communicationDeliveryCleanupStore = new PrismaCommunicationDeliveryCleanupStore(prisma);
 const communicationEmailStore = new PrismaCommunicationEmailSendStore(prisma);
+const portalRefreshStore = new PrismaPortalRefreshWorkerStore(prisma);
 const communicationTemplateDataSource = new PrismaCommunicationTemplateDataSource(
   prisma,
   airtable,
@@ -136,6 +142,7 @@ let recipientResolutionTimer: NodeJS.Timeout | undefined;
 let deliveryPlannerTimer: NodeJS.Timeout | undefined;
 let communicationEmailTimer: NodeJS.Timeout | undefined;
 let assetProcessorTimer: NodeJS.Timeout | undefined;
+let portalRefreshTimer: NodeJS.Timeout | undefined;
 let incrementalRunning = false;
 let taskRunning = false;
 let hospitalRunning = false;
@@ -144,6 +151,7 @@ let recipientResolutionRunning = false;
 let deliveryPlannerRunning = false;
 let communicationEmailRunning = false;
 let assetProcessorRunning = false;
+let portalRefreshRunning = false;
 let shuttingDown = false;
 
 async function writeHeartbeat(): Promise<void> {
@@ -250,6 +258,9 @@ function startPollingLoops(): void {
   communicationEmailTimer = setInterval(() => {
     void pollCommunicationEmail();
   }, COMMUNICATION_EMAIL_INTERVAL_MS);
+  portalRefreshTimer = setInterval(() => {
+    void pollPortalRefresh();
+  }, PORTAL_REFRESH_INTERVAL_MS);
   if (config.communicationAssetsEnabled) {
     assetProcessorTimer = setInterval(() => {
       void pollAssetProcessor();
@@ -263,6 +274,29 @@ function startPollingLoops(): void {
   void pollDeliveryPlanner();
   if (config.communicationAssetsEnabled) void pollAssetProcessor();
   void pollCommunicationEmail();
+  void pollPortalRefresh();
+}
+
+async function pollPortalRefresh(): Promise<void> {
+  if (portalRefreshRunning || incrementalRunning || taskRunning || deviceRunning ||
+    shuttingDown) return;
+  portalRefreshRunning = true;
+  try {
+    await runPortalRefreshWorkerOnce({
+      store: portalRefreshStore,
+      airtable,
+      incrementalStore,
+      deviceStore: deviceSyncStore,
+      taskStore: taskSyncStore,
+      communicationStore,
+      quietMinutes: config.digestQuietMinutes,
+      log: (message) => console.info(message),
+    });
+  } catch {
+    console.error("PORTAL_REFRESH_POLL_FAILED errorCode=INTERNAL_ERROR");
+  } finally {
+    portalRefreshRunning = false;
+  }
 }
 
 async function pollAssetProcessor(): Promise<void> {
@@ -310,7 +344,7 @@ async function pollHospitals(): Promise<void> {
 }
 
 async function pollDevices(requestedMode: "AUTO" | "RECONCILE" = "AUTO"): Promise<void> {
-  if (deviceRunning || shuttingDown) return;
+  if (deviceRunning || portalRefreshRunning || shuttingDown) return;
   deviceRunning = true;
   try {
     await runDeviceSync({
@@ -400,7 +434,7 @@ async function pollRecipientResolution(): Promise<void> {
 async function pollTasks(
   requestedMode: "AUTO" | "RECONCILE" | "REMINDER_ELIGIBILITY" = "AUTO",
 ): Promise<void> {
-  if (taskRunning || shuttingDown) return;
+  if (taskRunning || portalRefreshRunning || shuttingDown) return;
   taskRunning = true;
   try {
     await runTaskSync({
@@ -420,7 +454,7 @@ async function pollTasks(
 }
 
 async function pollIncremental(): Promise<void> {
-  if (incrementalRunning || shuttingDown) return;
+  if (incrementalRunning || portalRefreshRunning || shuttingDown) return;
   incrementalRunning = true;
   try {
     await runIncrementalSync({
@@ -458,6 +492,7 @@ async function shutdown(signal: NodeJS.Signals): Promise<void> {
   if (deliveryPlannerTimer) clearInterval(deliveryPlannerTimer);
   if (communicationEmailTimer) clearInterval(communicationEmailTimer);
   if (assetProcessorTimer) clearInterval(assetProcessorTimer);
+  if (portalRefreshTimer) clearInterval(portalRefreshTimer);
   await prisma.$disconnect();
   console.info("[worker] Shutdown complete");
 }

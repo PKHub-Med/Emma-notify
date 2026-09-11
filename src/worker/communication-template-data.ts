@@ -48,15 +48,9 @@ export type TemplateInspection = {
   estimatedDurationSeconds: number | null;
 };
 
-export type TemplateDevice = {
-  airtableRecordId: string;
-  deviceStatus: string | null;
-};
-
 export interface CommunicationTemplateDataSource {
   getEmployees(recordIds: readonly string[]): Promise<TemplateEmployee[]>;
   getInspections(recordIds: readonly string[]): Promise<TemplateInspection[]>;
-  getDevices(recordIds: readonly string[]): Promise<TemplateDevice[]>;
 }
 
 export class PrismaCommunicationTemplateDataSource implements CommunicationTemplateDataSource {
@@ -131,21 +125,6 @@ export class PrismaCommunicationTemplateDataSource implements CommunicationTempl
         (order.get(a.airtableRecordId) ?? 0) - (order.get(b.airtableRecordId) ?? 0));
   }
 
-  async getDevices(recordIds: readonly string[]): Promise<TemplateDevice[]> {
-    if (recordIds.length === 0) return [];
-    const records = await this.prisma.trackedDevice.findMany({
-      where: { airtableRecordId: { in: [...recordIds] }, active: true },
-      select: { airtableRecordId: true, deviceStatus: true },
-    });
-    const byId = new Map(records.map((record) => [record.airtableRecordId, record]));
-    return recordIds.flatMap((id) => {
-      const record = byId.get(id);
-      return record ? [{
-        airtableRecordId: record.airtableRecordId,
-        deviceStatus: record.deviceStatus,
-      }] : [];
-    });
-  }
 }
 
 export type CommunicationTemplatePayload = {
@@ -223,7 +202,6 @@ export function buildBlockedClientFallbackPayload(input: {
         serialNumber: display(device.serialNumber, "brak danych"),
         inventoryNumber: display(device.inventoryNumber, "brak danych"),
         repairStatus: display(item.emmaCustomerStatus ?? item.currentStatus, "Brak informacji"),
-        deviceStatus: "Brak danych",
       }];
     });
     return {
@@ -241,7 +219,6 @@ export function buildBlockedClientFallbackPayload(input: {
         DEVICE_NAME: "Dane bezpieczne dostępne w diagnostyce",
         MANUFACTURER_MODEL: "—", SERIAL_NUMBER: "—", INVENTORY_NUMBER: "—",
         REPAIR_STATUS: display(snapshot.emmaCustomerStatus ?? snapshot.currentStatus, "—"),
-        DEVICE_STATUS: "—",
       },
     };
   }
@@ -506,23 +483,6 @@ export async function buildCommunicationRepairBatchPayload(input: {
 
   const snapshots = input.deliveries.map((delivery) =>
     object(delivery.eventSnapshot));
-  const deviceIds = snapshots.flatMap((snapshot) => {
-    const device = object(snapshot.device);
-    const id = clean(device.airtableRecordId);
-    return id ? [id] : [];
-  });
-
-  let devices: TemplateDevice[] = [];
-  try {
-    devices = await input.dataSource.getDevices([...new Set(deviceIds)]);
-  } catch {
-    throw new CommunicationTemplateDataError("TEMPLATE_DATA_SOURCE_ERROR", true);
-  }
-
-  const statusByDevice = new Map(
-    devices.map((device) => [device.airtableRecordId, device.deviceStatus]),
-  );
-
   const rows = snapshots.map((snapshot) => {
     const device = object(snapshot.device);
     return {
@@ -551,25 +511,22 @@ export async function buildCommunicationRepairBatchPayload(input: {
         snapshot.emmaCustomerStatus ?? snapshot.currentStatus,
         "Brak informacji",
       ),
-      deviceStatus: display(
-        statusByDevice.get(clean(device.airtableRecordId)),
-        "Brak danych",
-      ),
     };
   });
 
   const first = rows[0]!;
+  const firstIdentifier = repairIdentifier(first.serialNumber, first.inventoryNumber).value;
   const title = rows.length === 1
     ? scenario === CommunicationScenario.REPAIR_RECEIVED
-      ? `Przyjęliśmy zgłoszenie serwisowe · ${first.manufacturer} · ${first.model} · ${first.serialNumber}`
+      ? `Przyjęliśmy zgłoszenie serwisowe · ${first.manufacturer} · ${first.model} · ${firstIdentifier}`
       : scenario === CommunicationScenario.REPAIR_DELAYED_PARTS
         ? `Naprawa oczekuje na części · ${first.deviceName} · ${first.caseNumber}`
-        : `Naprawa zakończona · ${first.deviceName} · ${first.serialNumber} · ${first.clientOrderNumber}`
+        : `Naprawa zakończona · ${first.deviceName} · ${firstIdentifier} · ${first.clientOrderNumber}`
     : scenario === CommunicationScenario.REPAIR_RECEIVED
       ? `Przyjęliśmy ${rows.length} zgłoszenia serwisowe`
       : scenario === CommunicationScenario.REPAIR_DELAYED_PARTS
-        ? `Naprawy oczekujące na części · ${rows.length} spraw`
-        : `Zakończone naprawy · ${rows.length} spraw`;
+        ? `Liczba napraw oczekujących na części: ${rows.length}`
+        : `Liczba zakończonych napraw: ${rows.length}`;
 
   return {
     templateId: templateAliasForScenario(scenario),
@@ -598,7 +555,6 @@ export async function buildCommunicationRepairBatchPayload(input: {
       SERIAL_NUMBER: first.serialNumber,
       INVENTORY_NUMBER: first.inventoryNumber,
       REPAIR_STATUS: first.repairStatus,
-      DEVICE_STATUS: first.deviceStatus,
     },
   };
 }
@@ -657,7 +613,6 @@ function repairRows(
     serialNumber: string;
     inventoryNumber: string;
     repairStatus: string;
-    deviceStatus: string;
     department: string;
   }>,
   scenario: CommunicationScenario,
@@ -666,22 +621,38 @@ function repairRows(
     const bottomBorder = index < items.length - 1
       ? "border-bottom:1px solid #D9E1EB;"
       : "";
-    const date = scenario === CommunicationScenario.REPAIR_RECEIVED ||
-        scenario === CommunicationScenario.REPAIR_DELAYED_PARTS
-      ? item.reportedAt
-      : item.completedAt;
-
     const statuses = scenario === CommunicationScenario.REPAIR_COMPLETED
-      ? `<div style="margin-top:9px;">${statusBadge(item.repairStatus, repairStatusTone(item.repairStatus))}<span style="display:inline-block;width:5px;">&nbsp;</span>${statusBadge(`Urządzenie: ${item.deviceStatus}`, deviceStatusTone(item.deviceStatus))}</div>`
+      ? `<div style="margin-top:9px;">${statusBadge(item.repairStatus, repairStatusTone(item.repairStatus))}</div>`
       : "";
 
     const waiting = scenario === CommunicationScenario.REPAIR_DELAYED_PARTS
       ? `<div style="margin-top:9px;font-size:12px;line-height:18px;color:#8B6117;font-weight:700;">Oczekiwanie na części. Kolejna informacja pojawi się po zmianie statusu.</div>`
       : "";
-    const details = `<div style="font-size:14px;line-height:20px;font-weight:800;color:#1F2F49;">${htmlEscape(item.deviceName)}</div><div style="margin-top:3px;font-size:12px;line-height:18px;color:#34445D;">${htmlEscape(item.manufacturer)} &#183; ${htmlEscape(item.model)}</div><div style="margin-top:4px;font-size:12px;line-height:18px;color:#66758A;">SN: ${htmlEscape(item.serialNumber)} &#183; Nr inw.: ${htmlEscape(item.inventoryNumber)}<br>Oddział: ${htmlEscape(item.department)}<br>Numer sprawy: ${htmlEscape(item.caseNumber)}<br>Nr zlecenia klienta: ${htmlEscape(item.clientOrderNumber)}</div>${statuses}${waiting}`;
+    const identifier = repairIdentifier(item.serialNumber, item.inventoryNumber);
+    const details = `<div style="font-size:14px;line-height:20px;font-weight:800;color:#1F2F49;">${htmlEscape(item.deviceName)}</div><div style="margin-top:3px;font-size:12px;line-height:18px;color:#34445D;">Producent: ${htmlEscape(item.manufacturer)}<br>Model: ${htmlEscape(item.model)}</div><div style="margin-top:4px;font-size:12px;line-height:18px;color:#66758A;">${identifier.label}: ${htmlEscape(identifier.value)}<br>Oddział: ${htmlEscape(item.department)}<br>Numer sprawy: ${htmlEscape(item.caseNumber)}<br>Nr zlecenia klienta: ${htmlEscape(item.clientOrderNumber)}</div>${statuses}${waiting}`;
 
-    return `<tr><td style="padding:14px 8px;${bottomBorder}border-right:1px solid #D9E1EB;text-align:center;vertical-align:middle;font-size:12px;line-height:18px;color:#34445D;">${index + 1}</td><td style="padding:14px 12px;${bottomBorder}border-right:1px solid #D9E1EB;vertical-align:top;">${details}</td><td style="padding:14px 10px;${bottomBorder}text-align:center;vertical-align:middle;font-size:12px;line-height:18px;font-weight:700;color:#1F2F49;white-space:nowrap;">${htmlEscape(date)}</td></tr>`;
+    return `<tr><td style="padding:14px 8px;${bottomBorder}border-right:1px solid #D9E1EB;text-align:center;vertical-align:middle;font-size:12px;line-height:18px;color:#34445D;">${index + 1}</td><td style="padding:14px 12px;${bottomBorder}vertical-align:top;">${details}</td></tr>`;
   });
+}
+
+function repairIdentifier(serialNumber: string, inventoryNumber: string) {
+  const serial = meaningfulDeviceIdentifier(serialNumber);
+  if (serial) return { label: "Nr seryjny", value: serial };
+  return {
+    label: "Nr inwentarzowy",
+    value: meaningfulDeviceIdentifier(inventoryNumber) ?? "brak danych",
+  };
+}
+
+function meaningfulDeviceIdentifier(value: string): string | null {
+  const normalized = value.trim();
+  if (!normalized) return null;
+  const unavailable = new Set([
+    "-", "–", "—", "brak", "brak danych", "brak numeru", "n/a", "nie dotyczy", "null",
+  ]);
+  return unavailable.has(normalized.toLocaleLowerCase("pl-PL").replace(/\s+/g, " "))
+    ? null
+    : normalized;
 }
 
 function resultRows(
@@ -729,20 +700,6 @@ function repairStatusTone(value: string) {
     return { background: "#E7F3EF", color: "#2B7A64", border: "#C9E5DC" };
   }
   return { background: "#EAF0F9", color: "#33598F", border: "#D4E0F0" };
-}
-
-function deviceStatusTone(value: string) {
-  const status = value.trim().toUpperCase();
-  if (status.includes("NIESPRAW")) {
-    return { background: "#F8E9E9", color: "#9A4949", border: "#EECFCF" };
-  }
-  if (status.includes("WARUNK")) {
-    return { background: "#FBF1DB", color: "#8B6117", border: "#EFDCA9" };
-  }
-  if (status.includes("SPRAW")) {
-    return { background: "#E7F3EF", color: "#2B7A64", border: "#C9E5DC" };
-  }
-  return { background: "#F1F4F8", color: "#66758A", border: "#D9E1EB" };
 }
 
 function inspectionResultTone(key: InspectionResult["key"]) {

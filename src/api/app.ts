@@ -17,6 +17,11 @@ import {
   InvalidPortalCursorError,
   PrismaHospitalPortalStore,
 } from "../portal-access/view-model.js";
+import { PrismaPortalAccessPolicy } from "../portal-access/policy.js";
+import {
+  PortalRefreshService,
+  PrismaPortalRefreshRequestStore,
+} from "../portal-access/refresh.js";
 import {
   unsubscribeDonePage,
   unsubscribePage,
@@ -42,6 +47,7 @@ export function createApp(
   options: {
     portalViews?: Pick<HospitalPortalViewModelService,
       "build" | "listCases" | "getCase" | "listDevices" | "getDevice" | "listDocuments">;
+    portalRefresh?: Pick<PortalRefreshService, "request" | "status">;
     serviceName?: string;
     publicFiles?: PublicFileService;
     analytics?: PortalAnalyticsWriter;
@@ -55,6 +61,15 @@ export function createApp(
   const portalViews = options.portalViews ?? new HospitalPortalViewModelService(
     new PrismaHospitalPortalStore(prisma),
     options.serviceName,
+  );
+  const portalRefresh = options.portalRefresh ?? new PortalRefreshService(
+    new PrismaPortalRefreshRequestStore(prisma),
+    new HospitalPortalViewModelService(
+      new PrismaHospitalPortalStore(prisma),
+      options.serviceName,
+      30,
+      new PrismaPortalAccessPolicy(prisma),
+    ),
   );
 
   app.get("/health", async (_request, response) => {
@@ -146,6 +161,36 @@ export function createApp(
       response.status(200).json(page);
     } catch (error: unknown) {
       sendPortalDataError(response, error, "cases", filter, hasCursor, hasQuery);
+    }
+  });
+
+  app.post("/p/:token/data/refresh", async (request, response) => {
+    response.set(PORTAL_DATA_HEADERS);
+    try {
+      const authorization = await authorizePortalData(portalAccess, request.params.token ?? "");
+      if (!authorization) { response.status(404).json({ error: "NOT_FOUND" }); return; }
+      const refresh = await portalRefresh.request(authorization);
+      response.status(202).json(refresh);
+    } catch {
+      console.error("PORTAL_REFRESH_REQUEST_FAILED errorCode=INTERNAL_ERROR status=500");
+      response.status(500).json({ error: "INTERNAL_ERROR" });
+    }
+  });
+
+  app.get("/p/:token/data/refresh/:requestId", async (request, response) => {
+    response.set(PORTAL_DATA_HEADERS);
+    try {
+      const authorization = await authorizePortalData(portalAccess, request.params.token ?? "");
+      if (!authorization) { response.status(404).json({ error: "NOT_FOUND" }); return; }
+      const refresh = await portalRefresh.status(
+        authorization,
+        request.params.requestId ?? "",
+      );
+      if (!refresh) { response.status(404).json({ error: "NOT_FOUND" }); return; }
+      response.status(200).json(refresh);
+    } catch {
+      console.error("PORTAL_REFRESH_STATUS_FAILED errorCode=INTERNAL_ERROR status=500");
+      response.status(500).json({ error: "INTERNAL_ERROR" });
     }
   });
 

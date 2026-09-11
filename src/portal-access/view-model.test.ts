@@ -14,17 +14,97 @@ import {
   encodePortalCaseCursor,
   encodePortalDeviceCursor,
   HospitalPortalViewModelService,
+  isPortalCaseRetained,
   inspectionDisplayStatus,
   InvalidPortalCursorError,
+  portalRetentionCutoffDate,
   PrismaHospitalPortalStore,
   type HospitalPortalStore,
   type PortalCaseFilter,
   type PortalCaseListItem,
   type PortalDevice,
   type PortalDocument,
+  type PortalDataScope,
 } from "./view-model.js";
 
 describe("paginated hospital portal", () => {
+  it("renders one global Aktualizuj dane control with polling and success/error states", async () => {
+    const view = await new HospitalPortalViewModelService(memoryStore(1, 0)).build(auth() as never);
+    const html = renderHospitalPortal(view, "nonce", new Date(), "/p/token");
+    expect(html.match(/>Aktualizuj dane</g)).toHaveLength(1);
+    expect(html).toContain("Aktualizuję dane…");
+    expect(html).toContain("Dane zaktualizowane");
+    expect(html).toContain("Nie udało się zaktualizować danych. Spróbuj ponownie.");
+    expect(html).toContain("setTimeout(resolve,1000)");
+    expect(html).toContain("/data/refresh");
+  });
+
+  it.each([PortalAccessLevel.COMMUNICATION, PortalAccessLevel.FULL])(
+    "resolves an unpaginated, authorized and hospital-bound %s refresh scope",
+    async (accessLevel) => {
+      let query: { strings: readonly string[]; values: readonly unknown[] } | undefined;
+      const prisma = {
+        $queryRaw: async (sql: { strings: readonly string[]; values: readonly unknown[] }) => {
+          query = sql;
+          return [
+            { entityType: "SERVICE_ORDER", sourceRecordId: "service-A" },
+            { entityType: "INSPECTION", sourceRecordId: "inspection-A" },
+            { entityType: "DEVICE", sourceRecordId: "device-A" },
+            { entityType: "TASK", sourceRecordId: "task-A" },
+          ];
+        },
+      } as unknown as PrismaClient;
+      const ids = await new PrismaHospitalPortalStore(
+        prisma,
+        () => new Date("2026-09-12T10:00:00Z"),
+      ).resolveRefreshRecordIds(scope(accessLevel));
+      expect(ids).toEqual({
+        serviceOrderRecordIds: ["service-A"],
+        inspectionRecordIds: ["inspection-A"],
+        deviceRecordIds: ["device-A"],
+        taskRecordIds: ["task-A"],
+      });
+      const sql = query?.strings.join("?") ?? "";
+      expect(query?.values).toContain("hospital-A");
+      expect(sql).not.toContain('c."completedAt"');
+      expect(sql).not.toContain('c."inspectionPerformedAt"');
+      expect(sql).toContain('t."linkedInspectionRecordIds"');
+      expect(sql).toContain('t."linkedServiceOrderRecordIds"');
+      const communicationDeviceRestriction =
+        'AND EXISTS (\n          SELECT 1 FROM "TrackedCaseDevice" refresh_device_link';
+      if (accessLevel === PortalAccessLevel.COMMUNICATION) {
+        expect(sql).toContain(communicationDeviceRestriction);
+        expect(sql).toContain("communication_delivery.status = 'SENT'");
+      } else {
+        expect(sql).not.toContain(communicationDeviceRestriction);
+      }
+    },
+  );
+
+  it("uses an inclusive date-only three-calendar-month retention boundary", () => {
+    const now = new Date("2026-09-12T12:00:00.000Z");
+    expect(portalRetentionCutoffDate(now)).toBe("2026-06-12");
+    for (const type of ["REPAIR", "INSPECTION"] as const) {
+      expect(isPortalCaseRetained(type, new Date("2026-06-12T00:00:00.000Z"), now)).toBe(true);
+      expect(isPortalCaseRetained(type, new Date("2026-06-12T23:59:59.999Z"), now)).toBe(true);
+      expect(isPortalCaseRetained(type, new Date("2026-06-11T12:00:00.000Z"), now)).toBe(false);
+    }
+  });
+
+  it.each([
+    ["2025-05-31T12:00:00.000Z", "2025-02-28"],
+    ["2024-05-31T12:00:00.000Z", "2024-02-29"],
+    ["2026-03-31T12:00:00.000Z", "2025-12-31"],
+  ])("clamps calendar-month cutoffs at month ends: %s -> %s", (now, cutoff) => {
+    expect(portalRetentionCutoffDate(new Date(now))).toBe(cutoff);
+  });
+
+  it("keeps unfinished repairs and unperformed inspections visible", () => {
+    const now = new Date("2026-09-11T12:00:00.000Z");
+    expect(isPortalCaseRetained("REPAIR", null, now)).toBe(true);
+    expect(isPortalCaseRetained("INSPECTION", null, now)).toBe(true);
+  });
+
   it("shows a neutral display status without hiding inspection dates", () => {
     expect(inspectionDisplayStatus("DO REALIZACJI", new Date("2026-08-25T10:00:00Z")))
       .toBe("Dane wymagają weryfikacji");
@@ -225,6 +305,8 @@ describe("paginated hospital portal", () => {
     expect(sql).toContain("'CLIENT'");
     expect(sql).toContain("WHEN 'NIESPRAWNE' THEN 3");
     expect(sql).toContain("WHEN 'WARUNKOWO DOPUSZCZONE' THEN 2");
+    expect(sql).toContain('c."completedAt" IS NULL');
+    expect(sql).toContain('c."inspectionPerformedAt" IS NULL');
     expect(queries[0]!.values).toContain("hospital-A");
     expect(queries[1]!.strings.join("?")).toContain('FROM "TrackedDevice" d');
     expect(queries[1]!.strings.join("?")).toContain('d."sourceHospitalRecordId" =');
@@ -247,7 +329,8 @@ describe("paginated hospital portal", () => {
         inventoryNumber: null, currentStatus: "SPRAWNE", faultDescription: null,
         sourceCreatedAt: null, reportedAt: null, sourceModifiedAt: null,
         inspectionDueDate: null, inspectionPerformedAt: new Date("2026-08-13T00:00:00Z"),
-        inspectionResult: "SPRAWNE", inspectionValidUntil: new Date("2027-08-13T00:00:00Z"), sourceSnapshot: {},
+        inspectionResult: "SPRAWNE", inspectionValidUntil: new Date("2027-08-13T00:00:00Z"),
+        sourceSnapshot: { department: "Oddział Okulistyczny" },
         events: [],
       }] },
       trackedTask: { findMany: async () => [] },
@@ -269,6 +352,38 @@ describe("paginated hospital portal", () => {
     ]);
     expect(item?.deviceName).toBe("3 urządzenia");
     expect(item?.deviceId).toBeNull();
+    expect(item?.department).toBe("Oddział Okulistyczny");
+  });
+
+  it("hides a document when its Case is outside retention", async () => {
+    const queries: Array<{ strings: readonly string[]; values: readonly unknown[] }> = [];
+    const prisma = {
+      communicationAsset: { findMany: async () => [{
+        id: "asset-old", role: CommunicationAssetRole.REPAIR_PROTOCOL,
+        displayOrder: 0, createdAt: new Date("2026-06-10T00:00:00Z"),
+        storedFile: {
+          id: "file-old", sourceRecordId: "repair-old",
+          sourceEntityType: CommunicationSourceEntityType.SERVICE_ORDER,
+          kind: StoredFileKind.DOCUMENT, originalFileName: "old.pdf",
+        },
+      }] },
+      $queryRaw: async (query: { strings: readonly string[]; values: readonly unknown[] }) => {
+        queries.push(query);
+        return [];
+      },
+    } as unknown as PrismaClient;
+    const store = new PrismaHospitalPortalStore(
+      prisma,
+      () => new Date("2026-09-11T12:00:00.000Z"),
+    );
+    const documents = await store.listDocuments({
+      hospitalId: "H1", accessLevel: PortalAccessLevel.FULL,
+      communicationDeliveryId: "delivery-H1", contextType: "REPAIR", contextId: "repair-old",
+    }, null);
+
+    expect(documents).toEqual([]);
+    expect(queries[0]!.strings.join("?")).toContain('c."completedAt"');
+    expect(queries[0]!.values).toContain("2026-06-11");
   });
 
   it("shows Case H1 snapshot but does not expose current Device H2 data", async () => {
@@ -455,15 +570,22 @@ describe("paginated hospital portal", () => {
     }));
     let rawCalls = 0;
     let findManyCalls = 0;
+    let deviceSelect: unknown;
+    const oldInspection = new Date("2025-01-15T00:00:00.000Z");
     const prisma = {
       $queryRaw: async () => {
         rawCalls += 1;
         if (rawCalls === 1) return keys;
         if (rawCalls === 2) return keys.slice(0, 30).map((key) => ({ airtableRecordId: key.sourceRecordId }));
+        if (rawCalls === 3) return [{
+          deviceAirtableId: "device-0", inspectionPerformedAt: oldInspection,
+          inspectionResult: "SPRAWNE", inspectionValidUntil: new Date("2026-01-15T00:00:00Z"),
+        }];
         return [];
       },
       trackedDevice: {
-        findMany: async () => {
+        findMany: async ({ select }: { select: unknown }) => {
+          deviceSelect = select;
           findManyCalls += 1;
           return keys.slice(0, 30).map((key) => ({
             airtableRecordId: key.sourceRecordId,
@@ -472,6 +594,7 @@ describe("paginated hospital portal", () => {
             model: null,
             serialNumber: null,
             inventoryNumber: null,
+            department: "Laboratorium",
             deviceStatus: null,
           }));
         },
@@ -485,6 +608,12 @@ describe("paginated hospital portal", () => {
     expect(page.nextCursor).not.toBeNull();
     expect(findManyCalls).toBe(1);
     expect(rawCalls).toBe(3);
+    expect(page.items[0]).toMatchObject({
+      department: "Laboratorium", inspectionPerformedAt: oldInspection,
+    });
+    expect(page.items[0]).not.toHaveProperty("currentStatus");
+    expect(page.items[0]).not.toHaveProperty("deviceStatus");
+    expect(deviceSelect).not.toHaveProperty("deviceStatus");
   });
 
   it("keeps Device detail cases hospital-scoped even outside the entry context", async () => {
@@ -559,6 +688,45 @@ describe("paginated hospital portal", () => {
       memoryStore(1, 0, { department: "Blok operacyjny" }),
     ).build(auth());
     expect(renderHospitalPortal(view, "nonce")).toContain("Blok operacyjny");
+  });
+
+  it("renders the required Device card fields without a Device status", async () => {
+    const html = renderHospitalPortal(
+      await new HospitalPortalViewModelService(memoryStore(1, 0)).build(auth()),
+      "nonce",
+    );
+    for (const label of [
+      "Karta urządzenia", "Producent", "Model", "Oddział", "Ostatni przegląd",
+      "Nr seryjny", "Nr inwentarzowy", "Wynik przeglądu",
+    ]) expect(html).toContain(label);
+    expect(html).not.toContain("STATUS URZĄDZENIA");
+    expect(html).not.toContain("Producent / model");
+  });
+
+  it("labels Summary rows and shows inspection validity only for inspections", async () => {
+    const inspectionHtml = renderHospitalPortal(
+      await new HospitalPortalViewModelService(memoryStore(0, 1)).build(taskAuth()),
+      "nonce",
+    );
+    const repairHtml = renderHospitalPortal(
+      await new HospitalPortalViewModelService(memoryStore(1, 0)).build(auth()),
+      "nonce",
+    );
+    expect(inspectionHtml).toContain('case-type-badge">Przegląd');
+    expect(inspectionHtml).toContain("Przegląd ważny do");
+    expect(repairHtml).toContain('case-type-badge">Naprawa');
+    expect(repairHtml.match(/Przegląd ważny do/g)).toHaveLength(1);
+  });
+
+  it("uses browser history for Case and Device back navigation", async () => {
+    const html = renderHospitalPortal(
+      await new HospitalPortalViewModelService(memoryStore(1, 0)).build(auth()),
+      "nonce",
+    );
+    expect(html).toContain("history.pushState({portalScreen:'caseCard',caseId:id}");
+    expect(html).toContain("history.pushState({portalScreen:'deviceCard',deviceId:id}");
+    expect(html).toContain("window.addEventListener('popstate'");
+    expect(html).toContain("document.getElementById('deviceBack').addEventListener('click',()=>history.back())");
   });
 
   it("escapes XSS and preserves Polish UTF-8", async () => {
@@ -772,7 +940,7 @@ function uniqueDevices(items: PortalCaseListItem[]): PortalDevice[] {
   return [...new Map(items.filter((item) => item.deviceId).map((item) => [item.deviceId!, {
     sourceRecordId: item.deviceId!, deviceName: item.deviceName,
     manufacturer: item.manufacturer, model: item.model, serialNumber: item.serialNumber,
-    inventoryNumber: item.inventoryNumber, currentStatus: item.currentStatus,
+    inventoryNumber: item.inventoryNumber, department: item.department ?? null,
     validUntil: item.validUntil,
     inspectionPerformedAt: item.inspectionPerformedAt,
     inspectionResult: null,
@@ -834,6 +1002,16 @@ function auth(sourceRecordId = "repair-0") {
       type: "SERVICE_ORDER" as const, sourceRecordId,
       scenario: CommunicationScenario.REPAIR_RECEIVED,
     },
+  };
+}
+
+function scope(accessLevel: PortalAccessLevel): PortalDataScope {
+  return {
+    hospitalId: "hospital-A",
+    accessLevel,
+    communicationDeliveryId: "delivery-A",
+    contextType: "REPAIR",
+    contextId: "repair-0",
   };
 }
 

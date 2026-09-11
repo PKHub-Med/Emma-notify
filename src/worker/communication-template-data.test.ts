@@ -31,8 +31,7 @@ const linkKeys = ["EMMA_SECURE_URL","EMMA_UNSUBSCRIBE_URL"];
 const repairKeys = [
   "SERVICE_NAME","SENT_AT","EMAIL_TITLE","REPAIR_COUNT","BLOCKED_NOTICE","TRUNCATION_NOTICE",...repairRowKeys,
   "CASE_NUMBER","CLIENT_ORDER_NUMBER","REPORTED_AT","COMPLETED_AT","DEVICE_NAME",
-  "MANUFACTURER_MODEL","SERIAL_NUMBER","INVENTORY_NUMBER","REPAIR_STATUS",
-  "DEVICE_STATUS",...linkKeys,
+  "MANUFACTURER_MODEL","SERIAL_NUMBER","INVENTORY_NUMBER","REPAIR_STATUS",...linkKeys,
 ];
 const expectedKeys: Record<CommunicationScenario, string[]> = {
   REPAIR_RECEIVED: repairKeys,
@@ -78,7 +77,6 @@ describe("published communication template registry", () => {
   it("keeps numeric counters numeric for Resend", async () => {
     const dataSource: CommunicationTemplateDataSource = {
       async getEmployees() { return []; },
-      async getDevices() { return []; },
       async getInspections() {
         return Array.from({ length: 15 }, (_, index) =>
           inspection(`inspection-${index}`, "SPRAWNY"));
@@ -108,7 +106,7 @@ describe("dynamic HTML and source mapping", () => {
   it.each([29, 30, 31, 47])("shows at most 30 of %i inspections but preserves the full count", async (count) => {
     const ids = Array.from({ length: count }, (_, index) => `inspection-${index}`);
     const dataSource: CommunicationTemplateDataSource = {
-      async getEmployees() { return []; }, async getDevices() { return []; },
+      async getEmployees() { return []; },
       async getInspections() { return ids.map((id) => inspection(id, "SPRAWNY")); },
     };
     const payload = await buildCommunicationTemplatePayload({
@@ -137,7 +135,20 @@ describe("dynamic HTML and source mapping", () => {
       ],
       dataSource: source(), secureUrl, unsubscribeUrl, preparedAt, timeZone: "Europe/Warsaw",
     });
-    expect(many.variables.EMAIL_TITLE).toBe("Naprawy oczekujące na części · 2 spraw");
+    expect(many.variables.EMAIL_TITLE).toBe("Liczba napraw oczekujących na części: 2");
+  });
+
+  it("uses an explicit count in the completed-repairs batch title", async () => {
+    const many = await buildCommunicationRepairBatchPayload({
+      deliveries: [
+        { id: "one", scenario: CommunicationScenario.REPAIR_COMPLETED,
+          sourceRecordId: "one", eventSnapshot: repairSnapshot() },
+        { id: "two", scenario: CommunicationScenario.REPAIR_COMPLETED,
+          sourceRecordId: "two", eventSnapshot: { ...repairSnapshot(), businessNumber: "SO-2" } },
+      ],
+      dataSource: source(), secureUrl, unsubscribeUrl, preparedAt, timeZone: "Europe/Warsaw",
+    });
+    expect(many.variables.EMAIL_TITLE).toBe("Liczba zakończonych napraw: 2");
   });
 
   it("blocks an incomplete or cross-hospital inspection set", async () => {
@@ -228,7 +239,7 @@ describe("dynamic HTML and source mapping", () => {
   ])("formats inspection duration %j consistently in device and result rows", async (seconds, expected) => {
     const one = { ...inspection("only", "SPRAWNY"), estimatedDurationSeconds: seconds };
     const dataSource: CommunicationTemplateDataSource = {
-      async getEmployees() { return []; }, async getDevices() { return []; },
+      async getEmployees() { return []; },
       async getInspections() { return [one]; },
     };
     for (const scenario of [
@@ -248,19 +259,66 @@ describe("dynamic HTML and source mapping", () => {
     }
   });
 
-  it("renders repair dates in a separate column and completed statuses as colored badges", async () => {
-    const received = String((await build(CommunicationScenario.REPAIR_RECEIVED)).variables.REPAIR_ROW_01);
-    expect(received).toContain("16.06.2026</td></tr>");
-    expect(received).toContain("border-right:1px solid #D9E1EB");
-    expect(received).toContain("font-size:12px");
-    expect(received).not.toContain("Data zgłoszenia:");
+  it.each([
+    CommunicationScenario.REPAIR_RECEIVED,
+    CommunicationScenario.REPAIR_DELAYED_PARTS,
+    CommunicationScenario.REPAIR_COMPLETED,
+  ])("renders a two-cell repair row without device status or dates for %s", async (scenario) => {
+    const row = String((await build(scenario)).variables.REPAIR_ROW_01);
+    expect(row.match(/<td\b/g)).toHaveLength(2);
+    expect(row).toContain("Producent: Fisher &amp; Paykel Healthcare");
+    expect(row).toContain("Model: AIRVO 3");
+    expect(row).toContain("Nr seryjny: 250939J8H");
+    expect(row).not.toContain("Nr inwentarzowy:");
+    expect(row).not.toContain("Urządzenie:");
+    expect(row).not.toContain("16.06.2026");
+    expect(row).not.toContain("23.07.2026");
+    if (scenario === CommunicationScenario.REPAIR_COMPLETED) {
+      expect(row).toContain(">Naprawa zakończona</span>");
+      expect(row).toContain("border-radius:999px");
+    }
+  });
 
-    const completed = String((await build(CommunicationScenario.REPAIR_COMPLETED)).variables.REPAIR_ROW_01);
-    expect(completed).toContain("23.07.2026</td></tr>");
-    expect(completed).toContain(">Naprawa zakończona</span>");
-    expect(completed).toContain("Urządzenie: Brak danych");
-    expect(completed).toContain("border-radius:999px");
-    expect(completed).not.toContain("Data zakończenia:");
+  it("falls back to inventory number when the repair serial number is unavailable", async () => {
+    const payload = await buildCommunicationTemplatePayload({
+      delivery: {
+        id: "delivery", scenario: CommunicationScenario.REPAIR_RECEIVED,
+        sourceRecordId: "source", eventSnapshot: {
+          ...repairSnapshot(),
+          device: {
+            ...repairSnapshot().device,
+            serialNumber: "  brak danych  ",
+            inventoryNumber: " INV-42 ",
+          },
+        },
+      },
+      dataSource: source(), secureUrl, unsubscribeUrl, preparedAt, timeZone: "Europe/Warsaw",
+    });
+    const row = String(payload.variables.REPAIR_ROW_01);
+    expect(row).toContain("Nr inwentarzowy: INV-42");
+    expect(row).not.toContain("Nr seryjny:");
+    expect(payload.variables.EMAIL_TITLE).toContain("INV-42");
+  });
+
+  it("keeps only two repair table headers and does not render EMAIL_TITLE as the received-mail h1", () => {
+    for (const template of [
+      "resend-templates/emma-repair-received.html",
+      "resend-templates/emma-repair-delayed-parts-phase1.html",
+      "resend-templates/emma-repair-completed.html",
+    ]) {
+      const html = readFileSync(template, "utf8");
+      const header = html.match(/table-layout:fixed;\"><tr>(.*?)<\/tr>\s*\{\{\{REPAIR_ROW_01\}\}\}/s)?.[1];
+      expect(header).toBeDefined();
+      expect(header?.match(/<td\b/g)).toHaveLength(2);
+      expect(header).toContain("LP.");
+      expect(header).toContain("URZĄDZENIE");
+      expect(header).not.toContain("DATA ZGŁOSZENIA");
+      expect(header).not.toContain("DATA ZAKOŃCZENIA");
+    }
+    const received = readFileSync("resend-templates/emma-repair-received.html", "utf8");
+    expect(received).toContain("<title>{{{EMAIL_TITLE}}}</title>");
+    expect(received).toMatch(/display:none[^>]*>\{\{\{EMAIL_TITLE\}\}\}<\/div>/);
+    expect(received).not.toMatch(/<h1[^>]*>\{\{\{EMAIL_TITLE\}\}\}<\/h1>/);
   });
 
   it("sorts completed inspection results problem-first and renders status badges", async () => {
@@ -295,7 +353,6 @@ describe("dynamic HTML and source mapping", () => {
       async getInspections() {
         return ids.map((id) => inspection(id, "DO REALIZACJI"));
       },
-      async getDevices() { return []; },
     };
     const payload = await buildCommunicationTemplatePayload({
       delivery: {
@@ -340,11 +397,12 @@ describe("dynamic HTML and source mapping", () => {
     });
   });
 
-  it("uses reportedAt and keeps device status separate from repair status", async () => {
+  it("keeps repair dates in the payload and removes device status from the contract", async () => {
     const variables = (await build(CommunicationScenario.REPAIR_COMPLETED)).variables;
     expect(variables.REPORTED_AT).toBe("16.06.2026");
+    expect(variables.COMPLETED_AT).toBe("23.07.2026");
     expect(variables.REPAIR_STATUS).toBe("Naprawa zakończona");
-    expect(variables.DEVICE_STATUS).toBe("Brak danych");
+    expect(variables).not.toHaveProperty("DEVICE_STATUS");
     expect(variables.EMAIL_TITLE).toContain("Aparat HFNOT · 250939J8H · DAM.224.0582/26.DSK.JK, PS508436");
   });
 });
@@ -371,7 +429,6 @@ function source(): CommunicationTemplateDataSource {
   return {
     async getEmployees() { return employees; },
     async getInspections() { return inspections(); },
-    async getDevices() { return []; },
   };
 }
 

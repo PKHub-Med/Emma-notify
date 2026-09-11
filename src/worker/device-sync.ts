@@ -148,7 +148,11 @@ export async function runDeviceSync(dependencies: {
       options,
     );
     for (const record of measured.records) {
-      await dependencies.store.upsert(mapDevice(record), now());
+      await syncSingleDeviceRecord({
+        record,
+        store: dependencies.store,
+        seenAt: now(),
+      });
     }
     const completedAt = now();
     await dependencies.store.markSuccessful(completedAt, mode === "BASELINE");
@@ -169,6 +173,14 @@ export async function runDeviceSync(dependencies: {
     await dependencies.store.markFailed(now()).catch(() => undefined);
     throw error;
   }
+}
+
+export function syncSingleDeviceRecord(input: {
+  record: AirtableRecord;
+  store: Pick<DeviceSyncStore, "upsert">;
+  seenAt: Date;
+}): Promise<void> {
+  return input.store.upsert(mapDevice(input.record), input.seenAt);
 }
 
 export const DEVICE_EDITABLE_FIELD_IDS = [

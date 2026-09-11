@@ -114,6 +114,13 @@ enum PortalAccessLevel {
   FULL
 }
 
+enum PortalRefreshStatus {
+  PENDING
+  RUNNING
+  SUCCEEDED
+  FAILED
+}
+
 enum AnalyticsEventType {
   EMAIL_LINK_CLICK
   PORTAL_VIEW_CONFIRMED
@@ -144,6 +151,7 @@ model TrackedCase {
   sourceSnapshot      Json?
   sourceCreatedAt     DateTime?
   reportedAt          DateTime?
+  completedAt         DateTime?
   sourceModifiedAt    DateTime?
   inspectionDueDate       DateTime?
   inspectionDueDateRaw    String?
@@ -167,6 +175,7 @@ model TrackedCase {
   @@index([active, sourceHospitalRecordId])
   @@index([sourceHospitalRecordId, caseType, active, sourceModifiedAt, airtableRecordId])
   @@index([sourceHospitalRecordId, caseType, active, reportedAt, airtableRecordId])
+  @@index([sourceHospitalRecordId, caseType, active, completedAt, airtableRecordId])
 }
 
 model TrackedCaseDevice {
@@ -348,6 +357,7 @@ model CommunicationDelivery {
   unsubscribeGrant             CommunicationUnsubscribeGrant?
   assets                       CommunicationAsset[]
   analyticsEvents              AnalyticsEvent[]
+  portalRefreshRequests        PortalRefreshRequest[]
 
   @@unique([communicationEventId, communicationEventRecipientId])
   @@index([status, scheduledFor])
@@ -474,10 +484,41 @@ model PortalAccessGrant {
   updatedAt               DateTime              @updatedAt
   communicationDelivery   CommunicationDelivery @relation(fields: [communicationDeliveryId], references: [id], onDelete: Cascade)
   analyticsEvents         AnalyticsEvent[]
+  refreshRequests         PortalRefreshRequest[]
 
   @@index([sourceHospitalRecordId])
   @@index([expiresAt])
   @@index([revokedAt])
+}
+
+model PortalRefreshRequest {
+  id                       String              @id @default(cuid())
+  portalAccessGrantId      String
+  sourceHospitalRecordId   String
+  communicationDeliveryId  String
+  accessLevel               PortalAccessLevel
+  contextType               String
+  contextId                 String
+  serviceOrderRecordIds     Json
+  inspectionRecordIds       Json
+  deviceRecordIds           Json
+  taskRecordIds             Json
+  status                    PortalRefreshStatus @default(PENDING)
+  activeKey                 String?             @unique
+  requestedAt               DateTime             @default(now())
+  startedAt                 DateTime?
+  completedAt               DateTime?
+  errorCode                 String?
+  attemptCount              Int                  @default(0)
+  leaseToken                String?
+  leaseExpiresAt            DateTime?
+  portalAccessGrant         PortalAccessGrant    @relation(fields: [portalAccessGrantId], references: [id], onDelete: Cascade)
+  communicationDelivery     CommunicationDelivery @relation(fields: [communicationDeliveryId], references: [id], onDelete: Cascade)
+
+  @@index([status, requestedAt])
+  @@index([status, leaseExpiresAt, requestedAt])
+  @@index([portalAccessGrantId, requestedAt])
+  @@index([sourceHospitalRecordId, requestedAt])
 }
 
 model AnalyticsEvent {

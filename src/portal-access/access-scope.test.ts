@@ -178,7 +178,7 @@ function device(index: number): PortalDevice {
   return {
     sourceRecordId: `device-${index}`, deviceName: `Device ${index}`,
     manufacturer: null, model: null, serialNumber: null, inventoryNumber: null,
-    currentStatus: "Aktywne", validUntil: null, inspectionPerformedAt: null,
+    department: null, validUntil: null, inspectionPerformedAt: null,
     inspectionResult: null,
   };
 }

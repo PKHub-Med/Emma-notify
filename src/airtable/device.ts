@@ -19,6 +19,7 @@ export type MappedDevice = {
 
 export function mapDevice(record: AirtableRecord): MappedDevice {
   const hospitalIds = toLinkedRecordIds(record.fields[DEVICE_FIELDS.hospitalLink]);
+  const location = toOptionalString(record.fields[DEVICE_FIELDS.location]);
   return {
     airtableRecordId: record.id,
     sourceHospitalRecordId: hospitalIds.length === 1 ? hospitalIds[0]! : null,
@@ -27,8 +28,8 @@ export function mapDevice(record: AirtableRecord): MappedDevice {
     model: toOptionalString(record.fields[DEVICE_FIELDS.model]),
     serialNumber: toOptionalString(record.fields[DEVICE_FIELDS.serialNumber]),
     inventoryNumber: toOptionalString(record.fields[DEVICE_FIELDS.inventoryNumber]),
-    department: null,
-    location: toOptionalString(record.fields[DEVICE_FIELDS.location]),
+    department: location,
+    location,
     deviceStatus: toOptionalString(record.fields[DEVICE_FIELDS.deviceStatus]),
     sourceCreatedAt: parseAirtableDate(record.createdTime),
     sourceModifiedAt: parseAirtableDate(record.fields[DEVICE_FIELDS.sourceModifiedAt]),

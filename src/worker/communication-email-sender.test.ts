@@ -747,6 +747,5 @@ function dataSource(): CommunicationTemplateDataSource {
       model: "Epiq", serialNumber: "SN-1", inventoryNumber: null,
       estimatedDurationSeconds: 1200,
     })); },
-    async getDevices() { return []; },
   };
 }

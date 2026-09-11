@@ -3,7 +3,7 @@ import { DEVICE_FIELDS } from "./field-ids.js";
 import { mapDevice } from "./device.js";
 
 describe("device mapper", () => {
-  it("maps only confirmed Device fields and a unique hospital link", () => {
+  it("maps Airtable location to both Device location and department", () => {
     const mapped = mapDevice({
       id: "recDevice",
       createdTime: "2026-08-01T08:00:00.000Z",
@@ -27,7 +27,7 @@ describe("device mapper", () => {
       model: "Epiq",
       serialNumber: "SN-1",
       inventoryNumber: "INV-1",
-      department: null,
+      department: "OIOM",
       location: "OIOM",
       deviceStatus: "Aktywne",
     });

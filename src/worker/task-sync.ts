@@ -153,18 +153,17 @@ export async function runTaskSync(dependencies: {
 
     for (const record of records) {
       const detectedAt = now();
-      const task = mapTask(record);
-      const outcome = await dependencies.store.upsertTask(task, detectedAt);
-      if (outcome === "FIRST_SEEN") stats.firstSeen += 1;
-      if (outcome === "CHANGED") stats.changed += 1;
-      if (outcome === "UNCHANGED") stats.unchanged += 1;
-      await observeCommunication({
-        store: dependencies.communicationStore,
-        observation: buildTaskObservation(task, detectedAt),
-        allowEvent: communicationBaseline,
+      const outcome = await syncSingleTaskRecord({
+        record,
+        store: dependencies.store,
+        communicationStore: dependencies.communicationStore,
+        communicationBaseline,
         detectedAt,
         ...(dependencies.log ? { log: dependencies.log } : {}),
       });
+      if (outcome === "FIRST_SEEN") stats.firstSeen += 1;
+      if (outcome === "CHANGED") stats.changed += 1;
+      if (outcome === "UNCHANGED") stats.unchanged += 1;
     }
 
     const completedAt = now();
@@ -191,6 +190,26 @@ export async function runTaskSync(dependencies: {
     }));
     throw error;
   }
+}
+
+export async function syncSingleTaskRecord(input: {
+  record: AirtableRecord;
+  store: Pick<TaskSyncStore, "upsertTask">;
+  communicationStore: CommunicationEventStore;
+  communicationBaseline: boolean;
+  detectedAt: Date;
+  log?: (message: string) => void;
+}): Promise<TaskUpsertOutcome> {
+  const task = mapTask(input.record);
+  const outcome = await input.store.upsertTask(task, input.detectedAt);
+  await observeCommunication({
+    store: input.communicationStore,
+    observation: buildTaskObservation(task, input.detectedAt),
+    allowEvent: input.communicationBaseline,
+    detectedAt: input.detectedAt,
+    ...(input.log ? { log: input.log } : {}),
+  });
+  return outcome;
 }
 
 export const TASK_EDITABLE_FIELD_IDS = [

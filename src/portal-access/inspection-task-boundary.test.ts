@@ -186,7 +186,7 @@ function caseItem(
 function device(sourceRecordId: string): PortalDevice {
   return {
     sourceRecordId, deviceName: sourceRecordId, manufacturer: null, model: null,
-    serialNumber: null, inventoryNumber: null, currentStatus: "Aktywne",
+    serialNumber: null, inventoryNumber: null, department: null,
     validUntil: null, inspectionPerformedAt: null, inspectionResult: null,
   };
 }

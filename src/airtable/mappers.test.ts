@@ -31,6 +31,7 @@ describe("case mappers", () => {
       [SERVICE_ORDER_FIELDS.faultDescription]: "Usterka",
       [SERVICE_ORDER_FIELDS.sourceModifiedAt]: "2026-08-08T10:00:00.000Z",
       [SERVICE_ORDER_FIELDS.reportedAt]: "2026-08-02T07:30:00.000Z",
+      [SERVICE_ORDER_FIELDS.completedAt]: "2026-08-07T14:45:00.000Z",
     }));
 
     expect(mapped).toMatchObject({
@@ -50,7 +51,9 @@ describe("case mappers", () => {
     });
     expect(mapped.sourceSnapshot).not.toHaveProperty("contactRecordIds");
     expect(mapped.reportedAt?.toISOString()).toBe("2026-08-02T07:30:00.000Z");
+    expect(mapped.completedAt?.toISOString()).toBe("2026-08-07T14:45:00.000Z");
     expect(mapped.sourceSnapshot.reportedAtRaw).toBe("2026-08-02T07:30:00.000Z");
+    expect(mapped.sourceSnapshot.completedAt).toBe("2026-08-07T14:45:00.000Z");
   });
 
   it("does not fall back to source or sync timestamps when reportedAt is absent", () => {
@@ -60,6 +63,10 @@ describe("case mappers", () => {
     expect(mapped.reportedAt).toBeNull();
     expect(mapped.sourceCreatedAt).not.toBeNull();
     expect(mapped.sourceModifiedAt).not.toBeNull();
+  });
+
+  it("maps a missing service-order completion date to null", () => {
+    expect(mapServiceOrder(record("recNotCompleted", {})).completedAt).toBeNull();
   });
 
   it.each([
@@ -112,6 +119,10 @@ describe("case mappers", () => {
     expect(mapped.inspectionPerformedAt).toBeNull();
     expect(mapped.inspectionValidUntil).toBeNull();
     expect(mapped.inspectionResult).toBeNull();
+  });
+
+  it("always maps inspection completedAt to null", () => {
+    expect(mapInspection(record("recInspection", {})).completedAt).toBeNull();
   });
 
   it("ignores DATA PRZEGLĄDU when DATA WYKONANIA PRZEGLĄDU is empty", () => {

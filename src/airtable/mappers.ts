@@ -35,6 +35,7 @@ export type MappedCase = {
   faultDescription: string | null;
   sourceCreatedAt: Date | null;
   reportedAt: Date | null;
+  completedAt: Date | null;
   sourceModifiedAt: Date | null;
   inspectionDueDate: Date | null;
   inspectionDueDateRaw: string | null;
@@ -50,6 +51,9 @@ export type MappedCase = {
 
 export function mapServiceOrder(record: AirtableRecord): MappedCase {
   const reportedAtRaw = rawString(record.fields[SERVICE_ORDER_FIELDS.reportedAt]);
+  const completedAt = parseAirtableDate(
+    record.fields[SERVICE_ORDER_FIELDS.completedAt],
+  );
   const values = {
     businessNumber: toBusinessNumber(record.fields[SERVICE_ORDER_FIELDS.businessNumber]),
     clientOrderNumber: toOptionalString(
@@ -78,9 +82,7 @@ export function mapServiceOrder(record: AirtableRecord): MappedCase {
     ),
     department: toOptionalString(record.fields[SERVICE_ORDER_FIELDS.department]),
     reportedAtRaw,
-    completedAt: parseAirtableDate(
-      record.fields[SERVICE_ORDER_FIELDS.completedAt],
-    )?.toISOString() ?? null,
+    completedAt: completedAt?.toISOString() ?? null,
   };
 
   const {
@@ -100,6 +102,7 @@ export function mapServiceOrder(record: AirtableRecord): MappedCase {
     deviceAirtableIds: toLinkedRecordIds(record.fields[SERVICE_ORDER_FIELDS.deviceLink]),
     sourceCreatedAt: parseAirtableDate(record.createdTime),
     reportedAt: parseAirtableDate(record.fields[SERVICE_ORDER_FIELDS.reportedAt]),
+    completedAt,
     sourceModifiedAt: parseAirtableDate(
       record.fields[SERVICE_ORDER_FIELDS.sourceModifiedAt],
     ),
@@ -171,6 +174,7 @@ export function mapInspection(record: AirtableRecord): MappedCase {
     faultDescription: null,
     sourceCreatedAt: parseAirtableDate(record.createdTime),
     reportedAt: null,
+    completedAt: null,
     sourceModifiedAt: parseAirtableDate(
       record.fields[INSPECTION_FIELDS.sourceModifiedAt],
     ),

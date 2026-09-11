@@ -27,6 +27,10 @@ import {
   PrismaAnalyticsAdminService,
   PrismaPortalAnalyticsWriter,
 } from "../analytics/service.js";
+import {
+  PortalRefreshService,
+  PrismaPortalRefreshRequestStore,
+} from "../portal-access/refresh.js";
 
 const config = loadApiConfig(process.env);
 const prisma = createPrismaClient(config.databaseUrl);
@@ -38,6 +42,17 @@ const accessLinks = new PublicAccessLinkService(
 const portalAccess = new PublicPortalAccessService(
   new PrismaPublicPortalAccessStore(prisma),
   config.accessLinkSigningSecret,
+);
+const portalViews = new HospitalPortalViewModelService(
+  new PrismaHospitalPortalStore(prisma),
+  config.serviceName,
+  config.portalPageSize,
+  portalAccessPolicy,
+  config.portalUpgradeUrl ?? "mailto:serwis@tiemed.pl?subject=Emma%20FULL",
+);
+const portalRefresh = new PortalRefreshService(
+  new PrismaPortalRefreshRequestStore(prisma),
+  portalViews,
 );
 const unsubscribe = new PublicUnsubscribeService(
   new PrismaPublicUnsubscribeStore(prisma),
@@ -60,13 +75,8 @@ const app = createApp(prisma, accessLinks, portalAccess, unsubscribe, {
     user: config.analyticsAdminUser,
     password: config.analyticsAdminPassword,
   },
-  portalViews: new HospitalPortalViewModelService(
-    new PrismaHospitalPortalStore(prisma),
-    config.serviceName,
-    config.portalPageSize,
-    portalAccessPolicy,
-    config.portalUpgradeUrl ?? "mailto:serwis@tiemed.pl?subject=Emma%20FULL",
-  ),
+  portalViews,
+  portalRefresh,
   serviceName: config.serviceName,
   ...(publicFiles ? { publicFiles } : {}),
 });

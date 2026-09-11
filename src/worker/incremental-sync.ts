@@ -150,6 +150,41 @@ export function buildLastModifiedFormula(fieldId: string, since: Date): string {
   return `IS_AFTER({${fieldId}}, DATETIME_PARSE('${since.toISOString()}'))`;
 }
 
+export async function syncSingleCaseRecord(dependencies: {
+  entityType: IncrementalEntityType;
+  record: AirtableRecord;
+  airtable: AirtableIncrementalSource;
+  store: IncrementalStore;
+  quietMinutes: number;
+  legacyNotificationsEnabled: boolean;
+  communicationStore?: CommunicationEventStore;
+  serviceCommunicationEnabled?: boolean;
+  detectedAt: Date;
+  log?: (message: string) => void;
+}): Promise<void> {
+  const definition = ENTITY_DEFINITIONS.find((item) =>
+    item.entityType === dependencies.entityType);
+  if (!definition) throw new Error(`Unsupported case entity: ${dependencies.entityType}`);
+  const serviceCommunicationEnabled = dependencies.serviceCommunicationEnabled ??
+    (dependencies.communicationStore
+      ? await dependencies.communicationStore.isBaselineCompleted("SERVICE_ORDER")
+      : false);
+  await processRecord(
+    definition,
+    dependencies.record,
+    dependencies.airtable,
+    dependencies.store,
+    dependencies.quietMinutes,
+    dependencies.legacyNotificationsEnabled,
+    dependencies.detectedAt,
+    new Map<string, Contact>(),
+    emptyStats(),
+    dependencies.communicationStore,
+    serviceCommunicationEnabled,
+    dependencies.log,
+  );
+}
+
 async function syncEntity(
   definition: EntityDefinition,
   airtable: AirtableIncrementalSource,

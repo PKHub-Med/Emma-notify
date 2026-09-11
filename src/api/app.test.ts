@@ -15,7 +15,8 @@ import {
   type PublicPortalAccessStore,
 } from "../portal-access/public.js";
 import { signPortalGrantToken } from "../portal-access/token.js";
-import { CommunicationScenario } from "../generated/prisma/enums.js";
+import { CommunicationScenario, PortalRefreshStatus } from "../generated/prisma/enums.js";
+import type { PortalRefreshService } from "../portal-access/refresh.js";
 import {
   PublicUnsubscribeService,
   type PublicUnsubscribeStore,
@@ -44,6 +45,43 @@ afterEach(async () => {
 });
 
 describe("public API", () => {
+  it("creates refreshes only from verified portal authorization and ignores client scope fields", async () => {
+    const grant = portalRecord();
+    const request = vi.fn().mockResolvedValue({
+      requestId: "refresh-1", status: PortalRefreshStatus.PENDING,
+      requestedAt: new Date("2026-09-12T10:00:00Z"), completedAt: null,
+    });
+    const status = vi.fn().mockImplementation(async (
+      authorization: PortalAuthorizationContext,
+      requestId: string,
+    ) => requestId === "refresh-1" && authorization.portalAccessGrantId === grant.id
+      ? { requestId, status: PortalRefreshStatus.SUCCEEDED,
+          requestedAt: new Date("2026-09-12T10:00:00Z"),
+          completedAt: new Date("2026-09-12T10:00:05Z") }
+      : null);
+    const { baseUrl } = await startApp(new MemoryStore(null), grant,
+      new MemoryUnsubscribeStore(null), async () => emptyPortalView(), {
+        portalRefresh: { request, status },
+      });
+    const token = signPortalGrantToken(grant, secret);
+    const response = await fetch(`${baseUrl}/p/${token}/data/refresh`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ hospitalId: "other-hospital", recordIds: ["foreign-record"] }),
+    });
+    expect(response.status).toBe(202);
+    expect((await response.json()).requestId).toBe("refresh-1");
+    expect(request).toHaveBeenCalledWith(expect.objectContaining({
+      portalAccessGrantId: grant.id,
+      sourceHospitalRecordId: grant.sourceHospitalRecordId,
+    }));
+    expect(request.mock.calls[0]).toHaveLength(1);
+    expect(JSON.stringify(request.mock.calls[0])).not.toContain("other-hospital");
+
+    expect((await fetch(`${baseUrl}/p/${token}/data/refresh/refresh-1`)).status).toBe(200);
+    expect((await fetch(`${baseUrl}/p/${token}/data/refresh/foreign`)).status).toBe(404);
+  });
+
   it("records a mail link click for a valid portal grant without creating a confirmed view", async () => {
     const grant = portalRecord();
     const analytics = new MemoryAnalytics();
@@ -348,7 +386,7 @@ describe("public API", () => {
     const device: PortalDeviceDetail = {
       sourceRecordId: "device-H1", deviceName: "Device", manufacturer: null,
       model: null, serialNumber: null, inventoryNumber: null,
-      currentStatus: "Aktywne", validUntil: null, inspectionPerformedAt: null,
+      department: null, validUntil: null, inspectionPerformedAt: null,
       inspectionResult: null, cases: { items: [item], nextCursor: null }, lockedCaseCount: 0,
     };
     const requestedCaseIds: string[] = [];
@@ -372,6 +410,8 @@ describe("public API", () => {
     const caseResponse = await fetch(`${baseUrl}/p/${token}/data/cases/${publicCaseId}`);
 
     expect(deviceResponse.status).toBe(200);
+    expect(payload).not.toHaveProperty("currentStatus");
+    expect(payload).not.toHaveProperty("deviceStatus");
     expect(publicCaseId).toBe("history-repair");
     expect(caseResponse.status).toBe(200);
     expect(requestedCaseIds).toEqual(["history-repair"]);
@@ -539,6 +579,7 @@ async function startApp(
       activity: (...args: any[]) => Promise<unknown>;
     };
     analyticsAuth?: { enabled: boolean; user: string | null; password: string | null };
+    portalRefresh?: Pick<PortalRefreshService, "request" | "status">;
   } = {},
 ): Promise<{ baseUrl: string }> {
   const prisma = {
@@ -559,7 +600,8 @@ async function startApp(
     }, ...(dataViews.publicFiles ? { publicFiles: dataViews.publicFiles } : {}),
       ...(dataViews.analytics ? { analytics: dataViews.analytics } : {}),
       ...(dataViews.analyticsAdmin ? { analyticsAdmin: dataViews.analyticsAdmin } : {}),
-      ...(dataViews.analyticsAuth ? { analyticsAuth: dataViews.analyticsAuth } : {}) },
+      ...(dataViews.analyticsAuth ? { analyticsAuth: dataViews.analyticsAuth } : {}),
+      ...(dataViews.portalRefresh ? { portalRefresh: dataViews.portalRefresh } : {}) },
   );
   server = app.listen(0, "127.0.0.1");
   await new Promise<void>((resolve) => server?.once("listening", resolve));
