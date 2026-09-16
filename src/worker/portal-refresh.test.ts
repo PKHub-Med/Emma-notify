@@ -169,13 +169,13 @@ describe("portal refresh worker", () => {
       leaseToken: "assigned-by-claim",
       sourceHospitalRecordId: "recHospitalA",
       serviceOrderRecordIds: ["service-old"],
-      inspectionRecordIds: ["inspection-old"],
+      inspectionRecordIds: ["recInspectionOld"],
       deviceRecordIds: [],
       taskRecordIds: [],
     });
     const localCases = new Map<string, { type: "REPAIR" | "INSPECTION"; date: Date | null }>([
       ["service-old", { type: "REPAIR", date: new Date("2026-05-01T00:00:00.000Z") }],
-      ["inspection-old", { type: "INSPECTION", date: new Date("2026-05-01T00:00:00.000Z") }],
+      ["recInspectionOld", { type: "INSPECTION", date: new Date("2026-05-01T00:00:00.000Z") }],
     ]);
     const now = new Date("2026-09-12T10:00:00.000Z");
     const visible = () => [...localCases.values()].filter((item) =>
@@ -184,7 +184,7 @@ describe("portal refresh worker", () => {
 
     const fetchRecord = vi.fn(async (tableId: string, recordId: string) => {
       if (tableId === AIRTABLE_TABLE_IDS.hospitals) {
-        return hospitalRecord(["inspection-old"]);
+        return hospitalRecord(["recInspectionOld"]);
       }
       if (tableId === AIRTABLE_TABLE_IDS.serviceOrders) {
         return serviceOrderRecord(recordId, "recHospitalA", null);
@@ -227,10 +227,10 @@ describe("portal refresh worker", () => {
       AIRTABLE_TABLE_IDS.serviceOrders, "service-old", expect.any(Array),
     );
     expect(fetchRecord).toHaveBeenCalledWith(
-      AIRTABLE_TABLE_IDS.inspections, "inspection-old", expect.any(Array),
+      AIRTABLE_TABLE_IDS.inspections, "recInspectionOld", expect.any(Array),
     );
     expect(localCases.get("service-old")?.date).toBeNull();
-    expect(localCases.get("inspection-old")?.date).toEqual(
+    expect(localCases.get("recInspectionOld")?.date).toEqual(
       new Date("2026-09-10T00:00:00.000Z"),
     );
     expect(visible()).toHaveLength(2);

@@ -99,6 +99,32 @@ describe("AirtableClient", () => {
       metrics: { requestsMade: 1, pagesFetched: 1 },
     });
   });
+
+  it("merges legacy field-id and V5 field-name projections", async () => {
+    const fetchFunction = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(response({ records: [{
+        id: "recOne", createdTime: "2026-08-01T08:00:00.000Z",
+        fields: { fldLegacy: "legacy" },
+      }] }))
+      .mockResolvedValueOnce(response({ records: [{
+        id: "recOne", createdTime: "2026-08-01T08:00:00.000Z",
+        fields: { "EMMA: Status przeglądu": "WYKONANY" },
+      }] }));
+    const client = new AirtableClient({
+      baseId: "appBase", personalAccessToken: "secret-token", fetchFunction,
+    });
+
+    const measured = await client.fetchAllRecordsWithMetrics(
+      "tblInspections", ["fldLegacy", "EMMA: Status przeglądu"],
+    );
+
+    expect(measured.records[0]?.fields).toEqual({
+      fldLegacy: "legacy", "EMMA: Status przeglądu": "WYKONANY",
+    });
+    expect(measured.metrics).toEqual({ requestsMade: 2, pagesFetched: 2 });
+    expect(String(fetchFunction.mock.calls[0]?.[0])).toContain("returnFieldsByFieldId=true");
+    expect(String(fetchFunction.mock.calls[1]?.[0])).toContain("returnFieldsByFieldId=false");
+  });
 });
 
 function response(body: unknown): Response {

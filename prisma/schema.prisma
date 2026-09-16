@@ -160,6 +160,20 @@ model TrackedCase {
   inspectionPerformedAt   DateTime?
   inspectionResult        String?
   inspectionValidUntil    DateTime?
+  inspectionAdminStatus       String?
+  inspectionHeroLabel         String?
+  inspectionHeroDescription   String?
+  inspectionHeaderDateType    String?
+  inspectionHeaderDate        DateTime?
+  inspectionValidation        String?
+  inspectionNotes             String?
+  inspectionFaults            String?
+  inspectionAdmission         String?
+  inspectionFailureReason     String?
+  inspectionRequiredAction    String?
+  relatedRepairNumber         String?
+  inspectionDeviceTagged      String?
+  inspectionDeviceEpc         String?
   firstSeenAt         DateTime        @default(now())
   lastSeenAt          DateTime        @default(now())
   active              Boolean         @default(true)

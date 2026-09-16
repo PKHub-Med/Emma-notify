@@ -82,7 +82,7 @@ describe("case mappers", () => {
   it("maps an inspection and preserves an invalid due date", () => {
     const mapped = mapInspection(record("recInspection", {
       [INSPECTION_FIELDS.businessNumber]: "17",
-      [INSPECTION_FIELDS.currentStatus]: "Zaplanowany",
+      [INSPECTION_FIELDS.emmaStatus]: "Zaplanowany",
       [INSPECTION_FIELDS.deviceLink]: ["recDevice"],
       [INSPECTION_FIELDS.contactLinks]: ["recContact"],
       [INSPECTION_FIELDS.dueDate]: "#ERROR!",
@@ -128,7 +128,7 @@ describe("case mappers", () => {
   it("ignores DATA PRZEGLĄDU when DATA WYKONANIA PRZEGLĄDU is empty", () => {
     const mapped = mapInspection(record("recZSwJTzztiigVv1", {
       fld3knASxSRaBdDVt: "2026-08-04",
-      [INSPECTION_FIELDS.currentStatus]: "DO REALIZACJI",
+      [INSPECTION_FIELDS.emmaStatus]: "DO REALIZACJI",
     }));
 
     expect(mapped.inspectionPerformedAt).toBeNull();
@@ -144,6 +144,60 @@ describe("case mappers", () => {
       "2026-08-05T00:00:00.000Z",
     );
   });
+
+  it("stores Airtable-provided V5 status, copy and validation without deriving them", () => {
+    const mapped = mapInspection(record("recV5", {
+      [INSPECTION_FIELDS.adminStatus]: "UMÓWIONE",
+      [INSPECTION_FIELDS.emmaStatus]: "W TRAKCIE REALIZACJI",
+      [INSPECTION_FIELDS.heroLabel]: "WIZYTA UMÓWIONA",
+      [INSPECTION_FIELDS.heroDescription]: "Serwisant przyjedzie w ustalonym terminie.",
+      [INSPECTION_FIELDS.headerDateType]: "Zaktualizowano",
+      [INSPECTION_FIELDS.headerDate]: "2026-09-10T12:22:00.000Z",
+      [INSPECTION_FIELDS.validation]: "OK",
+      [INSPECTION_FIELDS.emmaValidUntil]: "2027-09-10",
+      [INSPECTION_FIELDS.notes]: "Uwagi z rekordu",
+      [INSPECTION_FIELDS.relatedRepairNumber]: 24872,
+      [INSPECTION_FIELDS.deviceTagged]: "TAK",
+      [INSPECTION_FIELDS.epc]: "EPC-123",
+    }));
+
+    expect(mapped).toMatchObject({
+      currentStatus: "W TRAKCIE REALIZACJI",
+      inspectionAdminStatus: "UMÓWIONE",
+      inspectionHeroLabel: "WIZYTA UMÓWIONA",
+      inspectionHeaderDateType: "Zaktualizowano",
+      inspectionValidation: "OK",
+      inspectionNotes: "Uwagi z rekordu",
+      relatedRepairNumber: "24872",
+      inspectionDeviceTagged: "TAK",
+      inspectionDeviceEpc: "EPC-123",
+    });
+    expect(mapped.inspectionValidUntil?.toISOString()).toBe("2027-09-10T00:00:00.000Z");
+  });
+
+  it("keeps STAN and Dopuszczenie do uzytku as separate values", () => {
+    const mapped = mapInspection(record("recResultVsAdmission", {
+      [INSPECTION_FIELDS.result]: "WARUNKOWO DOPUSZCZONY",
+      [INSPECTION_FIELDS.admission]: "DOPUSZCZONO DO UZYTKU Z OGRANICZENIAMI",
+    }));
+
+    expect(mapped.inspectionResult).toBe("WARUNKOWO DOPUSZCZONY");
+    expect(mapped.inspectionAdmission).toBe("DOPUSZCZONO DO UZYTKU Z OGRANICZENIAMI");
+  });
+
+  it.each(["ZF", "UMÓWIONE"])(
+    "never exposes Stan Admin %s as the customer-facing status",
+    (adminStatus) => {
+      const mapped = mapInspection(record("recMissingEmmaStatus", {
+        [INSPECTION_FIELDS.emmaStatus]: "",
+        [INSPECTION_FIELDS.adminStatus]: adminStatus,
+        [INSPECTION_FIELDS.validation]: "OK",
+      }));
+
+      expect(mapped.currentStatus).toBeNull();
+      expect(mapped.inspectionAdminStatus).toBe(adminStatus);
+    },
+  );
 
   it.each([
     [1800, 1800], [3600, 3600], [5400, 5400], ["1200", 1200],

@@ -1,0 +1,15 @@
+ALTER TABLE "TrackedCase"
+  ADD COLUMN "inspectionAdminStatus" TEXT,
+  ADD COLUMN "inspectionHeroLabel" TEXT,
+  ADD COLUMN "inspectionHeroDescription" TEXT,
+  ADD COLUMN "inspectionHeaderDateType" TEXT,
+  ADD COLUMN "inspectionHeaderDate" TIMESTAMP(3),
+  ADD COLUMN "inspectionValidation" TEXT,
+  ADD COLUMN "inspectionNotes" TEXT,
+  ADD COLUMN "inspectionFaults" TEXT,
+  ADD COLUMN "inspectionAdmission" TEXT,
+  ADD COLUMN "inspectionFailureReason" TEXT,
+  ADD COLUMN "inspectionRequiredAction" TEXT,
+  ADD COLUMN "relatedRepairNumber" TEXT,
+  ADD COLUMN "inspectionDeviceTagged" TEXT,
+  ADD COLUMN "inspectionDeviceEpc" TEXT;

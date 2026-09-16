@@ -659,7 +659,7 @@ function inspectionRecord(
   contactIds: string[] = [],
 ): AirtableRecord {
   return record(id, {
-    [INSPECTION_FIELDS.currentStatus]: status,
+    [INSPECTION_FIELDS.emmaStatus]: status,
     [INSPECTION_FIELDS.contactLinks]: contactIds,
     [INSPECTION_FIELDS.sourceModifiedAt]: date(0).toISOString(),
   });

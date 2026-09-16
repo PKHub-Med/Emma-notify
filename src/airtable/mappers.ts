@@ -44,6 +44,20 @@ export type MappedCase = {
   inspectionPerformedAt: Date | null;
   inspectionResult: string | null;
   inspectionValidUntil: Date | null;
+  inspectionAdminStatus: string | null;
+  inspectionHeroLabel: string | null;
+  inspectionHeroDescription: string | null;
+  inspectionHeaderDateType: string | null;
+  inspectionHeaderDate: Date | null;
+  inspectionValidation: string | null;
+  inspectionNotes: string | null;
+  inspectionFaults: string | null;
+  inspectionAdmission: string | null;
+  inspectionFailureReason: string | null;
+  inspectionRequiredAction: string | null;
+  relatedRepairNumber: string | null;
+  inspectionDeviceTagged: string | null;
+  inspectionDeviceEpc: string | null;
   sourceSnapshot: Record<string, string | number | null>;
   contactRecordIds: string[];
   invalidDueDate: boolean;
@@ -113,6 +127,20 @@ export function mapServiceOrder(record: AirtableRecord): MappedCase {
     inspectionPerformedAt: null,
     inspectionResult: null,
     inspectionValidUntil: null,
+    inspectionAdminStatus: null,
+    inspectionHeroLabel: null,
+    inspectionHeroDescription: null,
+    inspectionHeaderDateType: null,
+    inspectionHeaderDate: null,
+    inspectionValidation: null,
+    inspectionNotes: null,
+    inspectionFaults: null,
+    inspectionAdmission: null,
+    inspectionFailureReason: null,
+    inspectionRequiredAction: null,
+    relatedRepairNumber: null,
+    inspectionDeviceTagged: null,
+    inspectionDeviceEpc: null,
     sourceSnapshot: { ...values },
     contactRecordIds: toLinkedRecordIds(
       record.fields[SERVICE_ORDER_FIELDS.contactLinks],
@@ -137,8 +165,26 @@ export function mapInspection(record: AirtableRecord): MappedCase {
     model: toOptionalString(record.fields[INSPECTION_FIELDS.model]),
     serialNumber: toOptionalString(record.fields[INSPECTION_FIELDS.serialNumber]),
     inventoryNumber: toOptionalString(record.fields[INSPECTION_FIELDS.inventoryNumber]),
-    currentStatus: toOptionalString(record.fields[INSPECTION_FIELDS.currentStatus]),
+    adminStatus: toOptionalString(record.fields[INSPECTION_FIELDS.adminStatus]),
+    currentStatus: toOptionalString(record.fields[INSPECTION_FIELDS.emmaStatus]),
+    heroLabel: toOptionalString(record.fields[INSPECTION_FIELDS.heroLabel]),
+    heroDescription: toOptionalString(record.fields[INSPECTION_FIELDS.heroDescription]),
+    headerDateType: toOptionalString(record.fields[INSPECTION_FIELDS.headerDateType]),
+    headerDate: parseAirtableDate(record.fields[INSPECTION_FIELDS.headerDate])?.toISOString() ?? null,
+    validation: toOptionalString(record.fields[INSPECTION_FIELDS.validation]),
+    notes: toOptionalString(record.fields[INSPECTION_FIELDS.notes]),
+    faults: toOptionalString(record.fields[INSPECTION_FIELDS.faults]),
+    admission: toOptionalString(record.fields[INSPECTION_FIELDS.admission]),
+    failureReason: toOptionalString(record.fields[INSPECTION_FIELDS.failureReason]),
+    requiredAction: toOptionalString(record.fields[INSPECTION_FIELDS.requiredAction]),
+    relatedRepairNumber: toOptionalString(record.fields[INSPECTION_FIELDS.relatedRepairNumber]),
+    deviceTagged: toOptionalString(record.fields[INSPECTION_FIELDS.deviceTagged]),
+    epc: toOptionalString(record.fields[INSPECTION_FIELDS.epc]),
+    productionYear: toOptionalString(record.fields[INSPECTION_FIELDS.productionYear]),
+    commissionedAt: toOptionalString(record.fields[INSPECTION_FIELDS.commissionedAt]),
+    warrantyUntil: toOptionalString(record.fields[INSPECTION_FIELDS.warrantyUntil]),
     inspectionDueDate: inspectionDueDate?.toISOString() ?? null,
+    emmaValidUntil: toOptionalString(record.fields[INSPECTION_FIELDS.emmaValidUntil]),
     inspectionDueDateRaw: invalidDueDate ? dueDateRaw : null,
     inspectionBookingStatus: toOptionalString(
       record.fields[INSPECTION_FIELDS.bookingStatus],
@@ -188,7 +234,23 @@ export function mapInspection(record: AirtableRecord): MappedCase {
       record.fields[INSPECTION_FIELDS.performedAt],
     ),
     inspectionResult: toOptionalString(record.fields[INSPECTION_FIELDS.result]),
-    inspectionValidUntil: inspectionDueDate,
+    inspectionValidUntil: parseAirtableDate(
+      record.fields[INSPECTION_FIELDS.emmaValidUntil],
+    ),
+    inspectionAdminStatus: values.adminStatus,
+    inspectionHeroLabel: values.heroLabel,
+    inspectionHeroDescription: values.heroDescription,
+    inspectionHeaderDateType: values.headerDateType,
+    inspectionHeaderDate: parseAirtableDate(record.fields[INSPECTION_FIELDS.headerDate]),
+    inspectionValidation: values.validation,
+    inspectionNotes: values.notes,
+    inspectionFaults: values.faults,
+    inspectionAdmission: values.admission,
+    inspectionFailureReason: values.failureReason,
+    inspectionRequiredAction: values.requiredAction,
+    relatedRepairNumber: values.relatedRepairNumber,
+    inspectionDeviceTagged: values.deviceTagged,
+    inspectionDeviceEpc: values.epc,
     sourceSnapshot: { ...values },
     contactRecordIds: toLinkedRecordIds(
       record.fields[INSPECTION_FIELDS.contactLinks],

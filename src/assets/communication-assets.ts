@@ -136,6 +136,7 @@ const ASSET_FIELD_ALLOWLIST: Partial<Record<CommunicationScenario, readonly Allo
   ],
   [CommunicationScenario.INSPECTION_COMPLETED]: [
     { fieldId: INSPECTION_ATTACHMENT_FIELDS.documents, role: CommunicationAssetRole.OTHER_DOCUMENT, kind: StoredFileKind.DOCUMENT },
+    { fieldId: INSPECTION_ATTACHMENT_FIELDS.photos, role: CommunicationAssetRole.PHOTO, kind: StoredFileKind.IMAGE },
   ],
 };
 

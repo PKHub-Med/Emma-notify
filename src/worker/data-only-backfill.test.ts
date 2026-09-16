@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { AIRTABLE_TABLE_IDS } from "../airtable/field-ids.js";
+import { AIRTABLE_TABLE_IDS, INSPECTION_FIELDS } from "../airtable/field-ids.js";
 import { runDataOnlyBackfill } from "./data-only-backfill.js";
 
 describe("data-only backfill", () => {
@@ -109,6 +109,30 @@ describe("data-only backfill", () => {
   it("applies a six-entity fixture with no communication-side effects", async () => {
     const records = new Map(Object.values(AIRTABLE_TABLE_IDS).map((tableId) =>
       [tableId, [{ id: `rec-${tableId}`, createdTime: "2026-08-20T10:00:00Z", fields: {} }]]));
+    records.set(AIRTABLE_TABLE_IDS.inspections, [{
+      id: "recInspectionV5", createdTime: "2026-08-20T10:00:00Z", fields: {
+        [INSPECTION_FIELDS.adminStatus]: "ZAKONCZONE",
+        [INSPECTION_FIELDS.emmaStatus]: "WYKONANY",
+        [INSPECTION_FIELDS.heroLabel]: "SPRAWNY",
+        [INSPECTION_FIELDS.heroDescription]: "Urzadzenie jest sprawne.",
+        [INSPECTION_FIELDS.emmaValidUntil]: "2027-08-20",
+        [INSPECTION_FIELDS.failureReason]: "Nie dotyczy",
+        [INSPECTION_FIELDS.requiredAction]: "Brak",
+        [INSPECTION_FIELDS.headerDateType]: "Wykonano",
+        [INSPECTION_FIELDS.headerDate]: "2026-08-20",
+        [INSPECTION_FIELDS.validation]: "OK",
+        [INSPECTION_FIELDS.notes]: "Bez uwag",
+        [INSPECTION_FIELDS.faults]: "Brak usterek",
+        [INSPECTION_FIELDS.admission]: "DOPUSZCZONO",
+        [INSPECTION_FIELDS.relatedRepairNumber]: 24872,
+        [INSPECTION_FIELDS.deviceTagged]: "TAK",
+        [INSPECTION_FIELDS.epc]: "EPC-123",
+        [INSPECTION_FIELDS.productionYear]: 2024,
+        [INSPECTION_FIELDS.commissionedAt]: "2024-05-10",
+        [INSPECTION_FIELDS.warrantyUntil]: "2027-05-10",
+        [INSPECTION_FIELDS.result]: "SPRAWNY",
+      },
+    }]);
     const updateMany = vi.fn(async () => ({ count: 0 }));
     const count = vi.fn(async () => 11);
     const prisma = {
@@ -144,6 +168,29 @@ describe("data-only backfill", () => {
     };
     const result = await runDataOnlyBackfill(input);
     expect(baseline.upsertCase).toHaveBeenCalledTimes(2);
+    expect(baseline.upsertCase).toHaveBeenCalledWith(expect.objectContaining({
+      airtableRecordId: "recInspectionV5",
+      currentStatus: "WYKONANY",
+      inspectionAdminStatus: "ZAKONCZONE",
+      inspectionHeroLabel: "SPRAWNY",
+      inspectionHeroDescription: "Urzadzenie jest sprawne.",
+      inspectionHeaderDateType: "Wykonano",
+      inspectionValidation: "OK",
+      inspectionNotes: "Bez uwag",
+      inspectionFaults: "Brak usterek",
+      inspectionAdmission: "DOPUSZCZONO",
+      inspectionFailureReason: "Nie dotyczy",
+      inspectionRequiredAction: "Brak",
+      relatedRepairNumber: "24872",
+      inspectionDeviceTagged: "TAK",
+      inspectionDeviceEpc: "EPC-123",
+      inspectionResult: "SPRAWNY",
+      sourceSnapshot: expect.objectContaining({
+        productionYear: "2024",
+        commissionedAt: "2024-05-10",
+        warrantyUntil: "2027-05-10",
+      }),
+    }), expect.any(Date));
     expect(hospital.upsert).toHaveBeenCalledTimes(1);
     expect(device.upsert).toHaveBeenCalledTimes(1);
     expect(task.upsertTask).toHaveBeenCalledTimes(1);

@@ -86,6 +86,7 @@ export const SERVICE_ORDER_ATTACHMENT_FIELDS = {
 // Fetched only for a new INSPECTION_COMPLETED delivery, never by normal sync.
 export const INSPECTION_ATTACHMENT_FIELDS = {
   documents: "fldJiKM6oBZplf1On",
+  photos: "Zdjęcie",
 } as const;
 
 export const INSPECTION_FIELDS = {
@@ -96,7 +97,6 @@ export const INSPECTION_FIELDS = {
   model: "fldDdrXczXp29ISg8",
   inventoryNumber: "fld54a3DwJEtHRfVL",
   serialNumber: "fld5izxI0CGIskOil",
-  currentStatus: "fldujTCuvNlwLQSXO",
   contactLinks: "fldSVf3CXUkpmlyme",
   deviceLink: "fldgk1YS1CIW6aWfv",
   hospitalName: "fldPyeqrgpeKrHuhv",
@@ -105,11 +105,35 @@ export const INSPECTION_FIELDS = {
   bookingStatus: "fldZnO530QNvWM4I8",
   scheduledDate: "fldsN3Yu1qFao8B87",
   performedAt: "fldKnyZZ2YdDADoI9",
-  result: "fldWQzKcmaHodBwLF",
+  // Airtable: "STAN" — technical inspection result.
+  result: "fldujTCuvNlwLQSXO",
   department: "fldhWkH5UBqAPmj6m",
   // Airtable Metadata API: "Czas realizacji", type=duration, format=h:mm.
   // Airtable returns this duration as a number of seconds.
   estimatedDuration: "fldxx69OVN0ML7ZJG",
+  // V5 fields intentionally use stable Airtable field names where the Metadata
+  // API field id has not yet been checked into this repository. AirtableClient
+  // supports mixed id/name projections without changing legacy mappings.
+  adminStatus: "fldG5BLDUibBGubTp",
+  emmaStatus: "EMMA: Status przeglądu",
+  heroLabel: "EMMA: Hero label",
+  heroDescription: "EMMA: Hero opis",
+  emmaValidUntil: "EMMA: Ważny do",
+  failureReason: "EMMA: Powód niewykonania",
+  requiredAction: "EMMA: Wymagane działanie",
+  headerDateType: "EMMA: Typ daty",
+  headerDate: "EMMA: Data nagłówka",
+  validation: "EMMA: Walidacja danych",
+  notes: "UWAGI",
+  faults: "Usterki",
+  // Separate from STAN; must never populate inspectionResult.
+  admission: "fldWQzKcmaHodBwLF",
+  relatedRepairNumber: "Link to zlecenia serwisowe",
+  deviceTagged: "EMMA: Urządzenie oznakowane",
+  epc: "EPC",
+  productionYear: "Rok produkcji",
+  commissionedAt: "Data uruchomienia",
+  warrantyUntil: "Gwarancja",
 } as const;
 
 export const DEVICE_FIELDS = {

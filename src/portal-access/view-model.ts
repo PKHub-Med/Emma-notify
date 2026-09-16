@@ -6,7 +6,6 @@ import {
   StoredFileKind,
 } from "../generated/prisma/enums.js";
 import { publicAssetAccessWhere } from "../assets/public-files.js";
-import { parseInspectionDueDate } from "../airtable/parse-inspection-due-date.js";
 import type { PortalAuthorizationContext } from "./public.js";
 import type { PortalEntryContext } from "./service.js";
 import {
@@ -69,7 +68,51 @@ export type PortalCaseListItem = {
   history: PortalHistoryItem[];
   documents: PortalDocument[];
   photos: PortalDocument[];
+  photoLabel: string;
+  inspectionDetails?: InspectionDetails;
 };
+
+export type InspectionDetails = {
+  id: string;
+  number: string | null;
+  status: string;
+  heroLabel: string | null;
+  heroDescription: string | null;
+  headerDateType: string | null;
+  headerDate: Date | null;
+  scheduledAt: Date | null;
+  performedAt: Date | null;
+  result: string | null;
+  validUntil: Date | null;
+  validUntilLabel: string | null;
+  notes: string | null;
+  faults: string | null;
+  admission: string | null;
+  failureReason: string | null;
+  requiredAction: string | null;
+  relatedRepairNumber: string | null;
+  validation: string | null;
+  verified: boolean;
+  variant: InspectionDesignVariant;
+  device: {
+    id: string | null;
+    name: string;
+    manufacturer: string | null;
+    model: string | null;
+    serialNumber: string | null;
+    inventoryNumber: string | null;
+    productionYear: string | null;
+    commissionedAt: string | null;
+    warrantyUntil: string | null;
+    tagged: string | null;
+    epc: string | null;
+  };
+  location: { hospital: string | null; department: string | null };
+};
+
+export type InspectionDesignVariant =
+  | "DUE" | "SCHEDULED" | "PASSED" | "CONDITIONAL"
+  | "FAILED" | "PROBLEM" | "VERIFY";
 
 export type PortalCaseDevice = {
   sourceRecordId: string;
@@ -160,6 +203,21 @@ export type StoredPortalCase = {
   inspectionPerformedAt: Date | null;
   inspectionResult: string | null;
   inspectionValidUntil: Date | null;
+  inspectionScheduledDate?: Date | null;
+  inspectionAdminStatus?: string | null;
+  inspectionHeroLabel?: string | null;
+  inspectionHeroDescription?: string | null;
+  inspectionHeaderDateType?: string | null;
+  inspectionHeaderDate?: Date | null;
+  inspectionValidation?: string | null;
+  inspectionNotes?: string | null;
+  inspectionFaults?: string | null;
+  inspectionAdmission?: string | null;
+  inspectionFailureReason?: string | null;
+  inspectionRequiredAction?: string | null;
+  relatedRepairNumber?: string | null;
+  inspectionDeviceTagged?: string | null;
+  inspectionDeviceEpc?: string | null;
   sourceSnapshot: unknown;
   events: StoredEvent[];
 };
@@ -291,6 +349,21 @@ const CASE_SELECT = {
   inspectionPerformedAt: true,
   inspectionResult: true,
   inspectionValidUntil: true,
+  inspectionScheduledDate: true,
+  inspectionAdminStatus: true,
+  inspectionHeroLabel: true,
+  inspectionHeroDescription: true,
+  inspectionHeaderDateType: true,
+  inspectionHeaderDate: true,
+  inspectionValidation: true,
+  inspectionNotes: true,
+  inspectionFaults: true,
+  inspectionAdmission: true,
+  inspectionFailureReason: true,
+  inspectionRequiredAction: true,
+  relatedRepairNumber: true,
+  inspectionDeviceTagged: true,
+  inspectionDeviceEpc: true,
   sourceSnapshot: true,
   events: {
     where: {
@@ -736,6 +809,7 @@ export class PrismaHospitalPortalStore implements HospitalPortalStore {
       const caseAssets = mapped.filter((asset) => asset.sourceRecordId === item.sourceRecordId);
       item.documents = caseAssets.filter((asset) => asset.kind === "DOCUMENT");
       item.photos = caseAssets.filter((asset) => asset.kind === "IMAGE");
+      item.photoLabel = polishPhotoCountLabel(item.photos.length);
     }
   }
 
@@ -1029,11 +1103,7 @@ function portalCasesSql(
     SELECT 'INSPECTION'::text AS type, c.id AS "trackedCaseId",
       c."airtableRecordId" AS "sourceRecordId", c."deviceName", c.manufacturer, c.model,
       c."serialNumber", c."inventoryNumber",
-      COALESCE(c."currentStatus", (SELECT t."emmaCustomerStatus" FROM "TrackedTask" t
-        WHERE t."sourceHospitalRecordId" = ${scope.hospitalId}
-          AND t.active = true
-          AND t."linkedInspectionRecordIds" ? c."airtableRecordId"
-        ORDER BY t."updatedAt" DESC LIMIT 1), 'Brak informacji') AS status,
+      COALESCE(NULLIF(BTRIM(c."currentStatus"), ''), 'Dane wymagają weryfikacji') AS status,
       (CASE UPPER(TRIM(COALESCE(c."currentStatus", '')))
         WHEN 'NIESPRAWNE' THEN 3
         WHEN 'WARUNKOWO DOPUSZCZONE' THEN 2
@@ -1114,10 +1184,11 @@ function mapCase(
   devices: PortalCaseDevice[],
 ): PortalCaseListItem {
   const rawCurrentStatus = type === "INSPECTION"
-    ? stored.currentStatus || stored.taskCustomerStatus || stored.emmaCustomerStatus || "Brak informacji"
+    ? stored.currentStatus?.trim() ?? ""
     : stored.emmaCustomerStatus || stored.currentStatus || "Brak informacji";
+  const inspectionVerified = isInspectionVerified(rawCurrentStatus, stored.inspectionValidation);
   const currentStatus = type === "INSPECTION"
-    ? inspectionDisplayStatus(rawCurrentStatus, stored.inspectionPerformedAt)
+    ? inspectionPortalStatus(rawCurrentStatus, stored.inspectionValidation)
     : rawCurrentStatus;
   const history = stored.events.map((event) => ({
     title: event.eventType === "INSPECTION_STATUS_CHANGED" ? "Zmiana statusu przeglądu" : "Zmiana statusu",
@@ -1128,22 +1199,23 @@ function mapCase(
     currentDeviceAccessible: _currentDeviceAccessible,
     ...device
   }) => device);
-  return {
+  const snapshotDeviceName = stored.deviceName || "Urządzenie medyczne";
+  const snapshotManufacturer = stored.manufacturer;
+  const snapshotModel = stored.model;
+  const snapshotSerialNumber = stored.serialNumber;
+  const snapshotInventoryNumber = stored.inventoryNumber;
+  const item: PortalCaseListItem = {
     type, sourceRecordId: stored.airtableRecordId,
     deviceId: devices.length === 1 && devices[0]!.currentDeviceAccessible !== false
       ? devices[0]!.sourceRecordId
       : null,
     devices: publicDevices,
-    deviceName: devices.length === 1
-      ? devices[0]!.deviceName
-      : devices.length > 1 ? `${devices.length} urządzenia` : stored.deviceName || "Urządzenie medyczne",
-    manufacturer: devices.length === 1 ? devices[0]!.manufacturer : stored.manufacturer,
-    model: devices.length === 1 ? devices[0]!.model : stored.model,
-    manufacturerModel: devices.length === 1
-      ? joinNonEmpty([devices[0]!.manufacturer, devices[0]!.model])
-      : joinNonEmpty([stored.manufacturer, stored.model]),
-    serialNumber: devices.length === 1 ? devices[0]!.serialNumber : stored.serialNumber,
-    inventoryNumber: devices.length === 1 ? devices[0]!.inventoryNumber : stored.inventoryNumber,
+    deviceName: devices.length > 1 ? `${devices.length} urządzenia` : snapshotDeviceName,
+    manufacturer: snapshotManufacturer,
+    model: snapshotModel,
+    manufacturerModel: joinNonEmpty([snapshotManufacturer, snapshotModel]),
+    serialNumber: snapshotSerialNumber,
+    inventoryNumber: snapshotInventoryNumber,
     caseNumber: stored.businessNumber, clientOrderNumber: stored.clientOrderNumber,
     currentStatus,
     lastChangedAt: history.at(-1)?.changedAt ?? stored.sourceModifiedAt ?? stored.sourceCreatedAt,
@@ -1153,24 +1225,56 @@ function mapCase(
     department: snapshotText(stored.sourceSnapshot, "department"),
     inspectionPerformedAt: type === "INSPECTION" ? stored.inspectionPerformedAt : null,
     validUntil: type === "INSPECTION"
-      ? stored.inspectionValidUntil ?? stored.inspectionDueDate ??
-        inspectionValidUntilFromSnapshot(stored.sourceSnapshot)
+      ? stored.inspectionValidUntil
       : null,
-    description: stored.faultDescription, history, documents: [], photos: [],
+    description: stored.faultDescription, history, documents: [], photos: [], photoLabel: "Zdjęcia",
   };
-}
-
-function inspectionValidUntilFromSnapshot(snapshot: unknown): Date | null {
-  if (typeof snapshot !== "object" || snapshot === null || Array.isArray(snapshot)) return null;
-  const value = snapshot as Record<string, unknown>;
-  for (const candidate of [value.inspectionDueDate, value.inspectionDueDateRaw]) {
-    if (typeof candidate !== "string" || !candidate.trim()) continue;
-    const iso = new Date(candidate);
-    if (!Number.isNaN(iso.getTime())) return iso;
-    const parsed = parseInspectionDueDate(candidate);
-    if (parsed) return parsed;
+  if (type === "INSPECTION") {
+    if (!inspectionVerified) {
+      console.warn(`PORTAL_INSPECTION_VALIDATION_FAILED sourceRecordId=${stored.airtableRecordId}`);
+    }
+    item.inspectionDetails = {
+      id: stored.airtableRecordId,
+      number: stored.businessNumber,
+      status: currentStatus,
+      heroLabel: inspectionVerified ? stored.inspectionHeroLabel ?? null : null,
+      heroDescription: inspectionVerified ? stored.inspectionHeroDescription ?? null : null,
+      headerDateType: stored.inspectionHeaderDateType ?? null,
+      headerDate: stored.inspectionHeaderDate ?? null,
+      scheduledAt: stored.inspectionScheduledDate ?? null,
+      performedAt: stored.inspectionPerformedAt,
+      result: inspectionVerified ? stored.inspectionResult : null,
+      validUntil: inspectionVerified ? stored.inspectionValidUntil : null,
+      validUntilLabel: inspectionVerified ? snapshotText(stored.sourceSnapshot, "emmaValidUntil") : null,
+      notes: stored.inspectionNotes ?? null,
+      faults: stored.inspectionFaults ?? null,
+      admission: inspectionVerified ? stored.inspectionAdmission ?? null : null,
+      failureReason: inspectionVerified ? stored.inspectionFailureReason ?? null : null,
+      requiredAction: inspectionVerified ? stored.inspectionRequiredAction ?? null : null,
+      relatedRepairNumber: stored.relatedRepairNumber ?? null,
+      validation: stored.inspectionValidation ?? null,
+      verified: inspectionVerified,
+      variant: inspectionDesignVariant(currentStatus, stored.inspectionResult, inspectionVerified),
+      device: {
+        id: item.deviceId,
+        name: snapshotDeviceName,
+        manufacturer: snapshotManufacturer,
+        model: snapshotModel,
+        serialNumber: snapshotSerialNumber,
+        inventoryNumber: snapshotInventoryNumber,
+        productionYear: snapshotText(stored.sourceSnapshot, "productionYear"),
+        commissionedAt: snapshotText(stored.sourceSnapshot, "commissionedAt"),
+        warrantyUntil: snapshotText(stored.sourceSnapshot, "warrantyUntil"),
+        tagged: stored.inspectionDeviceTagged ?? null,
+        epc: stored.inspectionDeviceEpc ?? null,
+      },
+      location: {
+        hospital: stored.hospitalName,
+        department: snapshotText(stored.sourceSnapshot, "department"),
+      },
+    };
   }
-  return null;
+  return item;
 }
 
 function snapshotText(snapshot: unknown, key: string): string | null {
@@ -1184,14 +1288,46 @@ function isDateOnlySnapshot(snapshot: unknown, key: string): boolean {
   return Boolean(value && /^\d{4}-\d{2}-\d{2}$/.test(value));
 }
 
-function inspectionStateInconsistent(status: string, performedAt: Date | null): boolean {
-  return Boolean(performedAt && /^(DO REALIZACJI|DO WYKONANIA|PLANOWAN|ZAPLANOWAN)/
-    .test(status.trim().toUpperCase()));
+export function inspectionDisplayStatus(status: string, performedAt: Date | null): string {
+  void performedAt;
+  return status;
 }
 
-export function inspectionDisplayStatus(status: string, performedAt: Date | null): string {
-  return inspectionStateInconsistent(status, performedAt)
-    ? "Dane wymagają weryfikacji" : status;
+function isInspectionVerified(status: string, validation: string | null | undefined): boolean {
+  const normalizedStatus = status.trim().toLocaleUpperCase("pl-PL");
+  return normalizedStatus.length > 0
+    && normalizedStatus !== "DO WERYFIKACJI"
+    && validation?.trim().toLocaleUpperCase("pl-PL") === "OK";
+}
+
+export function inspectionPortalStatus(
+  status: string | null | undefined,
+  validation: string | null | undefined,
+): string {
+  const rawStatus = status?.trim() ?? "";
+  return isInspectionVerified(rawStatus, validation)
+    ? rawStatus
+    : "Dane wymagają weryfikacji";
+}
+
+export function inspectionDesignVariant(
+  status: string,
+  result: string | null,
+  verified = true,
+): InspectionDesignVariant {
+  if (!verified) return "VERIFY";
+  const normalizedStatus = status.trim().toLocaleUpperCase("pl-PL");
+  const normalizedResult = result?.trim().toLocaleUpperCase("pl-PL") ?? "";
+  if (normalizedStatus === "DO REALIZACJI") return "DUE";
+  if (normalizedStatus === "W TRAKCIE REALIZACJI") return "SCHEDULED";
+  if (normalizedStatus === "PROBLEM") return "PROBLEM";
+  if ((normalizedStatus === "WYKONANY" || normalizedStatus === "ZAKOŃCZONY") &&
+    normalizedResult === "SPRAWNY") return "PASSED";
+  if ((normalizedStatus === "WYKONANY" || normalizedStatus === "ZAKOŃCZONY") &&
+    normalizedResult === "WARUNKOWO DOPUSZCZONY") return "CONDITIONAL";
+  if ((normalizedStatus === "WYKONANY" || normalizedStatus === "ZAKOŃCZONY") &&
+    normalizedResult === "NIESPRAWNY") return "FAILED";
+  return "VERIFY";
 }
 
 function deduplicateAssets(assets: readonly PortalAssetRow[]): PortalAssetRow[] {
@@ -1270,6 +1406,15 @@ function assetTitle(role: CommunicationAssetRole, index: number): string {
 export function requiresCustomerAction(status: string | null): boolean {
   const normalized = status?.trim().toLocaleUpperCase("pl-PL") ?? "";
   return normalized === "OCZEKUJEMY NA DECYZJĘ" || normalized === "DO REALIZACJI";
+}
+
+export function polishPhotoCountLabel(count: number): string {
+  if (count <= 0) return "Zdjęcia";
+  if (count === 1) return "1 zdjęcie";
+  const mod10 = count % 10;
+  const mod100 = count % 100;
+  return `${count} ${mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)
+    ? "zdjęcia" : "zdjęć"}`;
 }
 
 function parseFilter(value: string | undefined): PortalCaseFilter {

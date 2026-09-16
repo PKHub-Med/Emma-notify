@@ -70,12 +70,28 @@ export class AirtableClient implements AirtableRecordSource, AirtableIncremental
     fieldIds: readonly string[],
     options: AirtableListOptions = {},
   ): Promise<{ records: AirtableRecord[]; metrics: AirtableRequestMetrics }> {
+    const idFields = fieldIds.filter((field) => field.startsWith("fld"));
+    const nameFields = fieldIds.filter((field) => !field.startsWith("fld"));
+    if (idFields.length > 0 && nameFields.length > 0) {
+      const first = await this.fetchAllRecordsWithMetrics(tableId, idFields, options);
+      const second = await this.fetchAllRecordsWithMetrics(tableId, nameFields, options);
+      const byId = new Map(second.records.map((record) => [record.id, record]));
+      return {
+        records: first.records.map((record) => mergeRecord(record, byId.get(record.id))),
+        metrics: {
+          requestsMade: first.metrics.requestsMade + second.metrics.requestsMade,
+          pagesFetched: first.metrics.pagesFetched + second.metrics.pagesFetched,
+        },
+      };
+    }
     const records: AirtableRecord[] = [];
     const metrics = { requestsMade: 0, pagesFetched: 0 };
     let offset: string | undefined;
 
     do {
-      const page = await this.fetchPage(tableId, fieldIds, options, offset, metrics);
+      const page = await this.fetchPage(
+        tableId, fieldIds, options, offset, metrics, nameFields.length === 0,
+      );
       records.push(...page.records);
       offset = page.offset;
     } while (offset);
@@ -88,13 +104,22 @@ export class AirtableClient implements AirtableRecordSource, AirtableIncremental
     recordId: string,
     fieldIds: readonly string[],
   ): Promise<AirtableRecord> {
+    const idFields = fieldIds.filter((field) => field.startsWith("fld"));
+    const nameFields = fieldIds.filter((field) => !field.startsWith("fld"));
+    if (idFields.length > 0 && nameFields.length > 0) {
+      const [first, second] = await Promise.all([
+        this.fetchRecord(tableId, recordId, idFields),
+        this.fetchRecord(tableId, recordId, nameFields),
+      ]);
+      return mergeRecord(first, second);
+    }
     // Airtable's retrieve-record endpoint rejects fields[] with HTTP 422. Use
     // the list endpoint with RECORD_ID() so the response remains field-limited.
     const url = new URL(
       `https://api.airtable.com/v0/${encodeURIComponent(this.baseId)}/${encodeURIComponent(tableId)}`,
     );
     url.searchParams.set("pageSize", "1");
-    url.searchParams.set("returnFieldsByFieldId", "true");
+    url.searchParams.set("returnFieldsByFieldId", String(nameFields.length === 0));
     for (const fieldId of fieldIds) url.searchParams.append("fields[]", fieldId);
     url.searchParams.set(
       "filterByFormula",
@@ -127,12 +152,13 @@ export class AirtableClient implements AirtableRecordSource, AirtableIncremental
     options: AirtableListOptions,
     offset?: string,
     operationMetrics?: AirtableRequestMetrics,
+    returnFieldsByFieldId = true,
   ): Promise<AirtablePage> {
     const url = new URL(
       `https://api.airtable.com/v0/${encodeURIComponent(this.baseId)}/${encodeURIComponent(tableId)}`,
     );
     url.searchParams.set("pageSize", "100");
-    url.searchParams.set("returnFieldsByFieldId", "true");
+    url.searchParams.set("returnFieldsByFieldId", String(returnFieldsByFieldId));
     for (const fieldId of fieldIds) url.searchParams.append("fields[]", fieldId);
     if (options.filterByFormula) {
       url.searchParams.set("filterByFormula", options.filterByFormula);
@@ -236,6 +262,11 @@ export class AirtableClient implements AirtableRecordSource, AirtableIncremental
   private backoffMilliseconds(attempt: number): number {
     return 500 * 2 ** (attempt - 1);
   }
+}
+
+function mergeRecord(primary: AirtableRecord, secondary: AirtableRecord | undefined): AirtableRecord {
+  if (!secondary) return primary;
+  return { ...primary, fields: { ...primary.fields, ...secondary.fields } };
 }
 
 function escapeFormulaString(value: string): string {

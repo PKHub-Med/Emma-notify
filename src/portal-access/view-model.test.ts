@@ -105,9 +105,9 @@ describe("paginated hospital portal", () => {
     expect(isPortalCaseRetained("INSPECTION", null, now)).toBe(true);
   });
 
-  it("shows a neutral display status without hiding inspection dates", () => {
+  it("does not infer a business status from the performed date", () => {
     expect(inspectionDisplayStatus("DO REALIZACJI", new Date("2026-08-25T10:00:00Z")))
-      .toBe("Dane wymagają weryfikacji");
+      .toBe("DO REALIZACJI");
     expect(inspectionDisplayStatus("DO REALIZACJI", null)).toBe("DO REALIZACJI");
   });
   it("renders at most 30 of 3200 records while preserving DB counts", async () => {
