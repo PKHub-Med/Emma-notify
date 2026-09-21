@@ -30,6 +30,17 @@ describe("shared unavailable-feature modal", () => {
     expect(html).not.toContain("inspection-v5-link:disabled");
     expect(html).not.toContain("button.disabled=true");
   });
+
+  it("renders the shared TARGET-aligned inspection layout from structural variants", () => {
+    const html = renderHospitalPortal(emptyView(), "nonce");
+
+    expect(html).toContain("const V5_VARIANTS={");
+    expect(html).toContain("function v5StatusPanel(d)");
+    expect(html).toContain("function v5DeviceSection(d)");
+    expect(html).toContain("function v5RelatedSection(d)");
+    expect(html).toContain("v5DeviceTile('RFID / EPC'");
+    expect(html).toContain("inspection-detail-active");
+  });
 });
 
 function emptyView(): HospitalPortalViewModel {
