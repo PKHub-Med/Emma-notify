@@ -185,6 +185,19 @@ describe("case mappers", () => {
     expect(mapped.inspectionAdmission).toBe("DOPUSZCZONO DO UZYTKU Z OGRANICZENIAMI");
   });
 
+  it.each([
+    ["single text value", ["2020"], "productionYear", "2020"],
+    ["number", [2020], "productionYear", "2020"],
+    ["date", ["2025-01-01"], "commissionedAt", "2025-01-01"],
+    ["empty array", [], "warrantyUntil", null],
+    ["null", null, "warrantyUntil", null],
+  ] as const)("normalizes Inspection lookup %s", (_label, input, field, expected) => {
+    const lookupField = INSPECTION_FIELDS[field];
+    const mapped = mapInspection(record("recLookup", { [lookupField]: input }));
+
+    expect(mapped.sourceSnapshot[field]).toBe(expected);
+  });
+
   it.each(["ZF", "UMÓWIONE"])(
     "never exposes Stan Admin %s as the customer-facing status",
     (adminStatus) => {

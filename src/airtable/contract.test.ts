@@ -96,4 +96,10 @@ describe("central Airtable contract", () => {
     expect(INSPECTION_FIELDS.dueDate).toBe("fldNMzupWUaEKzn7u");
     expect(INSPECTION_FIELDS.estimatedDuration).toBe("fldxx69OVN0ML7ZJG");
   });
+
+  it("identifies every Inspection field by stable Airtable Field ID", () => {
+    expect(Object.entries(INSPECTION_FIELDS).filter(([, fieldId]) =>
+      !fieldId.startsWith("fld"),
+    )).toEqual([]);
+  });
 });

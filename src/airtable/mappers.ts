@@ -180,9 +180,9 @@ export function mapInspection(record: AirtableRecord): MappedCase {
     relatedRepairNumber: toOptionalString(record.fields[INSPECTION_FIELDS.relatedRepairNumber]),
     deviceTagged: toOptionalString(record.fields[INSPECTION_FIELDS.deviceTagged]),
     epc: toOptionalString(record.fields[INSPECTION_FIELDS.epc]),
-    productionYear: toOptionalString(record.fields[INSPECTION_FIELDS.productionYear]),
-    commissionedAt: toOptionalString(record.fields[INSPECTION_FIELDS.commissionedAt]),
-    warrantyUntil: toOptionalString(record.fields[INSPECTION_FIELDS.warrantyUntil]),
+    productionYear: toSingleLookupString(record.fields[INSPECTION_FIELDS.productionYear]),
+    commissionedAt: toSingleLookupString(record.fields[INSPECTION_FIELDS.commissionedAt]),
+    warrantyUntil: toSingleLookupString(record.fields[INSPECTION_FIELDS.warrantyUntil]),
     inspectionDueDate: inspectionDueDate?.toISOString() ?? null,
     emmaValidUntil: toOptionalString(record.fields[INSPECTION_FIELDS.emmaValidUntil]),
     inspectionDueDateRaw: invalidDueDate ? dueDateRaw : null,
@@ -269,4 +269,19 @@ export function toEstimatedDurationSeconds(value: unknown): number | null {
   if (typeof value !== "string" || !value.trim()) return null;
   const parsed = Number(value.trim().replace(",", "."));
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+}
+
+export function toSingleLookupString(value: unknown): string | null {
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const normalized = toSingleLookupString(item);
+      if (normalized !== null) return normalized;
+    }
+    return null;
+  }
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed || null;
+  }
+  return typeof value === "number" && Number.isFinite(value) ? String(value) : null;
 }

@@ -365,9 +365,38 @@ export async function runPortalRefreshWorkerOnce(dependencies: {
         ? "LEASE_LOST"
         : "SYNC_FAILED",
     ).catch(() => false);
-    dependencies.log?.(`PORTAL_REFRESH_FAILED requestId=${claimed.id}`);
+    dependencies.log?.(
+      `PORTAL_REFRESH_FAILED requestId=${claimed.id} ${portalRefreshFailureDetails(error)}`,
+    );
   }
   return true;
+}
+
+function portalRefreshFailureDetails(error: unknown): string {
+  if (error instanceof AirtableRequestError) {
+    return [
+      `errorName=${error.name}`,
+      `errorCode=${error.code}`,
+      `requestType=${error.requestType}`,
+      `tableId=${safeLogText(error.tableId)}`,
+      ...(error.airtableErrorType
+        ? [`airtableType=${JSON.stringify(safeLogText(error.airtableErrorType))}`]
+        : []),
+      ...(error.airtableErrorMessage
+        ? [`airtableMessage=${JSON.stringify(safeLogText(error.airtableErrorMessage))}`]
+        : []),
+    ].join(" ");
+  }
+  if (error instanceof Error) {
+    return `errorName=${safeLogText(error.name)} errorMessage=${JSON.stringify(
+      safeLogText(error.message),
+    )}`;
+  }
+  return "errorName=UnknownError";
+}
+
+function safeLogText(value: string): string {
+  return value.replace(/[\u0000-\u001f\u007f]+/g, " ").trim().slice(0, 500);
 }
 
 async function syncRecords(

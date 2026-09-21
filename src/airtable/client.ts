@@ -17,17 +17,24 @@ export type AirtableRequestType = "LIST" | "RECORD";
 
 export class AirtableRequestError extends Error {
   readonly code: string;
+  readonly airtableErrorType: string | undefined;
+  readonly airtableErrorMessage: string | undefined;
 
   constructor(
     message: string,
     readonly tableId: string,
     readonly requestType: AirtableRequestType,
     readonly httpStatus?: number,
-    options?: ErrorOptions,
+    options?: ErrorOptions & {
+      airtableErrorType?: string;
+      airtableErrorMessage?: string;
+    },
   ) {
     super(message, options);
     this.name = "AirtableRequestError";
     this.code = httpStatus ? `AIRTABLE_HTTP_${httpStatus}` : "AIRTABLE_REQUEST_FAILED";
+    this.airtableErrorType = options?.airtableErrorType;
+    this.airtableErrorMessage = options?.airtableErrorMessage;
   }
 }
 
@@ -210,11 +217,13 @@ export class AirtableClient implements AirtableRecordSource, AirtableIncremental
       }
 
       if (!RETRYABLE_STATUSES.has(response.status) || attempt === MAX_ATTEMPTS) {
+        const details = await readAirtableErrorDetails(response);
         throw new AirtableRequestError(
           `Airtable ${requestType.toLowerCase()} request failed for table ${tableId} with status ${response.status}`,
           tableId,
           requestType,
           response.status,
+          details,
         );
       }
 
@@ -262,6 +271,35 @@ export class AirtableClient implements AirtableRecordSource, AirtableIncremental
   private backoffMilliseconds(attempt: number): number {
     return 500 * 2 ** (attempt - 1);
   }
+}
+
+async function readAirtableErrorDetails(response: Response): Promise<{
+  airtableErrorType?: string;
+  airtableErrorMessage?: string;
+}> {
+  try {
+    const body: unknown = await response.json();
+    if (!isObject(body) || !isObject(body.error)) return {};
+    const type = safeAirtableErrorText(body.error.type);
+    const message = safeAirtableErrorText(body.error.message);
+    return {
+      ...(type ? { airtableErrorType: type } : {}),
+      ...(message ? { airtableErrorMessage: message } : {}),
+    };
+  } catch {
+    return {};
+  }
+}
+
+function safeAirtableErrorText(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const sanitized = value
+    .replace(/[\u0000-\u001f\u007f]+/g, " ")
+    .replace(/\bBearer\s+\S+/gi, "Bearer [REDACTED]")
+    .replace(/\bpat[A-Za-z0-9._-]{8,}\b/g, "[REDACTED]")
+    .trim()
+    .slice(0, 500);
+  return sanitized || undefined;
 }
 
 function mergeRecord(primary: AirtableRecord, secondary: AirtableRecord | undefined): AirtableRecord {

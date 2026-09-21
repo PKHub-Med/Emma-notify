@@ -111,29 +111,26 @@ export const INSPECTION_FIELDS = {
   // Airtable Metadata API: "Czas realizacji", type=duration, format=h:mm.
   // Airtable returns this duration as a number of seconds.
   estimatedDuration: "fldxx69OVN0ML7ZJG",
-  // V5 fields intentionally use stable Airtable field names where the Metadata
-  // API field id has not yet been checked into this repository. AirtableClient
-  // supports mixed id/name projections without changing legacy mappings.
   adminStatus: "fldG5BLDUibBGubTp",
-  emmaStatus: "EMMA: Status przeglądu",
-  heroLabel: "EMMA: Hero label",
-  heroDescription: "EMMA: Hero opis",
-  emmaValidUntil: "EMMA: Ważny do",
-  failureReason: "EMMA: Powód niewykonania",
-  requiredAction: "EMMA: Wymagane działanie",
-  headerDateType: "EMMA: Typ daty",
-  headerDate: "EMMA: Data nagłówka",
-  validation: "EMMA: Walidacja danych",
-  notes: "UWAGI",
-  faults: "Usterki",
+  emmaStatus: "fldmUz2KEisNq4eLS",
+  heroLabel: "fldKF2iEJpZLQaq0X",
+  heroDescription: "fldhryET9v8VvlSjI",
+  emmaValidUntil: "fldoRHVmrApLesQ0G",
+  failureReason: "fldtEy3iLkLEIcNS4",
+  requiredAction: "fld4PSrL5FOAcmWGy",
+  headerDateType: "fldS4UMsyDg6ARL8N",
+  headerDate: "fld7WdWpenJrZVzNW",
+  validation: "fldCdR9xSBIHe5pTJ",
+  notes: "fldjcrr07DpMqPOZn",
+  faults: "fldXaJQ2OkS0UYveJ",
   // Separate from STAN; must never populate inspectionResult.
   admission: "fldWQzKcmaHodBwLF",
-  relatedRepairNumber: "Link to zlecenia serwisowe",
-  deviceTagged: "EMMA: Urządzenie oznakowane",
-  epc: "EPC",
-  productionYear: "Rok produkcji",
-  commissionedAt: "Data uruchomienia",
-  warrantyUntil: "Gwarancja",
+  relatedRepairNumber: "fldufTqEgiGdzGLcj",
+  deviceTagged: "fldjjuUHyttn7nfwY",
+  epc: "fldA6pBSxYQjb7F5y",
+  productionYear: "fldjp1TzSS88VETPq",
+  commissionedAt: "fld2nDB2vGyGl0CvR",
+  warrantyUntil: "fld2u5GhXYLeLawQ0",
 } as const;
 
 export const DEVICE_FIELDS = {

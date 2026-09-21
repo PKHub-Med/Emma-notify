@@ -283,6 +283,52 @@ describe("portal refresh worker", () => {
     expect(communicationStore.observedCount).toBe(4);
     expect(communicationStore.createdCount).toBe(2);
   });
+
+  it("logs the safe original Airtable cause when a portal refresh fails", async () => {
+    const requestStore = new MemoryWorkerStore({
+      id: "refresh-failed",
+      leaseToken: "assigned-by-claim",
+      sourceHospitalRecordId: "recHospitalA",
+      serviceOrderRecordIds: ["service-A"],
+      inspectionRecordIds: [],
+      deviceRecordIds: [],
+      taskRecordIds: [],
+    });
+    const log = vi.fn();
+    const error = new AirtableRequestError(
+      "Airtable record request failed",
+      AIRTABLE_TABLE_IDS.serviceOrders,
+      "RECORD",
+      422,
+      {
+        airtableErrorType: "UNKNOWN_FIELD_NAME",
+        airtableErrorMessage: "Unknown field: EMMA: Status przeglądu",
+      },
+    );
+
+    await runPortalRefreshWorkerOnce({
+      store: requestStore,
+      airtable: {
+        fetchAllRecords: vi.fn(),
+        fetchRecord: vi.fn().mockRejectedValue(error),
+      } as AirtableIncrementalSource,
+      incrementalStore: {} as IncrementalStore,
+      deviceStore: { upsert: vi.fn() },
+      taskStore: { upsertTask: vi.fn() },
+      communicationStore: noOpCommunicationStore(),
+      quietMinutes: 10,
+      now: () => new Date("2026-09-12T10:00:00.000Z"),
+      log,
+    });
+
+    expect(requestStore.status).toBe(PortalRefreshStatus.FAILED);
+    expect(log).toHaveBeenCalledWith(
+      `PORTAL_REFRESH_FAILED requestId=refresh-failed ` +
+      `errorName=AirtableRequestError errorCode=AIRTABLE_HTTP_422 requestType=RECORD ` +
+      `tableId=${AIRTABLE_TABLE_IDS.serviceOrders} airtableType="UNKNOWN_FIELD_NAME" ` +
+      `airtableMessage="Unknown field: EMMA: Status przeglądu"`,
+    );
+  });
 });
 
 class MemoryWorkerStore implements PortalRefreshWorkerStore {

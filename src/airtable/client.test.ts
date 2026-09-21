@@ -62,7 +62,13 @@ describe("AirtableClient", () => {
 
   it("reports safe Airtable request metadata without exposing credentials", async () => {
     const fetchFunction = vi.fn<typeof fetch>().mockResolvedValue(
-      new Response("", { status: 422 }),
+      new Response(JSON.stringify({
+        error: {
+          type: "UNKNOWN_FIELD_NAME",
+          message: "Unknown field: EMMA: Status przeglądu\n",
+        },
+        ignored: { token: "secret-token", records: ["private-record-data"] },
+      }), { status: 422, headers: { "content-type": "application/json" } }),
     );
     const client = new AirtableClient({
       baseId: "appBase",
@@ -77,6 +83,13 @@ describe("AirtableClient", () => {
         httpStatus: 422,
         requestType: "RECORD",
         tableId: "tblContacts",
+        airtableErrorType: "UNKNOWN_FIELD_NAME",
+        airtableErrorMessage: "Unknown field: EMMA: Status przeglądu",
+      });
+    await client.fetchRecord("tblContacts", "recContact", ["fldEmail"])
+      .catch((error: unknown) => {
+        expect(String(error)).not.toContain("secret-token");
+        expect(String(error)).not.toContain("private-record-data");
       });
   });
 
