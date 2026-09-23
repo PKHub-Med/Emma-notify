@@ -19,6 +19,7 @@ export const PORTAL_STYLES = String.raw`
   --blue-soft:#eaf0f9;
   --shadow:0 8px 20px rgba(18,38,63,.05);
   --radius:15px;
+  --mobile-nav-height:60px;
 }
 *{box-sizing:border-box}
 body{
@@ -556,7 +557,7 @@ button{font:inherit}
   .task{grid-template-columns:1fr}
   .task-side{text-align:left}
 }
-@media(max-width:800px){
+@media(max-width:768px){
   .app{display:block}
   .sidebar{min-height:auto}
   .workspace{padding:20px 14px 30px}
@@ -1270,13 +1271,12 @@ body.lightbox-open{overflow:hidden}
 .case-detail-screen>.page-head{display:none}
 .case-detail-screen>.panel.detail{padding:0;border:0;border-radius:0;background:transparent;box-shadow:none}
 .case-detail-screen>.panel.detail>.back{display:none}
-.case-detail-active>.portal-refresh-bar{position:absolute;z-index:5;top:28px;right:30px;min-height:44px;margin:0}
 .case-detail-active .portal-refresh-button{display:inline-flex;align-items:center;justify-content:center;gap:9px;min-height:44px;padding:0 18px;border-color:#cbd7e7;background:#fff;color:#07145d;box-shadow:0 3px 10px rgba(31,47,73,.04)}
 .portal-refresh-icon{display:inline-grid;place-items:center;flex:0 0 auto;width:20px;height:20px}.portal-refresh-icon svg{width:20px;height:20px;fill:none;stroke:#0d1895;stroke-width:2.3;stroke-linecap:round;stroke-linejoin:round}
 .case-detail-active .portal-refresh-button:hover{border-color:#8ca5c7;background:#f8faff}
 .case-detail-active .portal-refresh-message{position:absolute;top:50px;right:0;width:max-content;max-width:330px;padding:0!important;background:transparent!important;font-size:11px;font-weight:650;text-align:right}
-.case-detail-head{position:relative;display:flex;min-height:94px;padding:0 390px 17px 2px;border:0;align-items:flex-start}
-.case-detail-head-copy{min-width:0}.case-detail-breadcrumb{display:flex;align-items:center;gap:12px;margin-bottom:11px;color:#001a72;font-size:13px}.case-detail-breadcrumb button{padding:0;border:0;background:transparent;color:#0d54bc;font:inherit;cursor:pointer}.case-detail-breadcrumb button:hover{text-decoration:underline}.case-detail-title-row{display:flex;align-items:center;gap:14px;flex-wrap:wrap}.case-detail-title-row h1{margin:0;color:#06145d;font-size:30px;line-height:1.05;letter-spacing:-.035em}.case-detail-subtitle{margin:7px 0 0!important;color:#63779a!important;font-size:14px!important}.case-detail-head-meta{position:absolute;top:34px;right:178px;display:block;color:#63779a;text-align:right}.case-detail-head-meta p{margin:0;white-space:nowrap;font-size:12px}
+.case-detail-head{min-height:94px;padding:0 2px 17px;border:0;align-items:flex-start}
+.case-detail-head-copy{min-width:0}.case-detail-breadcrumb{display:flex;align-items:center;gap:12px;margin-bottom:11px;color:#001a72;font-size:13px}.case-detail-breadcrumb button{padding:0;border:0;background:transparent;color:#0d54bc;font:inherit;cursor:pointer}.case-detail-breadcrumb button:hover{text-decoration:underline}.case-detail-title-row{display:flex;align-items:center;gap:14px;flex-wrap:wrap}.case-detail-title-row h1{margin:0;color:#06145d;font-size:30px;line-height:1.05;letter-spacing:-.035em}.case-detail-subtitle{margin:7px 0 0!important;color:#63779a!important;font-size:14px!important}.case-detail-head-meta{display:block;color:#63779a;text-align:right}.case-detail-head-meta p{margin:0;white-space:nowrap;font-size:12px}
 .case-detail-status-pill{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:31px;padding:6px 13px;border-radius:999px;font-size:12px;font-weight:850;line-height:1;text-transform:uppercase;white-space:nowrap}.case-detail-status-pill .case-detail-icon{width:18px;height:18px}.case-detail-status-pill.is-large{min-width:190px;min-height:44px;padding:9px 18px;font-size:17px;text-transform:none}.case-detail-status-pill.is-success{background:#dff3e3;color:#09682b}.case-detail-status-pill.is-warning{background:#fff0d6;color:#b75200}.case-detail-status-pill.is-danger{background:#ffe0e3;color:#bf0718}.case-detail-status-pill.is-info{background:#dcecff;color:#0761cf}.case-detail-status-pill.is-neutral{background:#e7edf5;color:#425776}
 .case-detail-icon{display:inline-grid;place-items:center;flex:0 0 auto;width:24px;height:24px;color:currentColor}.case-detail-icon svg{width:100%;height:100%;stroke-linecap:round;stroke-linejoin:round}.case-detail-icon.is-stroke svg{fill:none;stroke:currentColor;stroke-width:2}.case-detail-icon.is-fill svg{fill:currentColor;stroke:currentColor;stroke-width:1.5}
 .case-detail-hero{display:grid;grid-template-columns:116px minmax(0,1fr) minmax(280px,34%);min-height:136px;margin:0;border:1px solid #d6e0ec;border-radius:7px;background:#fff;overflow:hidden;box-shadow:0 4px 14px rgba(21,45,82,.035)}
@@ -1288,19 +1288,79 @@ body.lightbox-open{overflow:hidden}
 .case-detail-media-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}.case-detail-media-grid .case-detail-section{display:flex;min-height:174px;flex-direction:column}.case-detail-photo-count{color:#65789c;font-size:11px}.case-detail-media-empty{display:grid;grid-template-columns:50px minmax(0,1fr);align-items:center;column-gap:12px;min-height:92px;color:#59729a}.case-detail-media-empty>.case-detail-icon{grid-row:1/3;width:50px;height:50px;padding:13px;border-radius:50%;background:#f0f5fb;color:#0a3480}.case-detail-media-empty>div{display:none}.case-detail-media-empty strong{align-self:end;color:#4e6790;font-size:13px}.case-detail-media-empty p{align-self:start;margin:4px 0 0;font-size:11px;line-height:1.4}.case-detail-media-grid .document-link{min-height:72px;border-radius:5px;background:#f2f6fb}.case-detail-media-grid .document-open{background:#0b2c61}.case-detail-media-grid .photo-gallery{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}.case-detail-media-grid .photo-thumb{aspect-ratio:1.25;border-radius:5px}.case-detail-media-grid .photo-caption{display:none}.photo-gallery.is-collapsed .photo-thumb:nth-child(n+5){display:none}.case-detail-gallery-more{align-self:flex-end;margin-top:auto;padding:7px 12px;border:1px solid #bfcde0;border-radius:5px;background:#fff;color:#06145d;font:inherit;font-size:11px;font-weight:750;cursor:pointer}
 .case-detail-links{display:block}.case-detail-links-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}.case-detail-link{display:grid!important;grid-template-columns:26px minmax(0,1fr) 18px;align-items:center;gap:8px;width:100%;min-height:48px;padding:8px 13px;border:1px solid #c7d3e4;border-radius:5px;background:#fff;color:#06145d;font:inherit;font-size:12px;font-weight:750;text-align:left;cursor:pointer}.case-detail-link>.case-detail-icon{width:24px;height:24px}.case-detail-link-arrow{justify-self:end;font-size:18px}.case-detail-link:hover,.case-detail-link:focus-visible{border-color:#7699ca;background:#f7faff}.case-detail-safe{margin-top:0;padding:18px;border:1px solid #d6e0ec;border-radius:7px;background:#f4f7fb}
 /* Repair detail values are copied from emma_naprawa_FINAL_1to1.html. */
-.case-detail-repair-active>.portal-refresh-bar{top:27px;right:7px}.case-detail-repair-active .portal-refresh-button{width:188px;height:43px;min-height:43px;padding:0;border-radius:6px;gap:13px;font-size:14px}
-.case-detail-repair-head{height:108px;min-height:108px;padding-bottom:0}.case-detail-repair-head .case-detail-breadcrumb{gap:14px;margin-bottom:10px}.case-detail-repair-head .case-detail-title-row{gap:14px}.case-detail-repair-head .case-detail-title-row h1{font-size:29px;line-height:34px;font-weight:800;letter-spacing:-.7px}.case-detail-repair-head .case-detail-status-pill{height:34px;padding:0 17px 0 12px;font-size:13px}.case-detail-repair-head .case-detail-status-pill .case-detail-icon{width:20px;height:20px}.case-detail-repair-head .case-detail-subtitle{margin-top:4px!important;line-height:20px}.case-detail-repair-head .case-detail-head-meta{top:37px;right:207px}
+.case-detail-repair-active .portal-refresh-button{width:188px;height:43px;min-height:43px;padding:0;border-radius:6px;gap:13px;font-size:14px}
+.case-detail-repair-head{height:108px;min-height:108px;padding-bottom:0}.case-detail-repair-head .case-detail-breadcrumb{gap:14px;margin-bottom:10px}.case-detail-repair-head .case-detail-title-row{gap:14px}.case-detail-repair-head .case-detail-title-row h1{font-size:29px;line-height:34px;font-weight:800;letter-spacing:-.7px}.case-detail-repair-head .case-detail-status-pill{height:34px;padding:0 17px 0 12px;font-size:13px}.case-detail-repair-head .case-detail-status-pill .case-detail-icon{width:20px;height:20px}.case-detail-repair-head .case-detail-subtitle{margin-top:4px!important;line-height:20px}
 .case-detail-repair-hero{height:121px;min-height:121px;grid-template-columns:116px minmax(0,1fr) 212px;gap:20px;border-radius:5px}.case-detail-repair-hero .case-detail-device-icon{width:116px;height:92px;margin:0 0 0 14px;border-radius:4px;background:#edf6fc}.case-detail-repair-hero .case-detail-device-icon .case-detail-icon{width:55px;height:55px}.case-detail-repair-hero .case-detail-device{padding:11px 14px}.case-detail-repair-hero .case-detail-device h2{margin-bottom:6px;font-size:23px;line-height:27px}.case-detail-repair-hero .case-detail-device-sub{font-size:16px;line-height:22px}.case-detail-repair-hero .case-detail-device-id{font-size:15px;line-height:22px}.case-detail-repair-state{height:91px;margin-right:14px;padding:12px 13px;border-radius:4px;background:#f5f8fc}.case-detail-repair-state>span{display:block;margin-bottom:10px;color:#0b246c;font-size:13px;line-height:18px;font-weight:700}.case-detail-repair-state-pill{display:flex;align-items:center;justify-content:center;gap:12px;height:43px;border-radius:22px;font-size:14px;font-weight:800}.case-detail-repair-state-pill .case-detail-icon{width:34px;height:34px;padding:7px;border-radius:50%;color:#fff}.case-detail-repair-state-pill.is-success{background:#dff3e3;color:#09682b}.case-detail-repair-state-pill.is-success .case-detail-icon{background:#188344}.case-detail-repair-state-pill.is-warning{background:#fff0d6;color:#b75200}.case-detail-repair-state-pill.is-warning .case-detail-icon{background:#ff9000}.case-detail-repair-state-pill.is-danger{background:#ffe0e5;color:#b61425}.case-detail-repair-state-pill.is-danger .case-detail-icon{background:#ed1c2c}.case-detail-repair-state-pill.is-neutral{background:#e7edf5;color:#425776}.case-detail-repair-state-pill.is-neutral .case-detail-icon{background:#536c91}
 .case-detail-repair-summary{margin-top:15px;padding:9px 15px 15px;border-radius:5px}.case-detail-repair-summary .case-detail-section-head{height:33px;margin-bottom:2px}.case-detail-repair-summary .case-detail-section-title{gap:12px}.case-detail-repair-summary .case-detail-section-title>.case-detail-icon{width:27px;height:27px}.case-detail-repair-summary .case-detail-result-grid{gap:8px}.case-detail-repair-summary .case-detail-summary{min-height:64px;padding:10px 13px;grid-template-columns:36px 1fr;gap:12px;background:#edf6fd}.case-detail-repair-summary .case-detail-summary:nth-child(n+4){min-height:99px}.case-detail-repair-summary .case-detail-summary>.case-detail-icon{width:27px;height:27px}.case-detail-repair-summary .case-detail-summary span{font-size:11px;line-height:14px}.case-detail-repair-summary .case-detail-summary strong{font-size:16px;line-height:20px}.case-detail-repair-summary .case-detail-summary small{margin-top:8px;font-size:11px;line-height:15px}
 .case-detail-repair-summary~.case-detail-device-data{margin-top:15px;padding:7px 15px 11px;border-radius:5px}.case-detail-repair-summary~.case-detail-device-data .case-detail-section-head{height:33px;margin-bottom:1px}.case-detail-repair-summary~.case-detail-device-data .case-detail-grid{gap:8px}.case-detail-repair-summary~.case-detail-device-data .case-detail-pair{min-height:61px;padding:10px 14px;background:#eef6fd}.case-detail-repair-summary~.case-detail-device-data .case-detail-pair>span{font-size:11px;line-height:14px}.case-detail-repair-summary~.case-detail-device-data .case-detail-pair>strong{font-size:15px;line-height:19px}.case-detail-repair-summary~.case-detail-device-data .case-detail-rfid-dot{width:14px;height:14px;box-shadow:none}
 .case-detail-repair-summary~.case-detail-location{margin-top:17px;padding:8px 15px 15px;border-radius:5px}.case-detail-repair-summary~.case-detail-location .case-detail-section-head{height:33px;margin-bottom:2px}.case-detail-repair-summary~.case-detail-location .case-detail-pair{min-height:60px;background:#eef6fd}.case-detail-repair-notes{margin-top:15px;padding:7px 15px 11px;border-radius:5px}.case-detail-repair-notes .case-detail-section-head{height:33px;margin-bottom:3px}.case-detail-repair-notes-box{min-height:61px;padding:12px 14px;border-radius:4px;background:#eef6fd;color:#526b9b;font-size:12px;line-height:18px;white-space:pre-line}
 .case-detail-repair-media{margin-top:16px;gap:8px}.case-detail-repair-media .case-detail-section{min-height:116px;height:auto;margin-top:0;padding:8px 14px;border-radius:5px}.case-detail-repair-media .case-detail-section-head{height:34px;margin-bottom:0}.case-detail-repair-media .case-detail-media-empty{min-height:58px;grid-template-columns:62px 1fr;gap:0 16px}.case-detail-repair-media .case-detail-media-empty>.case-detail-icon{width:52px;height:52px;padding:13px}.case-detail-repair-media .case-detail-media-empty strong{font-size:13px;line-height:18px}.case-detail-repair-media .case-detail-media-empty p{font-size:12px;line-height:17px}.case-detail-repair-media+.case-detail-links{margin-top:18px;padding:7px 15px 13px;border-radius:5px}.case-detail-repair-media+.case-detail-links .case-detail-section-head{height:33px;margin-bottom:2px}.case-detail-repair-media+.case-detail-links .case-detail-link{height:49px;min-height:49px;padding:0 12px;border-radius:4px}.case-detail-repair-media+.case-detail-links .case-detail-link>.case-detail-icon{width:26px;height:26px}
-@media(max-width:980px){
-  .case-detail-head{padding-right:0}.case-detail-head-meta{position:static;margin-top:10px;text-align:left}.case-detail-active>.portal-refresh-bar{position:static;justify-content:flex-start;margin:0 0 14px}.case-detail-active .portal-refresh-message{position:static;width:auto;max-width:none;text-align:left}.case-detail-hero{grid-template-columns:100px minmax(0,1fr) minmax(230px,34%)}
+/* Final shared Repair / Inspection responsive shell. */
+.case-detail-header{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:start;gap:24px;min-height:94px;padding:0 2px 17px;border:0}
+.case-detail-header-main{min-width:0}
+.case-detail-header-actions{position:relative;display:flex;align-items:center;justify-content:flex-end;gap:24px;min-width:0;padding-top:28px}
+.case-detail-header .case-detail-head-meta{position:static;display:block;margin:0;color:#63779a;text-align:right}
+.case-detail-header .case-detail-head-meta p{margin:0;white-space:nowrap;font-size:12px}
+.case-detail-header .portal-refresh-bar{position:static;display:flex;align-items:center;justify-content:flex-end;gap:10px;min-height:44px;margin:0}
+.case-detail-header .portal-refresh-message{position:absolute;top:48px;right:0;width:max-content;max-width:330px;padding:0!important;background:transparent!important;font-size:11px;font-weight:650;text-align:right}
+.case-detail-repair-head{height:auto;min-height:108px;padding-bottom:14px}
+.case-detail-repair-head .case-detail-head-meta{position:static}
+.case-detail-active>.portal-refresh-bar{position:static}
+.document-link{display:grid;grid-template-columns:minmax(0,1fr) auto}
+.document-name>span:last-child{min-width:0}
+.document-name b,.document-name span{overflow-wrap:anywhere}
+.case-detail-link>span:nth-child(2){min-width:0;overflow-wrap:anywhere}
+.case-detail-link-arrow{flex-shrink:0}
+@media(min-width:769px) and (max-width:1080px){
+  .workspace.case-detail-active{padding-right:22px;padding-left:22px}
+  .case-detail-header{grid-template-columns:1fr;gap:10px}
+  .case-detail-header-actions{justify-content:flex-start;padding-top:0}
+  .case-detail-header .case-detail-head-meta{text-align:left}
+  .case-detail-hero,.case-detail-repair-hero{height:auto;grid-template-columns:100px minmax(0,1fr)}
+  .case-detail-result,.case-detail-repair-state{grid-column:1/-1;width:auto;height:auto;margin:0;border-top:1px solid #d6e0ec}
+  .case-detail-result-grid,.case-detail-device-data .case-detail-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
 }
 @media(max-width:768px){
-  .workspace.case-detail-active{padding:14px 12px 88px}.case-detail-active>.portal-refresh-bar{align-items:stretch;flex-direction:column}.case-detail-repair-active .portal-refresh-button{width:100%}.case-detail-head{min-height:0;padding:0 0 14px}.case-detail-title-row{align-items:flex-start;flex-direction:column;gap:9px}.case-detail-title-row h1{font-size:27px}.case-detail-head-meta{margin-top:8px}.case-detail-hero{grid-template-columns:74px minmax(0,1fr);min-height:0}.case-detail-device-icon{width:58px;height:72px;margin:14px 0 14px 12px}.case-detail-device-icon .case-detail-icon{width:38px;height:38px}.case-detail-device{padding:16px 10px}.case-detail-device h2{font-size:20px}.case-detail-device-sub,.case-detail-device-id{font-size:12px}.case-detail-result{grid-column:1/-1;align-items:flex-start;padding:14px 16px;border-top:1px solid #d6e0ec;text-align:left}.case-detail-status-pill.is-large{min-width:0;font-size:15px}.case-detail-section{padding:15px}.case-detail-section-head{align-items:flex-start}.case-detail-section-action{max-width:48%;text-align:right}.case-detail-result-grid,.case-detail-device-data .case-detail-grid{grid-template-columns:1fr}.case-detail-summary{min-height:64px}.case-detail-status-panel{grid-template-columns:1fr}.case-detail-location .case-detail-grid,.case-detail-media-grid,.case-detail-links-grid{grid-template-columns:1fr}.case-detail-media-grid .case-detail-section{min-height:150px}.case-detail-links-grid{gap:8px}
+  .content{padding-bottom:0}
+  .workspace,.workspace.case-detail-active{width:100%;padding:16px 16px calc(var(--mobile-nav-height) + env(safe-area-inset-bottom) + 16px)}
+  .mobile-nav{min-height:calc(var(--mobile-nav-height) + env(safe-area-inset-bottom))}
+  .case-detail-header{display:block;min-height:0;padding:0 0 16px}
+  .case-detail-breadcrumb{margin-bottom:14px}
+  .case-detail-title-row{align-items:flex-start;flex-direction:column;gap:10px}
+  .case-detail-title-row h1,.case-detail-repair-head .case-detail-title-row h1{font-size:clamp(30px,9vw,35px);line-height:1.08;letter-spacing:-.035em}
+  .case-detail-subtitle,.case-detail-repair-head .case-detail-subtitle{margin-top:10px!important;line-height:1.5}
+  .case-detail-header-actions{display:flex;align-items:stretch;flex-direction:column;gap:10px;padding-top:14px}
+  .case-detail-header .case-detail-head-meta{margin:0;text-align:left}
+  .case-detail-header .case-detail-head-meta p{white-space:normal}
+  .case-detail-header .portal-refresh-bar{align-items:stretch;flex-direction:column;justify-content:flex-start;width:100%;margin:0}
+  .case-detail-header .portal-refresh-button,.case-detail-repair-active .portal-refresh-button{width:100%}
+  .case-detail-header .portal-refresh-message{position:static;width:auto;max-width:none;text-align:left}
+  .case-detail-hero,.case-detail-repair-hero{height:auto;min-height:0;grid-template-columns:82px minmax(0,1fr);gap:0}
+  .case-detail-device-icon,.case-detail-repair-hero .case-detail-device-icon{align-self:start;width:64px;height:72px;margin:14px 0 14px 12px}
+  .case-detail-device-icon .case-detail-icon,.case-detail-repair-hero .case-detail-device-icon .case-detail-icon{width:40px;height:40px}
+  .case-detail-device,.case-detail-repair-hero .case-detail-device{min-width:0;padding:16px 12px}
+  .case-detail-device h2,.case-detail-repair-hero .case-detail-device h2{font-size:20px;line-height:1.2;overflow-wrap:anywhere}
+  .case-detail-device-sub,.case-detail-device-id,.case-detail-repair-hero .case-detail-device-sub,.case-detail-repair-hero .case-detail-device-id{font-size:12px;line-height:1.5;overflow-wrap:anywhere}
+  .case-detail-result,.case-detail-repair-state{grid-column:1/-1;align-items:flex-start;width:auto;height:auto;margin:0;padding:14px 16px;border-top:1px solid #d6e0ec;text-align:left}
+  .case-detail-repair-state-pill{width:100%;height:auto;min-height:43px;padding:7px 12px}
+  .case-detail-status-pill.is-large{min-width:0;font-size:15px}
+  .case-detail-section,.case-detail-repair-summary,.case-detail-repair-summary~.case-detail-device-data,.case-detail-repair-summary~.case-detail-location,.case-detail-repair-notes,.case-detail-repair-media .case-detail-section,.case-detail-repair-media+.case-detail-links{padding:15px}
+  .case-detail-section-head,.case-detail-repair-summary .case-detail-section-head,.case-detail-repair-summary~.case-detail-device-data .case-detail-section-head,.case-detail-repair-summary~.case-detail-location .case-detail-section-head,.case-detail-repair-notes .case-detail-section-head,.case-detail-repair-media .case-detail-section-head,.case-detail-repair-media+.case-detail-links .case-detail-section-head{height:auto;min-height:33px;align-items:flex-start}
+  .case-detail-section-title h3{font-size:clamp(17px,5vw,19px)!important}
+  .case-detail-section-action{max-width:48%;text-align:right}
+  .case-detail-result-grid,.case-detail-device-data .case-detail-grid,.case-detail-location .case-detail-grid,.case-detail-media-grid,.case-detail-links-grid{grid-template-columns:1fr}
+  .case-detail-summary,.case-detail-repair-summary .case-detail-summary,.case-detail-repair-summary .case-detail-summary:nth-child(n+4),.case-detail-pair,.case-detail-repair-summary~.case-detail-device-data .case-detail-pair{height:auto;min-height:0}
+  .case-detail-status-panel{grid-template-columns:1fr}
+  .case-detail-media-grid .case-detail-section,.case-detail-repair-media .case-detail-section{height:auto;min-height:0}
+  .case-detail-links-grid{gap:8px}
+  .document-link{grid-template-columns:minmax(0,1fr) auto;min-width:0}
 }
-@media(min-width:769px) and (max-width:1080px){.case-detail-device-data .case-detail-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:420px){
+  .case-detail-hero,.case-detail-repair-hero{grid-template-columns:1fr}
+  .case-detail-device-icon,.case-detail-repair-hero .case-detail-device-icon{width:calc(100% - 24px);height:72px;margin:12px}
+  .case-detail-device,.case-detail-repair-hero .case-detail-device{padding:4px 16px 16px}
+  .document-link{grid-template-columns:minmax(0,1fr)}
+  .document-open{justify-self:start;margin-left:37px;white-space:normal}
+}
 [hidden]{display:none!important}
 `;
