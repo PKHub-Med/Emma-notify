@@ -87,6 +87,11 @@ describe("central Airtable contract", () => {
       location: "fldl06MEL6RkrDo21",
       hospitalLink: "fldMBpYguSqrxskc4",
       deviceStatus: "fldWbzAsP0qK4t5ud",
+      emmaDeviceStatus: "fld8McLg8jufDFT9y",
+      productionYear: "fldi9HQzAEB9pwcWs",
+      commissionedAt: "fldm1LzJ9gBTkdLRk",
+      warrantyUntil: "fldf8ZRjIpJKh3oIb",
+      repairEpc: "fldAsXSwDn1zfea9V",
       sourceModifiedAt: "fldE4CsBR20ba22Qv",
     });
     expect(INSPECTION_FIELDS.performedAt).toBe("fldKnyZZ2YdDADoI9");

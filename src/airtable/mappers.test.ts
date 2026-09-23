@@ -32,6 +32,12 @@ describe("case mappers", () => {
       [SERVICE_ORDER_FIELDS.sourceModifiedAt]: "2026-08-08T10:00:00.000Z",
       [SERVICE_ORDER_FIELDS.reportedAt]: "2026-08-02T07:30:00.000Z",
       [SERVICE_ORDER_FIELDS.completedAt]: "2026-08-07T14:45:00.000Z",
+      [SERVICE_ORDER_FIELDS.repairHeroLabel]: "DIAGNOSTYKA",
+      [SERVICE_ORDER_FIELDS.repairHeroDescription]: "Urządzenie jest w diagnostyce.",
+      [SERVICE_ORDER_FIELDS.repairReporter]: "Klinika Kardiologii",
+      [SERVICE_ORDER_FIELDS.repairValidation]: "OK",
+      [SERVICE_ORDER_FIELDS.repairOfferNumber]: "OF/2026/12",
+      [SERVICE_ORDER_FIELDS.repairDescription]: "Wymieniono moduł.",
     }));
 
     expect(mapped).toMatchObject({
@@ -48,6 +54,12 @@ describe("case mappers", () => {
       faultDescription: "Usterka",
       contactRecordIds: ["recContactA", "recContactB"],
       sourceHospitalRecordId: "recHospital",
+      repairHeroLabel: "DIAGNOSTYKA",
+      repairHeroDescription: "Urządzenie jest w diagnostyce.",
+      repairReporter: "Klinika Kardiologii",
+      repairValidation: "OK",
+      repairOfferNumber: "OF/2026/12",
+      repairDescription: "Wymieniono moduł.",
     });
     expect(mapped.sourceSnapshot).not.toHaveProperty("contactRecordIds");
     expect(mapped.reportedAt?.toISOString()).toBe("2026-08-02T07:30:00.000Z");

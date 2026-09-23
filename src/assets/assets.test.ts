@@ -59,6 +59,7 @@ describe("communication asset discovery", () => {
       fields: {
         [SERVICE_ORDER_ATTACHMENT_FIELDS.repairProtocol]: [attachment("att-repair", "repair.pdf")],
         [SERVICE_ORDER_ATTACHMENT_FIELDS.diagnosticProtocol]: [attachment("att-diagnostic", "diag.pdf")],
+        [SERVICE_ORDER_ATTACHMENT_FIELDS.offerPdf]: [attachment("att-offer", "offer.pdf")],
         [SERVICE_ORDER_ATTACHMENT_FIELDS.photo1]: [attachment("att-photo-1", "one.jpg", "image/jpeg")],
         [SERVICE_ORDER_ATTACHMENT_FIELDS.photo2]: [attachment("att-photo-2", "two.png", "image/png")],
       },
@@ -79,6 +80,7 @@ describe("communication asset discovery", () => {
       [
         SERVICE_ORDER_ATTACHMENT_FIELDS.repairProtocol,
         SERVICE_ORDER_ATTACHMENT_FIELDS.diagnosticProtocol,
+        SERVICE_ORDER_ATTACHMENT_FIELDS.offerPdf,
         SERVICE_ORDER_ATTACHMENT_FIELDS.photo1,
         SERVICE_ORDER_ATTACHMENT_FIELDS.photo2,
       ],
@@ -86,11 +88,12 @@ describe("communication asset discovery", () => {
     expect(registered.map((item) => [item.sourceAttachmentId, item.role])).toEqual([
       ["att-repair", CommunicationAssetRole.REPAIR_PROTOCOL],
       ["att-diagnostic", CommunicationAssetRole.DIAGNOSTIC_PROTOCOL],
+      ["att-offer", CommunicationAssetRole.OTHER_DOCUMENT],
       ["att-photo-1", CommunicationAssetRole.PHOTO],
       ["att-photo-2", CommunicationAssetRole.PHOTO],
     ]);
     expect(registered.map((item) => item.kind)).toEqual([
-      StoredFileKind.DOCUMENT, StoredFileKind.DOCUMENT,
+      StoredFileKind.DOCUMENT, StoredFileKind.DOCUMENT, StoredFileKind.DOCUMENT,
       StoredFileKind.IMAGE, StoredFileKind.IMAGE,
     ]);
   });

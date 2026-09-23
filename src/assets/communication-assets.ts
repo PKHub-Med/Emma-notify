@@ -131,6 +131,7 @@ const ASSET_FIELD_ALLOWLIST: Partial<Record<CommunicationScenario, readonly Allo
   [CommunicationScenario.REPAIR_COMPLETED]: [
     { fieldId: SERVICE_ORDER_ATTACHMENT_FIELDS.repairProtocol, role: CommunicationAssetRole.REPAIR_PROTOCOL, kind: StoredFileKind.DOCUMENT },
     { fieldId: SERVICE_ORDER_ATTACHMENT_FIELDS.diagnosticProtocol, role: CommunicationAssetRole.DIAGNOSTIC_PROTOCOL, kind: StoredFileKind.DOCUMENT },
+    { fieldId: SERVICE_ORDER_ATTACHMENT_FIELDS.offerPdf, role: CommunicationAssetRole.OTHER_DOCUMENT, kind: StoredFileKind.DOCUMENT },
     { fieldId: SERVICE_ORDER_ATTACHMENT_FIELDS.photo1, role: CommunicationAssetRole.PHOTO, kind: StoredFileKind.IMAGE },
     { fieldId: SERVICE_ORDER_ATTACHMENT_FIELDS.photo2, role: CommunicationAssetRole.PHOTO, kind: StoredFileKind.IMAGE },
   ],

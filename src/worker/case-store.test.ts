@@ -30,6 +30,34 @@ describe("TrackedCase completedAt persistence", () => {
     }));
   });
 
+  it("persists explicit repair detail columns in baseline payloads", async () => {
+    const upsert = vi.fn(async () => ({ id: "case-1" }));
+    const transaction = {
+      trackedCase: { upsert },
+      trackedCaseDevice: {
+        deleteMany: vi.fn(async () => ({ count: 0 })),
+        createMany: vi.fn(async () => ({ count: 0 })),
+      },
+    } as unknown as Prisma.TransactionClient;
+
+    await new PrismaBaselineStore(transaction).upsertCase(
+      serviceOrder("2026-09-11T15:30:00.000Z"),
+      new Date("2026-09-12T08:00:00.000Z"),
+    );
+
+    expect(upsert).toHaveBeenCalledWith(expect.objectContaining({
+      create: expect.objectContaining({
+        repairHeroLabel: "DIAGNOSTYKA",
+        repairHeroDescription: "Opis hero",
+        repairReporter: "Klinika",
+        repairValidation: "OK",
+        repairOfferNumber: "OF/12",
+        repairDescription: "Opis naprawy",
+      }),
+      update: expect.objectContaining({ repairOfferNumber: "OF/12" }),
+    }));
+  });
+
   it("includes completedAt in an incremental status-change update payload", async () => {
     const completedAt = new Date("2026-09-11T15:30:00.000Z");
     const update = vi.fn(async () => ({ id: "case-1" }));
@@ -73,6 +101,12 @@ function serviceOrder(completedAt: string, status?: string) {
     createdTime: "2026-09-01T08:00:00.000Z",
     fields: {
       [SERVICE_ORDER_FIELDS.completedAt]: completedAt,
+      [SERVICE_ORDER_FIELDS.repairHeroLabel]: "DIAGNOSTYKA",
+      [SERVICE_ORDER_FIELDS.repairHeroDescription]: "Opis hero",
+      [SERVICE_ORDER_FIELDS.repairReporter]: "Klinika",
+      [SERVICE_ORDER_FIELDS.repairValidation]: "OK",
+      [SERVICE_ORDER_FIELDS.repairOfferNumber]: "OF/12",
+      [SERVICE_ORDER_FIELDS.repairDescription]: "Opis naprawy",
       ...(status ? { [SERVICE_ORDER_FIELDS.customerStatus]: status } : {}),
     },
   };

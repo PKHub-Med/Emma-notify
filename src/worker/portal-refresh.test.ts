@@ -103,12 +103,14 @@ describe("portal refresh worker", () => {
     });
     const airtable = { fetchAllRecords, fetchRecord } as AirtableIncrementalSource;
     const portalCases = [{ airtableRecordId: "service-A", completedAt: null as Date | null }];
+    const refreshedCases: MappedCase[] = [];
     const listVisibleRepairs = () => portalCases.filter((item) =>
       isPortalCaseRetained("REPAIR", item.completedAt, new Date("2026-09-12T10:00:00Z")));
     expect(listVisibleRepairs()).toHaveLength(1);
     const incrementalStore = {
       findCase: vi.fn().mockResolvedValue(null),
       upsertCaseWithoutEvent: vi.fn(async (mapped: MappedCase) => {
+        refreshedCases.push(mapped);
         const item = portalCases.find((candidate) =>
           candidate.airtableRecordId === mapped.airtableRecordId);
         if (item) item.completedAt = mapped.completedAt;
@@ -116,7 +118,7 @@ describe("portal refresh worker", () => {
       }),
       syncRecipients: vi.fn().mockResolvedValue(undefined),
     } as unknown as IncrementalStore;
-    const devices: Array<{ department: string | null }> = [];
+    const devices: Array<{ department: string | null; emmaDeviceStatus: string | null; repairEpc: string | null }> = [];
     const communicationStore = {
       isBaselineCompleted: vi.fn().mockResolvedValue(true),
       observe: vi.fn().mockResolvedValue({ outcome: "NO_SCENARIO", revision: 1 }),
@@ -127,7 +129,11 @@ describe("portal refresh worker", () => {
       airtable,
       incrementalStore,
       deviceStore: { async upsert(device: MappedDevice) {
-        devices.push({ department: device.department });
+        devices.push({
+          department: device.department,
+          emmaDeviceStatus: device.emmaDeviceStatus,
+          repairEpc: device.repairEpc,
+        });
       } },
       taskStore: { upsertTask: vi.fn() },
       communicationStore,
@@ -149,7 +155,17 @@ describe("portal refresh worker", () => {
       completedAt: new Date("2026-04-01T00:00:00.000Z"),
     }]);
     expect(listVisibleRepairs()).toEqual([]);
-    expect(devices).toEqual([{ department: "Nowy Oddział" }]);
+    expect(refreshedCases[0]).toMatchObject({
+      repairHeroLabel: "DIAGNOSTYKA",
+      repairReporter: "Klinika",
+      repairOfferNumber: "OF/12",
+      repairDescription: "Opis naprawy",
+    });
+    expect(devices).toEqual([{
+      department: "Nowy Oddział",
+      emmaDeviceStatus: "NIESPRAWNY",
+      repairEpc: "EPC-123",
+    }]);
     expect(requestStore.status).toBe(PortalRefreshStatus.SUCCEEDED);
     expect(requestStore.claimCount).toBe(2);
     expect(requestStore.succeededCount).toBe(1);
@@ -381,6 +397,10 @@ function serviceOrderRecord(
       [SERVICE_ORDER_FIELDS.deviceLink]: ["recDeviceA"],
       [SERVICE_ORDER_FIELDS.customerStatus]: "ZAKOŃCZONE",
       [SERVICE_ORDER_FIELDS.completedAt]: completedAt,
+      [SERVICE_ORDER_FIELDS.repairHeroLabel]: "DIAGNOSTYKA",
+      [SERVICE_ORDER_FIELDS.repairReporter]: "Klinika",
+      [SERVICE_ORDER_FIELDS.repairOfferNumber]: "OF/12",
+      [SERVICE_ORDER_FIELDS.repairDescription]: "Opis naprawy",
       [SERVICE_ORDER_FIELDS.sourceModifiedAt]: "2026-09-12T09:59:00.000Z",
     },
   };
@@ -453,6 +473,8 @@ function deviceRecord(id: string, hospitalId: string): AirtableRecord {
       [DEVICE_FIELDS.name]: "USG",
       [DEVICE_FIELDS.location]: "Nowy Oddział",
       [DEVICE_FIELDS.hospitalLink]: [hospitalId],
+      [DEVICE_FIELDS.emmaDeviceStatus]: "NIESPRAWNY",
+      [DEVICE_FIELDS.repairEpc]: "EPC-123",
       [DEVICE_FIELDS.sourceModifiedAt]: "2026-09-12T09:59:00.000Z",
     },
   };

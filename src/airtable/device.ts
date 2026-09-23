@@ -13,6 +13,11 @@ export type MappedDevice = {
   department: string | null;
   location: string | null;
   deviceStatus: string | null;
+  emmaDeviceStatus: string | null;
+  productionYear: string | null;
+  commissionedAt: Date | null;
+  warrantyUntil: Date | null;
+  repairEpc: string | null;
   sourceCreatedAt: Date | null;
   sourceModifiedAt: Date | null;
 };
@@ -31,7 +36,17 @@ export function mapDevice(record: AirtableRecord): MappedDevice {
     department: location,
     location,
     deviceStatus: toOptionalString(record.fields[DEVICE_FIELDS.deviceStatus]),
+    emmaDeviceStatus: toOptionalString(record.fields[DEVICE_FIELDS.emmaDeviceStatus]),
+    productionYear: toProductionYear(record.fields[DEVICE_FIELDS.productionYear]),
+    commissionedAt: parseAirtableDate(record.fields[DEVICE_FIELDS.commissionedAt]),
+    warrantyUntil: parseAirtableDate(record.fields[DEVICE_FIELDS.warrantyUntil]),
+    repairEpc: toOptionalString(record.fields[DEVICE_FIELDS.repairEpc]),
     sourceCreatedAt: parseAirtableDate(record.createdTime),
     sourceModifiedAt: parseAirtableDate(record.fields[DEVICE_FIELDS.sourceModifiedAt]),
   };
+}
+
+function toProductionYear(value: unknown): string | null {
+  if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  return toOptionalString(value);
 }

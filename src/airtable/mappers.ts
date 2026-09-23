@@ -58,6 +58,12 @@ export type MappedCase = {
   relatedRepairNumber: string | null;
   inspectionDeviceTagged: string | null;
   inspectionDeviceEpc: string | null;
+  repairHeroLabel: string | null;
+  repairHeroDescription: string | null;
+  repairReporter: string | null;
+  repairValidation: string | null;
+  repairOfferNumber: string | null;
+  repairDescription: string | null;
   sourceSnapshot: Record<string, string | number | null>;
   contactRecordIds: string[];
   invalidDueDate: boolean;
@@ -95,6 +101,12 @@ export function mapServiceOrder(record: AirtableRecord): MappedCase {
       record.fields[SERVICE_ORDER_FIELDS.faultDescription],
     ),
     department: toOptionalString(record.fields[SERVICE_ORDER_FIELDS.department]),
+    repairHeroLabel: toOptionalString(record.fields[SERVICE_ORDER_FIELDS.repairHeroLabel]),
+    repairHeroDescription: toOptionalString(record.fields[SERVICE_ORDER_FIELDS.repairHeroDescription]),
+    repairReporter: toOptionalString(record.fields[SERVICE_ORDER_FIELDS.repairReporter]),
+    repairValidation: toOptionalString(record.fields[SERVICE_ORDER_FIELDS.repairValidation]),
+    repairOfferNumber: toOptionalString(record.fields[SERVICE_ORDER_FIELDS.repairOfferNumber]),
+    repairDescription: toOptionalString(record.fields[SERVICE_ORDER_FIELDS.repairDescription]),
     reportedAtRaw,
     completedAt: completedAt?.toISOString() ?? null,
   };
@@ -141,6 +153,12 @@ export function mapServiceOrder(record: AirtableRecord): MappedCase {
     relatedRepairNumber: null,
     inspectionDeviceTagged: null,
     inspectionDeviceEpc: null,
+    repairHeroLabel: values.repairHeroLabel,
+    repairHeroDescription: values.repairHeroDescription,
+    repairReporter: values.repairReporter,
+    repairValidation: values.repairValidation,
+    repairOfferNumber: values.repairOfferNumber,
+    repairDescription: values.repairDescription,
     sourceSnapshot: { ...values },
     contactRecordIds: toLinkedRecordIds(
       record.fields[SERVICE_ORDER_FIELDS.contactLinks],
@@ -251,6 +269,12 @@ export function mapInspection(record: AirtableRecord): MappedCase {
     relatedRepairNumber: values.relatedRepairNumber,
     inspectionDeviceTagged: values.deviceTagged,
     inspectionDeviceEpc: values.epc,
+    repairHeroLabel: null,
+    repairHeroDescription: null,
+    repairReporter: null,
+    repairValidation: null,
+    repairOfferNumber: null,
+    repairDescription: null,
     sourceSnapshot: { ...values },
     contactRecordIds: toLinkedRecordIds(
       record.fields[INSPECTION_FIELDS.contactLinks],

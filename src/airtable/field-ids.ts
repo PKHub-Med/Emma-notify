@@ -72,6 +72,12 @@ export const SERVICE_ORDER_FIELDS = {
   sourceHospitalLink: "fldXGnsGh3ok8WlMe",
   department: "fld4esE0HyzXB2i4l",
   completedAt: "fldsyjQ9U7NR4IZuQ",
+  repairHeroLabel: "fldiAPV4yLS14FKEP",
+  repairHeroDescription: "fldQOOyRBM90YDvnD",
+  repairReporter: "fldgRsMwi7SzmxGmR",
+  repairValidation: "fld12Hrl612I0jMJs",
+  repairOfferNumber: "fldbgMJVTPMpCgTdQ",
+  repairDescription: "fldIgGeFsAKtwChHo",
 } as const;
 
 // Attachment fields are intentionally separate from SERVICE_ORDER_FIELD_IDS.
@@ -81,6 +87,7 @@ export const SERVICE_ORDER_ATTACHMENT_FIELDS = {
   photo2: "fldKj0pQqI4ZG8LFl",
   repairProtocol: "fldbh4MX5xR5zvHdg",
   diagnosticProtocol: "fldYCKAp6TIRoa6RD",
+  offerPdf: "fldiYJVvhgPHnLct0",
 } as const;
 
 // Fetched only for a new INSPECTION_COMPLETED delivery, never by normal sync.
@@ -142,6 +149,11 @@ export const DEVICE_FIELDS = {
   location: "fldl06MEL6RkrDo21",
   hospitalLink: "fldMBpYguSqrxskc4",
   deviceStatus: "fldWbzAsP0qK4t5ud",
+  emmaDeviceStatus: "fld8McLg8jufDFT9y",
+  productionYear: "fldi9HQzAEB9pwcWs",
+  commissionedAt: "fldm1LzJ9gBTkdLRk",
+  warrantyUntil: "fldf8ZRjIpJKh3oIb",
+  repairEpc: "fldAsXSwDn1zfea9V",
   sourceModifiedAt: "fldE4CsBR20ba22Qv",
 } as const;
 

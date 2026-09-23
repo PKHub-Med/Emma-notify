@@ -59,6 +59,8 @@ export class PrismaDeviceSyncStore implements DeviceSyncStore {
       ...device,
       sourceCreatedAt: device.sourceCreatedAt?.toISOString() ?? null,
       sourceModifiedAt: device.sourceModifiedAt?.toISOString() ?? null,
+      commissionedAt: device.commissionedAt?.toISOString() ?? null,
+      warrantyUntil: device.warrantyUntil?.toISOString() ?? null,
     } as Prisma.InputJsonObject;
     await this.inTransaction(async (transaction) => {
       const current = await transaction.trackedDevice.findUnique({
@@ -192,6 +194,10 @@ export const DEVICE_EDITABLE_FIELD_IDS = [
   DEVICE_FIELDS.location,
   DEVICE_FIELDS.hospitalLink,
   DEVICE_FIELDS.deviceStatus,
+  DEVICE_FIELDS.productionYear,
+  DEVICE_FIELDS.commissionedAt,
+  DEVICE_FIELDS.warrantyUntil,
+  DEVICE_FIELDS.repairEpc,
 ] as const;
 
 export function buildDeviceIncrementalFormula(since: Date): string {

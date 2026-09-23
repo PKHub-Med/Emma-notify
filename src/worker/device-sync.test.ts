@@ -1,6 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { DEVICE_FIELDS } from "../airtable/field-ids.js";
-import type { MappedDevice } from "../airtable/device.js";
+import { mapDevice, type MappedDevice } from "../airtable/device.js";
 import type {
   AirtableIncrementalSource,
   AirtableListOptions,
@@ -9,6 +9,7 @@ import type {
 import {
   buildDeviceIncrementalFormula,
   DEVICE_EDITABLE_FIELD_IDS,
+  PrismaDeviceSyncStore,
   runDeviceSync,
   type DeviceSyncStore,
 } from "./device-sync.js";
@@ -123,6 +124,45 @@ describe("Device current-state synchronization", () => {
       expect(formula).toContain(`{${fieldId}}`);
     }
     expect(formula).not.toContain(`{${DEVICE_FIELDS.sourceModifiedAt}}`);
+    expect(formula).not.toContain(`{${DEVICE_FIELDS.emmaDeviceStatus}}`);
+  });
+
+  it("persists the EMMA repair device fields explicitly", async () => {
+    const upsert = vi.fn(async () => ({ id: "device-1" }));
+    const transaction = {
+      trackedDevice: {
+        findUnique: vi.fn(async () => null),
+        update: vi.fn(),
+        upsert,
+      },
+    };
+    const prisma = {
+      $transaction: vi.fn(async (operation: (tx: typeof transaction) => Promise<unknown>) =>
+        operation(transaction)),
+    };
+    const mapped = mapDevice({
+      id: "recDevice",
+      createdTime: "2026-08-01T08:00:00.000Z",
+      fields: {
+        [DEVICE_FIELDS.emmaDeviceStatus]: "NIESPRAWNY",
+        [DEVICE_FIELDS.productionYear]: 2021,
+        [DEVICE_FIELDS.commissionedAt]: "2021-05-20",
+        [DEVICE_FIELDS.warrantyUntil]: "2027-05-20",
+        [DEVICE_FIELDS.repairEpc]: "EPC-123",
+      },
+    });
+
+    await new PrismaDeviceSyncStore(prisma as never).upsert(mapped, fixedNow());
+
+    expect(upsert).toHaveBeenCalledWith(expect.objectContaining({
+      create: expect.objectContaining({
+        emmaDeviceStatus: "NIESPRAWNY",
+        productionYear: "2021",
+        commissionedAt: new Date("2021-05-20T00:00:00.000Z"),
+        warrantyUntil: new Date("2027-05-20T00:00:00.000Z"),
+        repairEpc: "EPC-123",
+      }),
+    }));
   });
 });
 

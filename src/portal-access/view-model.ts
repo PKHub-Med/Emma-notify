@@ -6,6 +6,7 @@ import {
   StoredFileKind,
 } from "../generated/prisma/enums.js";
 import { publicAssetAccessWhere } from "../assets/public-files.js";
+import { SERVICE_ORDER_ATTACHMENT_FIELDS } from "../airtable/field-ids.js";
 import type { PortalAuthorizationContext } from "./public.js";
 import type { PortalEntryContext } from "./service.js";
 import {
@@ -70,6 +71,39 @@ export type PortalCaseListItem = {
   photos: PortalDocument[];
   photoLabel: string;
   inspectionDetails?: InspectionDetails;
+  repairDetails?: RepairDetails;
+};
+
+export type RepairDetails = {
+  id: string;
+  number: string | null;
+  status: string;
+  heroLabel: string | null;
+  heroDescription: string | null;
+  reportedAt: Date | null;
+  reportedAtDateOnly: boolean;
+  clientOrderNumber: string | null;
+  reporter: string | null;
+  offerNumber: string | null;
+  completedAt: Date | null;
+  validation: string | null;
+  faultDescription: string | null;
+  repairDescription: string | null;
+  device: {
+    id: string | null;
+    name: string;
+    manufacturer: string | null;
+    model: string | null;
+    serialNumber: string | null;
+    inventoryNumber: string | null;
+    productionYear: string | null;
+    commissionedAt: Date | null;
+    warrantyUntil: Date | null;
+    epc: string | null;
+    tagged: boolean;
+    status: string | null;
+  };
+  location: { hospital: string | null; department: string | null };
 };
 
 export type InspectionDetails = {
@@ -122,6 +156,12 @@ export type PortalCaseDevice = {
   serialNumber: string | null;
   inventoryNumber: string | null;
   currentDeviceAccessible?: boolean;
+  department?: string | null;
+  emmaDeviceStatus?: string | null;
+  productionYear?: string | null;
+  commissionedAt?: Date | null;
+  warrantyUntil?: Date | null;
+  repairEpc?: string | null;
 };
 
 export type PortalDevice = {
@@ -196,6 +236,13 @@ export type StoredPortalCase = {
   inventoryNumber: string | null;
   currentStatus: string | null;
   faultDescription: string | null;
+  completedAt?: Date | null;
+  repairHeroLabel?: string | null;
+  repairHeroDescription?: string | null;
+  repairReporter?: string | null;
+  repairValidation?: string | null;
+  repairOfferNumber?: string | null;
+  repairDescription?: string | null;
   sourceCreatedAt: Date | null;
   reportedAt: Date | null;
   sourceModifiedAt: Date | null;
@@ -314,6 +361,7 @@ type PortalAssetRow = {
     sourceEntityType: CommunicationSourceEntityType;
     kind: StoredFileKind;
     originalFileName: string;
+    sourceFieldId: string;
   };
 };
 
@@ -342,6 +390,13 @@ const CASE_SELECT = {
   inventoryNumber: true,
   currentStatus: true,
   faultDescription: true,
+  completedAt: true,
+  repairHeroLabel: true,
+  repairHeroDescription: true,
+  repairReporter: true,
+  repairValidation: true,
+  repairOfferNumber: true,
+  repairDescription: true,
   sourceCreatedAt: true,
   reportedAt: true,
   sourceModifiedAt: true,
@@ -733,7 +788,9 @@ export class PrismaHospitalPortalStore implements HospitalPortalStore {
       },
       select: {
         airtableRecordId: true, name: true, manufacturer: true, model: true,
-        serialNumber: true, inventoryNumber: true,
+        serialNumber: true, inventoryNumber: true, department: true,
+        emmaDeviceStatus: true, productionYear: true, commissionedAt: true,
+        warrantyUntil: true, repairEpc: true,
       },
     });
     const linkedDeviceById = new Map(linkedDevices.map((device) => [device.airtableRecordId, device]));
@@ -751,6 +808,12 @@ export class PrismaHospitalPortalStore implements HospitalPortalStore {
         serialNumber: device?.serialNumber ?? caseSnapshot?.serialNumber ?? null,
         inventoryNumber: device?.inventoryNumber ?? caseSnapshot?.inventoryNumber ?? null,
         currentDeviceAccessible: Boolean(device),
+        department: device?.department ?? null,
+        emmaDeviceStatus: device?.emmaDeviceStatus ?? null,
+        productionYear: device?.productionYear ?? null,
+        commissionedAt: device?.commissionedAt ?? null,
+        warrantyUntil: device?.warrantyUntil ?? null,
+        repairEpc: device?.repairEpc ?? null,
       });
       devicesByCase.set(link.trackedCaseId, items);
     }
@@ -935,6 +998,7 @@ const PORTAL_ASSET_SELECT = {
       sourceEntityType: true,
       kind: true,
       originalFileName: true,
+      sourceFieldId: true,
     },
   },
 } satisfies Prisma.CommunicationAssetSelect;
@@ -1178,7 +1242,7 @@ function deviceSearchFilterSql(query: string | null): Prisma.Sql {
   return Prisma.sql`AND CONCAT_WS(' ', d.name, d.manufacturer, d.model, d."serialNumber", d."inventoryNumber") ILIKE ${pattern} ESCAPE '\\'`;
 }
 
-function mapCase(
+export function mapCase(
   stored: StoredPortalCase,
   type: "REPAIR" | "INSPECTION",
   devices: PortalCaseDevice[],
@@ -1273,8 +1337,60 @@ function mapCase(
         department: snapshotText(stored.sourceSnapshot, "department"),
       },
     };
+  } else {
+    const linkedDevice = devices.length === 1 ? devices[0]! : null;
+    const reportedAtDateOnly = isDateOnlySnapshot(stored.sourceSnapshot, "reportedAtRaw");
+    item.repairDetails = {
+      id: stored.airtableRecordId,
+      number: stored.businessNumber,
+      status: currentStatus,
+      heroLabel: stored.repairHeroLabel ?? null,
+      heroDescription: stored.repairHeroDescription ?? null,
+      reportedAt: stored.reportedAt,
+      reportedAtDateOnly,
+      clientOrderNumber: stored.clientOrderNumber,
+      reporter: stored.repairReporter ?? null,
+      offerNumber: stored.repairOfferNumber ?? null,
+      completedAt: stored.completedAt ?? null,
+      validation: stored.repairValidation ?? null,
+      faultDescription: stored.faultDescription,
+      repairDescription: stored.repairDescription ?? null,
+      device: {
+        id: item.deviceId,
+        name: linkedDevice?.deviceName ?? snapshotDeviceName,
+        manufacturer: linkedDevice?.manufacturer ?? snapshotManufacturer,
+        model: linkedDevice?.model ?? snapshotModel,
+        serialNumber: linkedDevice?.serialNumber ?? snapshotSerialNumber,
+        inventoryNumber: linkedDevice?.inventoryNumber ?? snapshotInventoryNumber,
+        productionYear: linkedDevice?.productionYear ?? null,
+        commissionedAt: linkedDevice?.commissionedAt ?? null,
+        warrantyUntil: linkedDevice?.warrantyUntil ?? null,
+        epc: linkedDevice?.repairEpc ?? null,
+        tagged: Boolean(linkedDevice?.repairEpc),
+        status: repairDeviceStatus(linkedDevice?.emmaDeviceStatus),
+      },
+      location: {
+        hospital: stored.hospitalName,
+        department: snapshotText(stored.sourceSnapshot, "department")
+          ?? linkedDevice?.department
+          ?? null,
+      },
+    };
   }
   return item;
+}
+
+const REPAIR_DEVICE_STATUSES = new Set([
+  "SPRAWNY",
+  "WARUNKOWO DOPUSZCZONY",
+  "NIESPRAWNY",
+  "WYCOFANY Z UŻYTKU",
+  "SKASOWANY",
+]);
+
+export function repairDeviceStatus(value: string | null | undefined): string | null {
+  const normalized = value?.trim().toLocaleUpperCase("pl-PL") ?? "";
+  return REPAIR_DEVICE_STATUSES.has(normalized) ? normalized : null;
 }
 
 function snapshotText(snapshot: unknown, key: string): string | null {
@@ -1350,7 +1466,7 @@ function mapPortalAssets(
     const countKey = `${asset.storedFile.sourceRecordId}:${asset.role}`;
     const roleIndex = (roleCounts.get(countKey) ?? 0) + 1;
     roleCounts.set(countKey, roleIndex);
-    const title = assetTitle(asset.role, roleIndex);
+    const title = assetTitle(asset.role, roleIndex, linkedCase.type, asset.storedFile.sourceFieldId);
     return [{
       id: asset.id,
       fileName: asset.storedFile.originalFileName,
@@ -1396,10 +1512,17 @@ function assetCaseContext(
   };
 }
 
-function assetTitle(role: CommunicationAssetRole, index: number): string {
+function assetTitle(
+  role: CommunicationAssetRole,
+  index: number,
+  caseType: "REPAIR" | "INSPECTION",
+  sourceFieldId: string,
+): string {
   if (role === CommunicationAssetRole.REPAIR_PROTOCOL) return "Protokół naprawy";
   if (role === CommunicationAssetRole.DIAGNOSTIC_PROTOCOL) return "Protokół diagnostyczny";
   if (role === CommunicationAssetRole.PHOTO) return `Zdjęcie ${index}`;
+  if (sourceFieldId === SERVICE_ORDER_ATTACHMENT_FIELDS.offerPdf) return "Oferta";
+  if (caseType === "REPAIR") return index === 1 ? "Dokument naprawy" : `Dokument naprawy ${index}`;
   return index === 1 ? "Dokument przeglądu" : `Dokument przeglądu ${index}`;
 }
 

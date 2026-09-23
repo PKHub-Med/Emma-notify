@@ -16,6 +16,11 @@ describe("device mapper", () => {
         [DEVICE_FIELDS.location]: "OIOM",
         [DEVICE_FIELDS.hospitalLink]: ["recHospital"],
         [DEVICE_FIELDS.deviceStatus]: "Aktywne",
+        [DEVICE_FIELDS.emmaDeviceStatus]: "NIESPRAWNY",
+        [DEVICE_FIELDS.productionYear]: 2021,
+        [DEVICE_FIELDS.commissionedAt]: "2021-05-20",
+        [DEVICE_FIELDS.warrantyUntil]: "2027-05-20",
+        [DEVICE_FIELDS.repairEpc]: "EPC-123",
         [DEVICE_FIELDS.sourceModifiedAt]: "2026-08-14T08:00:00.000Z",
       },
     });
@@ -30,6 +35,22 @@ describe("device mapper", () => {
       department: "OIOM",
       location: "OIOM",
       deviceStatus: "Aktywne",
+      emmaDeviceStatus: "NIESPRAWNY",
+      productionYear: "2021",
+      repairEpc: "EPC-123",
+    });
+    expect(mapped.commissionedAt?.toISOString()).toBe("2021-05-20T00:00:00.000Z");
+    expect(mapped.warrantyUntil?.toISOString()).toBe("2027-05-20T00:00:00.000Z");
+  });
+
+  it("keeps optional EMMA repair fields null instead of deriving them", () => {
+    const mapped = mapDevice({ id: "recDevice", createdTime: "2026-08-01T08:00:00Z", fields: {} });
+    expect(mapped).toMatchObject({
+      emmaDeviceStatus: null,
+      productionYear: null,
+      commissionedAt: null,
+      warrantyUntil: null,
+      repairEpc: null,
     });
   });
 
