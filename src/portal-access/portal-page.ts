@@ -108,7 +108,7 @@ export function portalPageHeaders(scriptNonce: string) {
 
 function summaryScreen(view: HospitalPortalViewModel): string {
   return `<section class="screen active" id="summary">
-    <div class="page-head"><div class="kicker">Podsumowanie</div><h1>Naprawy i przeglądy</h1><p>Wszystkie sprawy dostępne dla szpitala — niezależnie od tego, czy są aktywne, wymagają reakcji czy zostały zakończone. Wybierz kafel, aby przefiltrować listę.</p></div>
+    <div class="page-head"><div class="kicker">Podsumowanie</div><div class="page-title-row"><h1>Naprawy i przeglądy</h1></div><p>Wszystkie sprawy dostępne dla szpitala — niezależnie od tego, czy są aktywne, wymagają reakcji czy zostały zakończone. Wybierz kafel, aby przefiltrować listę.</p></div>
     <div class="summary-grid">
       ${summaryCard("action", "Wymaga akcji", view.summary.requiresAction, "Naprawy i przeglądy, w których potrzebna jest reakcja po stronie szpitala.")}
       ${summaryCard("repair", "Naprawy", view.summary.repairs, "Wszystkie sprawy naprawcze, w tym wymagające akcji i zakończone.")}
@@ -127,7 +127,7 @@ function summaryScreen(view: HospitalPortalViewModel): string {
 }
 
 function devicesScreen(view: HospitalPortalViewModel): string {
-  return `<section class="screen" id="devices"><div class="page-head"><div class="kicker">Urządzenia</div><h1>Urządzenia</h1><p>Lista urządzeń powiązanych ze sprawami dostępnymi w tym widoku. Kliknięcie otwiera kartę urządzenia.</p></div>
+  return `<section class="screen" id="devices"><div class="page-head"><div class="kicker">Urządzenia</div><div class="page-title-row"><h1>Urządzenia</h1></div><p>Lista urządzeń powiązanych ze sprawami dostępnymi w tym widoku. Kliknięcie otwiera kartę urządzenia.</p></div>
     <div class="panel">${searchBar("deviceSearch", "Szukaj po nazwie urządzenia, producencie, modelu, numerze seryjnym lub inwentarzowym…")}
       <div class="task-list" id="deviceRows"></div>
       ${emptyState("deviceNoResults", "Brak urządzeń pasujących do wyszukiwania.", false)}${pagingControls("devices", false)}
@@ -135,7 +135,7 @@ function devicesScreen(view: HospitalPortalViewModel): string {
 }
 
 function repairsScreen(view: HospitalPortalViewModel): string {
-  return `<section class="screen" id="repairs"><div class="page-head"><div class="kicker">Naprawy</div><h1>Naprawy</h1><p>Lista napraw urządzeń powiązanych ze sprawami dostępnymi w tym widoku. Kliknięcie otwiera kartę sprawy.</p></div>
+  return `<section class="screen" id="repairs"><div class="page-head"><div class="kicker">Naprawy</div><div class="page-title-row"><h1>Naprawy</h1></div><p>Lista napraw urządzeń powiązanych ze sprawami dostępnymi w tym widoku. Kliknięcie otwiera kartę sprawy.</p></div>
     <div class="panel">${searchBar("repairSearch", "Szukaj po urządzeniu, Numerze Sprawy, numerze klienta, SN, numerze inwentarzowym lub statusie…")}
       <div class="task-list repair-list" id="repairRows"></div>
       ${emptyState("repairNoResults", "Brak napraw pasujących do wyszukiwania.", false)}${pagingControls("repairs", false)}
@@ -143,7 +143,7 @@ function repairsScreen(view: HospitalPortalViewModel): string {
 }
 
 function inspectionsScreen(view: HospitalPortalViewModel): string {
-  return `<section class="screen" id="inspections"><div class="page-head"><div class="kicker">Przeglądy</div><h1>Przeglądy</h1><p>Przeglądy urządzeń powiązanych z dostępnymi sprawami. Kliknięcie otwiera kartę sprawy.</p></div>
+  return `<section class="screen" id="inspections"><div class="page-head"><div class="kicker">Przeglądy</div><div class="page-title-row"><h1>Przeglądy</h1></div><p>Przeglądy urządzeń powiązanych z dostępnymi sprawami. Kliknięcie otwiera kartę sprawy.</p></div>
     <div class="panel">${searchBar("inspectionSearch", "Szukaj po urządzeniu, Numerze Sprawy, numerze klienta, SN, dacie przeglądu lub statusie…")}
       <div class="task-list" id="inspectionRows"></div>
       ${emptyState("inspectionNoResults", "Brak przeglądów pasujących do wyszukiwania.", false)}${pagingControls("inspections", false)}
@@ -151,7 +151,7 @@ function inspectionsScreen(view: HospitalPortalViewModel): string {
 }
 
 function documentsScreen(view: HospitalPortalViewModel): string {
-  return `<section class="screen" id="documents"><div class="page-head"><div class="kicker">Dokumenty</div><h1>Dokumenty</h1><p>Dokumenty faktycznie udostępnione w tym widoku portalu.</p></div>
+  return `<section class="screen" id="documents"><div class="page-head"><div class="kicker">Dokumenty</div><div class="page-title-row"><h1>Dokumenty</h1></div><p>Dokumenty faktycznie udostępnione w tym widoku portalu.</p></div>
     <div class="panel" style="padding:15px"><div class="document-tools"><input id="documentSearch" type="search" placeholder="Szukaj po nazwie dokumentu, sprawie, urządzeniu lub numerze seryjnym…" aria-label="Szukaj dokumentów"></div>
       <div class="documents-groups" id="documentsBody"></div>
       <div class="portal-loading" id="documentsLoading" hidden>Ładowanie…</div>
@@ -318,7 +318,7 @@ const statusClass=status=>{const value=(status||'').toLocaleLowerCase('pl-PL');i
 const status=value=>node('span','status-tag '+statusClass(value),text(value,'Brak informacji'));
 const deviceMeta=item=>[text(item.manufacturer),text(item.model),'SN: '+text(item.serialNumber),'Nr inw.: '+text(item.inventoryNumber)].join(' · ');
 function activate(element,callback){element.tabIndex=0;element.setAttribute('role','button');element.addEventListener('click',callback);element.addEventListener('keydown',event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();callback()}})}
-function showScreen(id,entityType,entityRecordId){screens.forEach(screen=>screen.classList.toggle('active',screen.id===id));navButtons.forEach(button=>button.classList.toggle('active',button.dataset.screen===id));if(id!=='caseCard')setCaseDetailShell(false);const screen={caseCard:'case_detail',deviceCard:'device_detail'}[id]||id;sendAnalytics('SCREEN_VIEW',{screen,...(entityType?{entityType,entityRecordId}:{})});}
+function showScreen(id,entityType,entityRecordId){screens.forEach(screen=>screen.classList.toggle('active',screen.id===id));navButtons.forEach(button=>button.classList.toggle('active',button.dataset.screen===id));if(id!=='caseCard'){setCaseDetailShell(false);const titleRow=document.querySelector('#'+id+' .page-title-row');const refreshBar=refreshButton.closest('.portal-refresh-bar');if(titleRow&&refreshBar)titleRow.append(refreshBar)}const screen={caseCard:'case_detail',deviceCard:'device_detail'}[id]||id;sendAnalytics('SCREEN_VIEW',{screen,...(entityType?{entityType,entityRecordId}:{})});}
 async function api(path,params={}){const url=new URL(dataBasePath+'/data/'+path,location.origin);for(const [key,value]of Object.entries(params))if(value)url.searchParams.set(key,String(value));const response=await fetch(url,{headers:{Accept:'application/json'},cache:'no-store'});if(!response.ok)throw new Error('PORTAL_DATA_UNAVAILABLE');return response.json()}
 async function refreshApi(path,method='GET'){const response=await fetch(dataBasePath+'/data/refresh'+path,{method,headers:{Accept:'application/json'},cache:'no-store'});if(!response.ok)throw new Error('PORTAL_REFRESH_UNAVAILABLE');return response.json()}
 const refreshButton=document.getElementById('portalRefreshButton');
