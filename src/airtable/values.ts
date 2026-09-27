@@ -7,6 +7,11 @@ export function toBusinessNumber(value: unknown): string | null {
   return toOptionalString(value);
 }
 
+export function toProductionYear(value: unknown): string | null {
+  const normalized = toOptionalString(value);
+  return normalized === "0" ? null : normalized;
+}
+
 export function toLinkedRecordIds(value: unknown): string[] {
   return [...new Set(toStringValues(value).filter((item) => item.startsWith("rec")))];
 }

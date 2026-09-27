@@ -286,6 +286,7 @@ async function pollPortalRefresh(): Promise<void> {
       store: portalRefreshStore,
       airtable,
       incrementalStore,
+      hospitalStore: hospitalSyncStore,
       deviceStore: deviceSyncStore,
       taskStore: taskSyncStore,
       communicationStore,

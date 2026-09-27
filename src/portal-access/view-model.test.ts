@@ -7,7 +7,7 @@ import {
   StoredFileKind,
 } from "../generated/prisma/enums.js";
 import type { PrismaClient } from "../generated/prisma/client.js";
-import { formatDate, renderHospitalPortal } from "./portal-page.js";
+import { formatDate, formatDateByPrecision, renderHospitalPortal } from "./portal-page.js";
 import {
   decodePortalCaseCursor,
   decodePortalDeviceCursor,
@@ -15,9 +15,11 @@ import {
   encodePortalDeviceCursor,
   HospitalPortalViewModelService,
   isPortalCaseRetained,
+  isInspectionHeaderDateOnly,
   inspectionDisplayStatus,
   InvalidPortalCursorError,
   mapCase,
+  portalLocation,
   portalRetentionCutoffDate,
   PrismaHospitalPortalStore,
   type HospitalPortalStore,
@@ -30,6 +32,23 @@ import {
 } from "./view-model.js";
 
 describe("paginated hospital portal", () => {
+  it("builds the shared Device location from TrackedHospital and TrackedDevice", () => {
+    expect(portalLocation(
+      { name: "Warszawski Uniwersytet Medyczny", shortName: "WUM" },
+      null,
+      "Kardiologia",
+    )).toEqual({
+      hospitalName: "Warszawski Uniwersytet Medyczny",
+      hospitalShortName: "WUM",
+      department: "Kardiologia",
+    });
+    expect(portalLocation({ name: "Szpital", shortName: null }, null, null)).toEqual({
+      hospitalName: "Szpital",
+      hospitalShortName: null,
+      department: null,
+    });
+  });
+
   it("renders one global Aktualizuj dane control with polling and success/error states", async () => {
     const view = await new HospitalPortalViewModelService(memoryStore(1, 0)).build(auth() as never);
     const html = renderHospitalPortal(view, "nonce", new Date(), "/p/token");
@@ -113,6 +132,37 @@ describe("paginated hospital portal", () => {
     expect(inspectionDisplayStatus("DO REALIZACJI", null)).toBe("DO REALIZACJI");
   });
 
+  it.each([
+    ["Wykonano", true],
+    [" wykonano ", true],
+    ["Utworzono", false],
+    ["Zaktualizowano", false],
+    ["Nieznany typ", false],
+    [null, false],
+  ])("classifies inspection header date type %j explicitly", (value, expected) => {
+    expect(isInspectionHeaderDateOnly(value)).toBe(expected);
+  });
+
+  it("formats a business date at UTC midnight without exposing the Warsaw offset", () => {
+    const value = new Date("2026-09-27T00:00:00.000Z");
+    expect(formatDateByPrecision(value, true)).toBe("27.09.2026");
+    expect(formatDateByPrecision(value, true)).not.toContain("02:00");
+  });
+
+  it("keeps the time for a real inspection-header timestamp", () => {
+    expect(formatDateByPrecision(
+      new Date("2026-09-27T12:32:00.000Z"),
+      false,
+    )).toBe("27.09.2026, 14:32");
+  });
+
+  it.each([
+    [new Date("2026-09-27T00:00:00.000Z"), true, "27.09.2026"],
+    [new Date("2026-09-27T12:32:00.000Z"), false, "27.09.2026, 14:32"],
+  ])("uses reportedAtDateOnly=%s consistently", (value, dateOnly, expected) => {
+    expect(formatDateByPrecision(value, dateOnly)).toBe(expected);
+  });
+
   it("shows TrackedCase.inspectionValidUntil for an inspection in progress", () => {
     const validUntil = new Date("2027-09-01T00:00:00.000Z");
     const stored: StoredPortalCase = {
@@ -123,20 +173,36 @@ describe("paginated hospital portal", () => {
       sourceCreatedAt: null, reportedAt: null, sourceModifiedAt: null,
       inspectionDueDate: null, inspectionPerformedAt: null, inspectionResult: null,
       inspectionValidUntil: validUntil, inspectionScheduledDate: new Date("2026-09-30T00:00:00Z"),
+      inspectionHeaderDateType: "Wykonano",
+      inspectionHeaderDate: new Date("2026-09-27T00:00:00.000Z"),
       inspectionValidation: null,
-      sourceSnapshot: { emmaValidUntil: "inna wartość, której portal nie może użyć" }, events: [],
+      sourceSnapshot: {
+        emmaValidUntil: "inna wartość, której portal nie może użyć",
+        department: "Kardiologia",
+      }, events: [],
     };
 
-    const item = mapCase(stored, "INSPECTION", []);
+    const item = mapCase(
+      stored,
+      "INSPECTION",
+      [],
+      { name: "Warszawski Uniwersytet Medyczny", shortName: "WUM" },
+    );
 
     expect(item.validUntil).toEqual(validUntil);
     expect(item.inspectionDetails).toMatchObject({
       verified: false,
       validUntil,
+      headerDateDateOnly: true,
     });
     expect(`Ważny do: ${formatDate(item.inspectionDetails!.validUntil)}`)
       .toBe("Ważny do: 01.09.2027");
     expect(item.inspectionDetails).not.toHaveProperty("validUntilLabel");
+    expect(item.inspectionDetails?.location).toEqual({
+      hospitalName: "Warszawski Uniwersytet Medyczny",
+      hospitalShortName: "WUM",
+      department: "Kardiologia",
+    });
   });
   it("renders at most 30 of 3200 records while preserving DB counts", async () => {
     const store = memoryStore(2000, 1200);
@@ -624,6 +690,12 @@ describe("paginated hospital portal", () => {
             inventoryNumber: null,
             department: "Laboratorium",
             deviceStatus: null,
+            emmaDeviceStatus: "SPRAWNY",
+            productionYear: "2021",
+            commissionedAt: new Date("2021-04-12T00:00:00.000Z"),
+            warrantyUntil: new Date("2026-04-12T00:00:00.000Z"),
+            repairEpc: "EPC-123",
+            sourceModifiedAt: new Date("2026-09-27T12:30:00.000Z"),
           }));
         },
       },
@@ -638,10 +710,15 @@ describe("paginated hospital portal", () => {
     expect(rawCalls).toBe(3);
     expect(page.items[0]).toMatchObject({
       department: "Laboratorium", inspectionPerformedAt: oldInspection,
+      status: "SPRAWNY", productionYear: "2021", repairEpc: "EPC-123",
     });
     expect(page.items[0]).not.toHaveProperty("currentStatus");
     expect(page.items[0]).not.toHaveProperty("deviceStatus");
     expect(deviceSelect).not.toHaveProperty("deviceStatus");
+    expect(deviceSelect).toMatchObject({
+      emmaDeviceStatus: true, productionYear: true, commissionedAt: true,
+      warrantyUntil: true, repairEpc: true, sourceModifiedAt: true,
+    });
   });
 
   it("keeps Device detail cases hospital-scoped even outside the entry context", async () => {
@@ -718,14 +795,15 @@ describe("paginated hospital portal", () => {
     expect(renderHospitalPortal(view, "nonce")).toContain("Blok operacyjny");
   });
 
-  it("renders the required Device card fields without a Device status", async () => {
+  it("renders the required redesigned Device card fields", async () => {
     const html = renderHospitalPortal(
       await new HospitalPortalViewModelService(memoryStore(1, 0)).build(auth()),
       "nonce",
     );
     for (const label of [
       "Karta urządzenia", "Producent", "Model", "Oddział", "Ostatni przegląd",
-      "Nr seryjny", "Nr inwentarzowy", "Wynik przeglądu",
+      "Numer seryjny", "Numer inwentarzowy", "Wynik", "Rok produkcji",
+      "Data uruchomienia", "Gwarancja", "RFID / EPC", "Stan urządzenia",
     ]) expect(html).toContain(label);
     expect(html).not.toContain("STATUS URZĄDZENIA");
     expect(html).not.toContain("Producent / model");
@@ -939,6 +1017,10 @@ function memoryStore(
       const device = uniqueDevices(all).find((item) => item.sourceRecordId === id);
       return device ? {
         ...device,
+        location: {
+          hospitalName: "Hospital A", hospitalShortName: "A",
+          department: device.department,
+        },
         cases: { items: all.filter((item) => item.deviceId === id).slice(0, limit), nextCursor: null },
         lockedCaseCount: 0,
       } : null;
@@ -972,6 +1054,8 @@ function uniqueDevices(items: PortalCaseListItem[]): PortalDevice[] {
     validUntil: item.validUntil,
     inspectionPerformedAt: item.inspectionPerformedAt,
     inspectionResult: null,
+    status: null, productionYear: null, commissionedAt: null,
+    warrantyUntil: null, repairEpc: null, sourceModifiedAt: null,
   }])).values()];
 }
 

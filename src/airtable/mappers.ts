@@ -11,6 +11,7 @@ import {
   toFirstLinkedRecordId,
   toLinkedRecordIds,
   toOptionalString,
+  toProductionYear,
 } from "./values.js";
 
 export type MappedCase = {
@@ -107,6 +108,9 @@ export function mapServiceOrder(record: AirtableRecord): MappedCase {
     repairValidation: toOptionalString(record.fields[SERVICE_ORDER_FIELDS.repairValidation]),
     repairOfferNumber: toOptionalString(record.fields[SERVICE_ORDER_FIELDS.repairOfferNumber]),
     repairDescription: toOptionalString(record.fields[SERVICE_ORDER_FIELDS.repairDescription]),
+    productionYear: toProductionYear(
+      toSingleLookupString(record.fields[SERVICE_ORDER_FIELDS.productionYear]),
+    ),
     reportedAtRaw,
     completedAt: completedAt?.toISOString() ?? null,
   };

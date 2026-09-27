@@ -131,6 +131,7 @@ describe("portal refresh worker", () => {
       store: requestStore,
       airtable,
       incrementalStore,
+      hospitalStore: { upsert: vi.fn() },
       deviceStore: { async upsert(device: MappedDevice) {
         devices.push({
           department: device.department,
@@ -163,6 +164,7 @@ describe("portal refresh worker", () => {
       repairReporter: "Klinika",
       repairOfferNumber: "OF/12",
       repairDescription: "Opis naprawy",
+      sourceSnapshot: { productionYear: "2021" },
     });
     expect(devices).toEqual([{
       department: "Nowy Oddział",
@@ -180,6 +182,103 @@ describe("portal refresh worker", () => {
     );
     expect(requestStore.activeDevices.has("recDeviceForeign")).toBe(false);
     expect(communicationStore.observe).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a null repair production year null after a normal refresh with an empty lookup", async () => {
+    const requestStore = new MemoryWorkerStore({
+      id: "refresh-repair-year-empty",
+      leaseToken: "assigned-by-claim",
+      sourceHospitalRecordId: "recHospitalA",
+      serviceOrderRecordIds: ["service-A"],
+      inspectionRecordIds: [],
+      deviceRecordIds: [],
+      taskRecordIds: [],
+    });
+    let storedProductionYear: string | null = null;
+    const fetchRecord = vi.fn(async (
+      tableId: string,
+      recordId: string,
+      fieldIds: readonly string[],
+    ) => {
+      if (tableId === AIRTABLE_TABLE_IDS.serviceOrders) {
+        expect(fieldIds).toContain(SERVICE_ORDER_FIELDS.productionYear);
+        return serviceOrderRecord(recordId, "recHospitalA", null, []);
+      }
+      if (tableId === AIRTABLE_TABLE_IDS.hospitals) return hospitalRecord([]);
+      if (tableId === AIRTABLE_TABLE_IDS.devices) {
+        return deviceRecord(recordId, "recHospitalA");
+      }
+      throw new Error(`Unexpected record ${tableId}/${recordId}`);
+    });
+    const incrementalStore = {
+      findCase: vi.fn().mockResolvedValue(null),
+      upsertCaseWithoutEvent: vi.fn(async (mapped: MappedCase) => {
+        storedProductionYear = mapped.sourceSnapshot.productionYear as string | null;
+        return "tracked-service-A";
+      }),
+      syncRecipients: vi.fn().mockResolvedValue(undefined),
+    } as unknown as IncrementalStore;
+
+    await runPortalRefreshWorkerOnce({
+      store: requestStore,
+      airtable: { fetchRecord, fetchAllRecords: vi.fn() } as AirtableIncrementalSource,
+      incrementalStore,
+      hospitalStore: { upsert: vi.fn() },
+      deviceStore: { upsert: vi.fn() },
+      taskStore: { upsertTask: vi.fn() },
+      communicationStore: noOpCommunicationStore(),
+      quietMinutes: 10,
+      now: () => new Date("2026-09-27T10:00:00.000Z"),
+    });
+
+    expect(storedProductionYear).toBeNull();
+    expect(requestStore.status).toBe(PortalRefreshStatus.SUCCEEDED);
+  });
+
+  it("updates the shared hospital short name during a normal portal refresh", async () => {
+    let shortName = "ABC";
+    const storedShortNames: Array<string | null> = [];
+    const common = {
+      airtable: {
+        fetchAllRecords: vi.fn(),
+        fetchRecord: vi.fn(async (tableId: string) => {
+          if (tableId === AIRTABLE_TABLE_IDS.hospitals) return hospitalRecord([], shortName);
+          throw new Error(`Unexpected table ${tableId}`);
+        }),
+      } as AirtableIncrementalSource,
+      incrementalStore: {} as IncrementalStore,
+      hospitalStore: {
+        async upsert(hospital: { shortName: string | null }) {
+          storedShortNames.push(hospital.shortName);
+        },
+      },
+      deviceStore: { upsert: vi.fn() },
+      taskStore: { upsertTask: vi.fn() },
+      communicationStore: noOpCommunicationStore(),
+      quietMinutes: 10,
+      now: () => new Date("2026-09-27T10:00:00.000Z"),
+    };
+    const work = (id: string): PortalRefreshWorkItem => ({
+      id,
+      leaseToken: "assigned-by-claim",
+      sourceHospitalRecordId: "recHospitalA",
+      serviceOrderRecordIds: [],
+      inspectionRecordIds: [],
+      deviceRecordIds: [],
+      taskRecordIds: [],
+    });
+
+    await runPortalRefreshWorkerOnce({
+      ...common,
+      store: new MemoryWorkerStore(work("refresh-short-name-1")),
+    });
+    shortName = "XYZ";
+    await runPortalRefreshWorkerOnce({
+      ...common,
+      store: new MemoryWorkerStore(work("refresh-short-name-2")),
+    });
+
+    expect(storedShortNames).toEqual(["ABC", "XYZ"]);
   });
 
   it("refreshes retention-hidden repairs and inspections so they can reappear", async () => {
@@ -235,6 +334,7 @@ describe("portal refresh worker", () => {
       store: requestStore,
       airtable: { fetchRecord, fetchAllRecords: vi.fn() } as AirtableIncrementalSource,
       incrementalStore,
+      hospitalStore: { upsert: vi.fn() },
       deviceStore: { upsert: vi.fn() },
       taskStore: { upsertTask: vi.fn() },
       communicationStore,
@@ -338,6 +438,7 @@ describe("portal refresh worker", () => {
       store: requestStore,
       airtable: { fetchRecord, fetchAllRecords: vi.fn() } as AirtableIncrementalSource,
       incrementalStore: new PrismaIncrementalStore(prisma),
+      hospitalStore: { upsert: vi.fn() },
       deviceStore: { upsert: vi.fn() },
       taskStore: { upsertTask: vi.fn() },
       communicationStore: noOpCommunicationStore(),
@@ -373,6 +474,7 @@ describe("portal refresh worker", () => {
     const airtable = {
       fetchAllRecords: vi.fn(),
       fetchRecord: vi.fn(async (tableId: string, recordId: string) => {
+        if (tableId === AIRTABLE_TABLE_IDS.hospitals) return hospitalRecord([]);
         if (tableId === AIRTABLE_TABLE_IDS.tasks) {
           return taskRecord(recordId, "recHospitalA");
         }
@@ -388,6 +490,7 @@ describe("portal refresh worker", () => {
     const common = {
       airtable,
       incrementalStore,
+      hospitalStore: { upsert: vi.fn() },
       deviceStore: { upsert: vi.fn() },
       taskStore: { upsertTask: vi.fn().mockResolvedValue(undefined) },
       communicationStore,
@@ -428,9 +531,13 @@ describe("portal refresh worker", () => {
       store: requestStore,
       airtable: {
         fetchAllRecords: vi.fn(),
-        fetchRecord: vi.fn().mockRejectedValue(error),
+        fetchRecord: vi.fn(async (tableId: string) => {
+          if (tableId === AIRTABLE_TABLE_IDS.hospitals) return hospitalRecord([]);
+          throw error;
+        }),
       } as AirtableIncrementalSource,
       incrementalStore: {} as IncrementalStore,
+      hospitalStore: { upsert: vi.fn() },
       deviceStore: { upsert: vi.fn() },
       taskStore: { upsertTask: vi.fn() },
       communicationStore: noOpCommunicationStore(),
@@ -489,6 +596,7 @@ function serviceOrderRecord(
   id: string,
   hospitalId: string,
   completedAt: string | null = "2026-04-01",
+  productionYear: unknown = [2021],
 ): AirtableRecord {
   return {
     id,
@@ -503,6 +611,7 @@ function serviceOrderRecord(
       [SERVICE_ORDER_FIELDS.repairReporter]: "Klinika",
       [SERVICE_ORDER_FIELDS.repairOfferNumber]: "OF/12",
       [SERVICE_ORDER_FIELDS.repairDescription]: "Opis naprawy",
+      [SERVICE_ORDER_FIELDS.productionYear]: productionYear,
       [SERVICE_ORDER_FIELDS.sourceModifiedAt]: "2026-09-12T09:59:00.000Z",
     },
   };
@@ -536,11 +645,15 @@ function inspectionScheduledDateRecord(
   };
 }
 
-function hospitalRecord(inspectionIds: string[]): AirtableRecord {
+function hospitalRecord(inspectionIds: string[], shortName = "SZA"): AirtableRecord {
   return {
     id: "recHospitalA",
     createdTime: "2026-01-10T10:00:00.000Z",
-    fields: { [HOSPITAL_FIELDS.inspectionLinks]: inspectionIds },
+    fields: {
+      [HOSPITAL_FIELDS.shortName]: shortName,
+      [HOSPITAL_FIELDS.name]: "Szpital A",
+      [HOSPITAL_FIELDS.inspectionLinks]: inspectionIds,
+    },
   };
 }
 

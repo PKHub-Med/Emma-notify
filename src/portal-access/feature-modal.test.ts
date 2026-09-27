@@ -46,7 +46,9 @@ describe("shared unavailable-feature modal", () => {
   it("renders Ważny do from validUntil even when inspection details are not verified", () => {
     const html = renderHospitalPortal(emptyView(), "nonce");
 
-    expect(html).toContain("if(!d.verified){detail.append(caseDetailResultTarget(d))");
+    expect(html).toContain(
+      "if(!d.verified){detail.append(caseDetailResultTarget(d),caseDetailLocationSection(d))",
+    );
     expect(html).toContain(
       "caseDetailSummaryTile('Ważny do',d.validUntil?formatDate(d.validUntil):null",
     );
@@ -67,6 +69,35 @@ describe("shared unavailable-feature modal", () => {
     expect(repairRenderer).not.toContain("renderHistory(");
     expect(repairRenderer).not.toContain("Dokument przeglądu");
     expect(repairRenderer).not.toContain("Zdjęcia z przeglądu");
+  });
+
+  it("uses the same DATE/DATETIME precision flag in client inspection and repair views", () => {
+    const html = renderHospitalPortal(emptyView(), "nonce");
+    expect(html).toContain(
+      "formatDateByPrecision(d.headerDate,Boolean(d.headerDateDateOnly))",
+    );
+    expect(html).toContain(
+      "node('strong','',formatDateByPrecision(item.reportedAt,Boolean(item.reportedAtDateOnly)))",
+    );
+    expect(html).toContain(
+      "'Zgłoszono: '+formatDateByPrecision(d.reportedAt,d.reportedAtDateOnly)",
+    );
+    expect(html).toContain(
+      "caseDetailSummaryTile('Data zgłoszenia',d.reportedAt?formatDateByPrecision(d.reportedAt,d.reportedAtDateOnly):null",
+    );
+    expect(html).not.toContain("d.headerDateType+': '+formatDateTime(d.headerDate)");
+  });
+
+  it("uses one three-box Location section for inspections, repairs and devices", () => {
+    const html = renderHospitalPortal(emptyView(), "nonce");
+    expect(html).toContain("caseDetailDeviceTile('Szpital',location.hospitalName)");
+    expect(html).toContain("caseDetailDeviceTile('Skrót',location.hospitalShortName)");
+    expect(html).toContain("caseDetailDeviceTile('Oddział',location.department)");
+    expect(html).toContain("deviceDataSection(item),caseDetailLocationSection(item.location),histories");
+    expect(html).toContain("caseDetailLocationSection(d)");
+    expect(html).toContain("caseDetailLocationSection(d,'fill')");
+    expect(html).toContain("function caseDetailDeviceTile(label,value,content=null)");
+    expect(html).toContain("node('strong','',text(value))");
   });
 
   it("uses SVG refresh and explicit fill variants without changing shared stroke icons", () => {

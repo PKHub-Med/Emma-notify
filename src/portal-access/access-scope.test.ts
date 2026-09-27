@@ -180,6 +180,8 @@ function device(index: number): PortalDevice {
     manufacturer: null, model: null, serialNumber: null, inventoryNumber: null,
     department: null, validUntil: null, inspectionPerformedAt: null,
     inspectionResult: null,
+    status: null, productionYear: null, commissionedAt: null,
+    warrantyUntil: null, repairEpc: null, sourceModifiedAt: null,
   };
 }
 

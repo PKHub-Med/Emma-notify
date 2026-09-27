@@ -91,6 +91,21 @@ describe("case mappers", () => {
     expect(mapped.deviceAirtableIds).toEqual(expected);
   });
 
+  it.each([
+    ["lookup number", [2021], "2021"],
+    ["missing field", undefined, null],
+    ["null", null, null],
+    ["empty lookup", [], null],
+    ["empty string", "", null],
+    ["zero sentinel", [0], null],
+  ])("normalizes repair production year from %s", (_label, input, expected) => {
+    const mapped = mapServiceOrder(record("recRepairYear", {
+      [SERVICE_ORDER_FIELDS.productionYear]: input,
+    }));
+
+    expect(mapped.sourceSnapshot.productionYear).toBe(expected);
+  });
+
   it("maps an inspection and preserves an invalid due date", () => {
     const mapped = mapInspection(record("recInspection", {
       [INSPECTION_FIELDS.businessNumber]: "17",

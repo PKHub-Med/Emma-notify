@@ -387,7 +387,11 @@ describe("public API", () => {
       sourceRecordId: "device-H1", deviceName: "Device", manufacturer: null,
       model: null, serialNumber: null, inventoryNumber: null,
       department: null, validUntil: null, inspectionPerformedAt: null,
-      inspectionResult: null, cases: { items: [item], nextCursor: null }, lockedCaseCount: 0,
+      inspectionResult: null,
+      status: null, productionYear: null, commissionedAt: null,
+      warrantyUntil: null, repairEpc: null, sourceModifiedAt: null,
+      location: { hospitalName: "Hospital H1", hospitalShortName: "H1", department: null },
+      cases: { items: [item], nextCursor: null }, lockedCaseCount: 0,
     };
     const requestedCaseIds: string[] = [];
     const requestedHospitalIds: string[] = [];

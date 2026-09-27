@@ -26,7 +26,8 @@ describe("shared case-detail responsive shell", () => {
   });
 
   it("keeps mobile header controls in document flow", () => {
-    const mobile = styleSource.slice(styleSource.lastIndexOf("@media(max-width:768px)"));
+    const sharedShell = styleSource.slice(styleSource.indexOf("/* Final shared Repair / Inspection responsive shell. */"));
+    const mobile = sharedShell.slice(sharedShell.indexOf("@media(max-width:768px)"));
 
     expect(mobile).toContain(".case-detail-header{display:block");
     expect(mobile).toContain(".case-detail-header .portal-refresh-message{position:static");
@@ -36,8 +37,9 @@ describe("shared case-detail responsive shell", () => {
   it("uses shared grid classes for 3-to-2-to-1 layouts", () => {
     expect(styleSource).toContain(".case-detail-result-grid{display:grid;grid-template-columns:repeat(3");
     expect(styleSource).toContain(".case-detail-device-data .case-detail-grid{display:grid;grid-template-columns:repeat(3");
+    expect(styleSource).toContain(".case-detail-location .case-detail-grid{display:grid;grid-template-columns:repeat(3");
     expect(styleSource).toContain("grid-template-columns:repeat(2,minmax(0,1fr))");
-    expect(styleSource).toContain(".case-detail-media-grid,.case-detail-links-grid{grid-template-columns:1fr}");
+    expect(styleSource).toContain(".case-detail-location .case-detail-grid,.case-detail-media-grid,.case-detail-links-grid{grid-template-columns:1fr}");
   });
 
   it("reserves the fixed mobile navigation height through one variable", () => {

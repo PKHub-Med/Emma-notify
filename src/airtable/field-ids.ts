@@ -80,6 +80,7 @@ export const SERVICE_ORDER_FIELDS = {
   repairValidation: "fld12Hrl612I0jMJs",
   repairOfferNumber: "fldbgMJVTPMpCgTdQ",
   repairDescription: "fldIgGeFsAKtwChHo",
+  productionYear: "fldlalTHSX1YUzZZE",
 } as const;
 
 // Attachment fields are intentionally separate from SERVICE_ORDER_FIELD_IDS.

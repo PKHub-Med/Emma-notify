@@ -60,6 +60,7 @@ describe("central Airtable contract", () => {
     expect(SERVICE_ORDER_FIELDS.emmaCustomerStatus).toBe("fldOi8KDzJ1zwMaWJ");
     expect(SERVICE_ORDER_FIELDS.emmaMailTemplate).toBe("fldfqDFr9bJ4DiMRe");
     expect(SERVICE_ORDER_FIELDS.sourceHospitalLink).toBe("fldXGnsGh3ok8WlMe");
+    expect(SERVICE_ORDER_FIELDS.productionYear).toBe("fldlalTHSX1YUzZZE");
   });
 
   it("contains the confirmed hospital Field IDs", () => {

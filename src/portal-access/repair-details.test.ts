@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { SERVICE_ORDER_FIELDS } from "../airtable/field-ids.js";
+import { mapServiceOrder } from "../airtable/mappers.js";
 import {
   mapCase,
   repairDeviceStatus,
@@ -7,18 +9,18 @@ import {
 } from "./view-model.js";
 
 describe("RepairDetails", () => {
-  it("uses the single related TrackedDevice and keeps Airtable presentation fields", () => {
+  it("uses the repair snapshot for production year and keeps other Airtable presentation fields", () => {
     const item = mapCase(storedRepair(), "REPAIR", [device({
       deviceName: "Aparat USG",
       manufacturer: "Samsung",
       model: "HS40",
       department: "Kardiologia",
       emmaDeviceStatus: "NIESPRAWNY",
-      productionYear: "2021",
+      productionYear: "1999",
       commissionedAt: new Date("2021-05-20T00:00:00.000Z"),
       warrantyUntil: new Date("2027-05-20T00:00:00.000Z"),
       repairEpc: "EPC-123",
-    })]);
+    })], { name: "Szpital Kliniczny", shortName: "WUM" });
 
     expect(item.repairDetails).toMatchObject({
       number: "17842",
@@ -36,7 +38,11 @@ describe("RepairDetails", () => {
         epc: "EPC-123",
         tagged: true,
       },
-      location: { hospital: "Szpital", department: "Oddział ze zlecenia" },
+      location: {
+        hospitalName: "Szpital Kliniczny",
+        hospitalShortName: "WUM",
+        department: "Oddział ze zlecenia",
+      },
     });
   });
 
@@ -85,6 +91,33 @@ describe("RepairDetails", () => {
 
     expect(item.repairDetails?.location.department).toBe("Oddział zlecenia");
   });
+
+  it.each([
+    [[2021], "2021"],
+    [null, null],
+    [undefined, null],
+    [[], null],
+    ["", null],
+  ])("maps Airtable production year %j to repair portal value %j", (airtableYear, expected) => {
+    const mappedRepair = mapServiceOrder({
+      id: "recRepair",
+      createdTime: "2026-08-01T08:00:00Z",
+      fields: { [SERVICE_ORDER_FIELDS.productionYear]: airtableYear },
+    });
+    const item = mapCase(storedRepair({
+      sourceSnapshot: mappedRepair.sourceSnapshot,
+    }), "REPAIR", [device({ productionYear: "0" })]);
+
+    expect(item.repairDetails?.device.productionYear).toBe(expected);
+  });
+
+  it("ignores the legacy zero on TrackedDevice when the repair field is empty", () => {
+    const item = mapCase(storedRepair({
+      sourceSnapshot: { productionYear: null },
+    }), "REPAIR", [device({ productionYear: "0" })]);
+
+    expect(item.repairDetails?.device.productionYear).toBeNull();
+  });
 });
 
 function device(overrides: Partial<PortalCaseDevice> = {}): PortalCaseDevice {
@@ -129,7 +162,11 @@ function storedRepair(overrides: Partial<StoredPortalCase> = {}): StoredPortalCa
     inspectionPerformedAt: null,
     inspectionResult: null,
     inspectionValidUntil: null,
-    sourceSnapshot: { department: "Oddział ze zlecenia", reportedAtRaw: "2026-09-23" },
+    sourceSnapshot: {
+      department: "Oddział ze zlecenia",
+      reportedAtRaw: "2026-09-23",
+      productionYear: "2021",
+    },
     events: [],
     ...overrides,
   };

@@ -16,6 +16,7 @@ import {
 import { AirtableRequestError } from "../airtable/client.js";
 import { mapDevice } from "../airtable/device.js";
 import { mapHospital } from "../airtable/hospital.js";
+import type { HospitalSyncStore } from "./hospital-sync.js";
 import { mapInspection, mapServiceOrder } from "../airtable/mappers.js";
 import { mapTask } from "../airtable/task.js";
 import type { AirtableIncrementalSource, AirtableRecord } from "../airtable/types.js";
@@ -210,6 +211,7 @@ export async function runPortalRefreshWorkerOnce(dependencies: {
   store: PortalRefreshWorkerStore;
   airtable: AirtableIncrementalSource;
   incrementalStore: IncrementalStore;
+  hospitalStore: Pick<HospitalSyncStore, "upsert">;
   deviceStore: Pick<DeviceSyncStore, "upsert">;
   taskStore: Pick<TaskSyncStore, "upsertTask">;
   communicationStore: CommunicationEventStore;
@@ -242,13 +244,13 @@ export async function runPortalRefreshWorkerOnce(dependencies: {
     const taskCommunicationEnabled = await dependencies.communicationStore
       .isBaselineCompleted("TASK");
     const deviceRecordIds = new Set(claimed.deviceRecordIds);
-    const currentHospitalInspectionIds = claimed.inspectionRecordIds.length === 0
-      ? null
-      : new Set(mapHospital(await dependencies.airtable.fetchRecord(
-          AIRTABLE_TABLE_IDS.hospitals,
-          claimed.sourceHospitalRecordId,
-          HOSPITAL_FIELD_IDS,
-        )).linkedInspectionRecordIds);
+    const hospital = mapHospital(await dependencies.airtable.fetchRecord(
+      AIRTABLE_TABLE_IDS.hospitals,
+      claimed.sourceHospitalRecordId,
+      HOSPITAL_FIELD_IDS,
+    ));
+    await dependencies.hospitalStore.upsert(hospital, now());
+    const currentHospitalInspectionIds = new Set(hospital.linkedInspectionRecordIds);
     await syncRecords(claimed.taskRecordIds, async (recordId) => {
       const record = await dependencies.airtable.fetchRecord(
         AIRTABLE_TABLE_IDS.tasks, recordId, TASK_FIELD_IDS,

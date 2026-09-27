@@ -7,6 +7,7 @@ import {
 } from "../generated/prisma/enums.js";
 import { publicAssetAccessWhere } from "../assets/public-files.js";
 import { SERVICE_ORDER_ATTACHMENT_FIELDS } from "../airtable/field-ids.js";
+import { toProductionYear } from "../airtable/values.js";
 import type { PortalAuthorizationContext } from "./public.js";
 import type { PortalEntryContext } from "./service.js";
 import {
@@ -24,6 +25,12 @@ export type PortalHistoryItem = {
   title: string;
   description: string | null;
   changedAt: Date;
+};
+
+export type PortalLocation = {
+  hospitalName: string | null;
+  hospitalShortName: string | null;
+  department: string | null;
 };
 
 export type PortalDocument = {
@@ -103,7 +110,7 @@ export type RepairDetails = {
     tagged: boolean;
     status: string | null;
   };
-  location: { hospital: string | null; department: string | null };
+  location: PortalLocation;
 };
 
 export type InspectionDetails = {
@@ -114,6 +121,7 @@ export type InspectionDetails = {
   heroDescription: string | null;
   headerDateType: string | null;
   headerDate: Date | null;
+  headerDateDateOnly: boolean;
   scheduledAt: Date | null;
   performedAt: Date | null;
   result: string | null;
@@ -140,7 +148,7 @@ export type InspectionDetails = {
     tagged: string | null;
     epc: string | null;
   };
-  location: { hospital: string | null; department: string | null };
+  location: PortalLocation;
 };
 
 export type InspectionDesignVariant =
@@ -174,9 +182,16 @@ export type PortalDevice = {
   validUntil: Date | null;
   inspectionPerformedAt: Date | null;
   inspectionResult: string | null;
+  status: string | null;
+  productionYear: string | null;
+  commissionedAt: Date | null;
+  warrantyUntil: Date | null;
+  repairEpc: string | null;
+  sourceModifiedAt: Date | null;
 };
 
 export type PortalDeviceDetail = PortalDevice & {
+  location: PortalLocation;
   cases: PortalPage<PortalCaseListItem>;
   lockedCaseCount: number;
 };
@@ -441,6 +456,7 @@ export class PrismaHospitalPortalStore implements HospitalPortalStore {
   ) {}
 
   findHospital(scope: string): Promise<StoredHospital | null> {
+    if (!this.prisma.trackedHospital) return Promise.resolve(null);
     return this.prisma.trackedHospital.findFirst({
       where: { airtableRecordId: scope, active: true },
       select: { shortName: true, name: true, address: true },
@@ -610,7 +626,10 @@ export class PrismaHospitalPortalStore implements HospitalPortalStore {
     limit: number,
     cursor: string | null = null,
   ): Promise<PortalDeviceDetail | null> {
-    const device = await this.loadDevice(scope, sourceRecordId);
+    const [device, hospital] = await Promise.all([
+      this.loadDevice(scope, sourceRecordId),
+      this.findHospital(scope.hospitalId),
+    ]);
     if (!device) return null;
     const cases = await this.pageCases(scope, {
       filter: "ALL", query: null, cursor, limit, deviceId: sourceRecordId,
@@ -618,6 +637,7 @@ export class PrismaHospitalPortalStore implements HospitalPortalStore {
     const counts = await this.deviceCaseCounts(scope, sourceRecordId);
     return {
       ...device,
+      location: portalLocation(hospital, null, device.department),
       cases,
       lockedCaseCount: Math.max(0, counts.total - counts.visible),
     };
@@ -705,6 +725,8 @@ export class PrismaHospitalPortalStore implements HospitalPortalStore {
       select: {
         airtableRecordId: true, name: true, manufacturer: true, model: true,
         serialNumber: true, inventoryNumber: true, department: true,
+        emmaDeviceStatus: true, productionYear: true, commissionedAt: true,
+        warrantyUntil: true, repairEpc: true, sourceModifiedAt: true,
       },
     });
     const inspections = await this.prisma.$queryRaw<Array<{
@@ -744,6 +766,12 @@ export class PrismaHospitalPortalStore implements HospitalPortalStore {
         validUntil: inspection?.inspectionValidUntil ?? null,
         inspectionPerformedAt: inspection?.inspectionPerformedAt ?? null,
         inspectionResult: inspection?.inspectionResult ?? null,
+        status: repairDeviceStatus(device.emmaDeviceStatus),
+        productionYear: device.productionYear,
+        commissionedAt: device.commissionedAt,
+        warrantyUntil: device.warrantyUntil,
+        repairEpc: device.repairEpc,
+        sourceModifiedAt: device.sourceModifiedAt,
       }];
     });
   }
@@ -762,6 +790,7 @@ export class PrismaHospitalPortalStore implements HospitalPortalStore {
       : (await this.prisma.trackedCase.findMany({
           where: { airtableRecordId: { in: ids } }, select: CASE_LIST_SELECT,
         })).map((row) => ({ ...row, events: [] }));
+    const hospital = await this.findHospital(scope.hospitalId);
     const inspectionIds = keys.filter((key) => key.type === "INSPECTION").map((key) => key.sourceRecordId);
     const tasks = inspectionIds.length === 0 ? [] : await this.prisma.trackedTask.findMany({
       where: {
@@ -828,7 +857,7 @@ export class PrismaHospitalPortalStore implements HospitalPortalStore {
       return row ? [mapCase({
         ...row,
         taskCustomerStatus: taskStatus.get(key.sourceRecordId) ?? null,
-      }, key.type, devicesByCase.get(row.id) ?? [])] : [];
+      }, key.type, devicesByCase.get(row.id) ?? [], hospital)] : [];
     });
     if (includeDetails) await this.attachCaseAssets(scope, items, rows);
     return items;
@@ -1245,6 +1274,7 @@ export function mapCase(
   stored: StoredPortalCase,
   type: "REPAIR" | "INSPECTION",
   devices: PortalCaseDevice[],
+  hospital: Pick<StoredHospital, "name" | "shortName"> | null = null,
 ): PortalCaseListItem {
   const rawCurrentStatus = type === "INSPECTION"
     ? stored.currentStatus?.trim() ?? ""
@@ -1304,6 +1334,7 @@ export function mapCase(
       heroDescription: inspectionVerified ? stored.inspectionHeroDescription ?? null : null,
       headerDateType: stored.inspectionHeaderDateType ?? null,
       headerDate: stored.inspectionHeaderDate ?? null,
+      headerDateDateOnly: isInspectionHeaderDateOnly(stored.inspectionHeaderDateType),
       scheduledAt: stored.inspectionScheduledDate ?? null,
       performedAt: stored.inspectionPerformedAt,
       result: inspectionVerified ? stored.inspectionResult : null,
@@ -1330,10 +1361,11 @@ export function mapCase(
         tagged: stored.inspectionDeviceTagged ?? null,
         epc: stored.inspectionDeviceEpc ?? null,
       },
-      location: {
-        hospital: stored.hospitalName,
-        department: snapshotText(stored.sourceSnapshot, "department"),
-      },
+      location: portalLocation(
+        hospital,
+        stored.hospitalName,
+        snapshotText(stored.sourceSnapshot, "department"),
+      ),
     };
   } else {
     const linkedDevice = devices.length === 1 ? devices[0]! : null;
@@ -1360,22 +1392,43 @@ export function mapCase(
         model: linkedDevice?.model ?? snapshotModel,
         serialNumber: linkedDevice?.serialNumber ?? snapshotSerialNumber,
         inventoryNumber: linkedDevice?.inventoryNumber ?? snapshotInventoryNumber,
-        productionYear: linkedDevice?.productionYear ?? null,
+        productionYear: toProductionYear(
+          snapshotText(stored.sourceSnapshot, "productionYear"),
+        ),
         commissionedAt: linkedDevice?.commissionedAt ?? null,
         warrantyUntil: linkedDevice?.warrantyUntil ?? null,
         epc: linkedDevice?.repairEpc ?? null,
         tagged: Boolean(linkedDevice?.repairEpc),
         status: repairDeviceStatus(linkedDevice?.emmaDeviceStatus),
       },
-      location: {
-        hospital: stored.hospitalName,
-        department: snapshotText(stored.sourceSnapshot, "department")
+      location: portalLocation(
+        hospital,
+        stored.hospitalName,
+        snapshotText(stored.sourceSnapshot, "department")
           ?? linkedDevice?.department
           ?? null,
-      },
+      ),
     };
   }
   return item;
+}
+
+const DATE_ONLY_INSPECTION_HEADER_TYPES = new Set(["WYKONANO"]);
+
+export function isInspectionHeaderDateOnly(value: string | null | undefined): boolean {
+  return DATE_ONLY_INSPECTION_HEADER_TYPES.has(value?.trim().toLocaleUpperCase("pl-PL") ?? "");
+}
+
+export function portalLocation(
+  hospital: Pick<StoredHospital, "name" | "shortName"> | null,
+  fallbackHospitalName: string | null,
+  department: string | null,
+): PortalLocation {
+  return {
+    hospitalName: hospital?.name ?? fallbackHospitalName,
+    hospitalShortName: hospital?.shortName ?? null,
+    department,
+  };
 }
 
 const REPAIR_DEVICE_STATUSES = new Set([

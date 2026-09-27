@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { PrismaClient } from "../generated/prisma/client.js";
 import { HOSPITAL_FIELDS } from "../airtable/field-ids.js";
+import { mapHospital } from "../airtable/hospital.js";
 import type { AirtableRecord, AirtableRecordSource } from "../airtable/types.js";
 import {
   buildInspectionHospitalScopeIndex,
@@ -10,6 +11,23 @@ import {
 } from "./hospital-sync.js";
 
 describe("Hospital -> Inspection canonical scope", () => {
+  it.each([
+    ["WUM", "WUM"],
+    ["", null],
+    [null, null],
+    [undefined, null],
+    [0, null],
+    ["0", null],
+  ])("normalizes the Airtable hospital short name %j", (input, expected) => {
+    const mapped = mapHospital({
+      id: "recHospital",
+      createdTime: "2026-09-27T00:00:00.000Z",
+      fields: { [HOSPITAL_FIELDS.shortName]: input },
+    });
+
+    expect(mapped.shortName).toBe(expected);
+  });
+
   it("builds a reverse Record ID map and never chooses among two Hospitals", async () => {
     const index = buildInspectionHospitalScopeIndex([
       mappedHospital("H1", ["inspection-change", "inspection-same", "inspection-ambiguous"]),

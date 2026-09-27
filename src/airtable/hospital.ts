@@ -13,11 +13,16 @@ export type MappedHospital = {
 export function mapHospital(record: AirtableRecord): MappedHospital {
   return {
     airtableRecordId: record.id,
-    shortName: toOptionalString(record.fields[HOSPITAL_FIELDS.shortName]),
+    shortName: toHospitalShortName(record.fields[HOSPITAL_FIELDS.shortName]),
     name: toOptionalString(record.fields[HOSPITAL_FIELDS.name]),
     address: toOptionalString(record.fields[HOSPITAL_FIELDS.address]),
     linkedInspectionRecordIds: toLinkedRecordIds(
       record.fields[HOSPITAL_FIELDS.inspectionLinks],
     ),
   };
+}
+
+function toHospitalShortName(value: unknown): string | null {
+  const normalized = toOptionalString(value);
+  return normalized === "0" ? null : normalized;
 }
