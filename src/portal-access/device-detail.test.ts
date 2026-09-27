@@ -46,6 +46,19 @@ describe("Device detail redesign", () => {
     expect(pageSource).toContain("caseCache.set(item.sourceRecordId,item)");
   });
 
+  it("omits the empty history date instead of rendering a dash or reserving its column", () => {
+    const historyRow = pageSource.slice(
+      pageSource.indexOf("function deviceHistoryRow"),
+      pageSource.indexOf("function deviceHistorySection"),
+    );
+
+    expect(historyRow).toContain("if(rawDate){button.classList.add('has-date')");
+    expect(historyRow).toContain("button.append(node('span','device-detail-history-date'");
+    expect(historyRow).not.toContain("node('span','device-detail-history-date',date)");
+    expect(styleSource).toContain(".device-detail-history-row{display:grid;grid-template-columns:minmax(120px,1fr) minmax(110px,1fr) 18px");
+    expect(styleSource).toContain(".device-detail-history-row.has-date{grid-template-columns:minmax(82px,.75fr)");
+  });
+
   it("keeps the latest inspection separate from the cutoff-limited history query", () => {
     expect(pageSource).toContain("deviceInspectionSection(item)");
     expect(pageSource).toContain("item.inspectionPerformedAt?formatDate(item.inspectionPerformedAt):null");
@@ -59,6 +72,13 @@ describe("Device detail redesign", () => {
     expect(styleSource).toContain(".case-detail-location .case-detail-grid,.case-detail-media-grid,.case-detail-links-grid{grid-template-columns:1fr}");
     expect(pageSource).toContain("function renderInspectionDetail(item,detail)");
     expect(pageSource).toContain("function renderRepairDetail(item,detail)");
+  });
+
+  it("gives the Device hero text a flexible mobile column at phone widths", () => {
+    expect(styleSource).toContain(".device-detail-hero{grid-template-columns:56px minmax(0,1fr)}");
+    expect(styleSource).toContain(".device-detail-hero{grid-template-columns:52px minmax(0,1fr)}");
+    expect(styleSource).toContain("word-break:normal;overflow-wrap:break-word");
+    expect(styleSource).toContain(".device-detail-history-row.has-date{grid-template-columns:1fr 18px}");
   });
 });
 

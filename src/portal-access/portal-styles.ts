@@ -1396,7 +1396,8 @@ body.lightbox-open{overflow:hidden}
 .device-detail-history{min-width:0;padding:9px 15px 13px;border-radius:5px}
 .device-detail-history .case-detail-section-head{height:34px;margin-bottom:3px}
 .device-detail-history-list{display:grid;gap:6px}
-.device-detail-history-row{display:grid;grid-template-columns:minmax(82px,.75fr) minmax(120px,1.2fr) minmax(110px,1fr) 18px;align-items:center;gap:8px;width:100%;min-height:48px;padding:8px 10px;border:0;border-radius:4px;background:#f1f6fb;color:#07145c;font:inherit;text-align:left;cursor:pointer}
+.device-detail-history-row{display:grid;grid-template-columns:minmax(120px,1fr) minmax(110px,1fr) 18px;align-items:center;gap:8px;width:100%;min-height:48px;padding:8px 10px;border:0;border-radius:4px;background:#f1f6fb;color:#07145c;font:inherit;text-align:left;cursor:pointer}
+.device-detail-history-row.has-date{grid-template-columns:minmax(82px,.75fr) minmax(120px,1.2fr) minmax(110px,1fr) 18px}
 .device-detail-history-row:hover,.device-detail-history-row:focus-visible{background:#e7f0fa;outline:2px solid #9db8dd;outline-offset:1px}
 .device-detail-history-date,.device-detail-history-number{font-size:11px;overflow-wrap:anywhere}
 .device-detail-history-number{color:#536c91}
@@ -1411,15 +1412,34 @@ body.lightbox-open{overflow:hidden}
   .device-detail-history-grid{grid-template-columns:1fr}
 }
 @media(max-width:768px){
+  .device-detail-hero{grid-template-columns:56px minmax(0,1fr)}
+  .device-detail-hero .case-detail-device-icon{width:44px;height:60px;margin:10px 0 10px 8px}
+  .device-detail-hero .case-detail-device-icon .case-detail-icon{width:30px;height:30px}
+  .device-detail-hero .case-detail-device{min-width:0;padding:13px 10px}
+  .device-detail-hero .case-detail-device h2,.device-detail-hero .case-detail-device-sub,.device-detail-hero .case-detail-device-id{word-break:normal;overflow-wrap:break-word}
   .device-detail-inspection-grid,.device-detail-history-grid{grid-template-columns:1fr}
   .device-detail-state{grid-column:1/-1;align-items:flex-start;width:auto;margin:0;border-top:1px solid #d6e0ec;border-radius:0}
   .device-detail-state .case-detail-status-pill{width:auto}
-  .device-detail-history-row{grid-template-columns:minmax(86px,.7fr) minmax(0,1fr) 18px}
-  .device-detail-history-row .status-tag{grid-column:1/3}
+  .device-detail-history-row{grid-template-columns:minmax(100px,1fr) minmax(110px,auto) 18px}
+  .device-detail-history-row .device-detail-history-number{grid-column:1}
+  .device-detail-history-row .status-tag{grid-column:2}
+  .device-detail-history-row .device-detail-history-arrow{grid-column:3}
+  .device-detail-history-row.has-date{grid-template-columns:minmax(76px,.55fr) minmax(86px,1fr) 18px}
+  .device-detail-history-row.has-date .device-detail-history-date{grid-column:1;grid-row:1}
+  .device-detail-history-row.has-date .device-detail-history-number{grid-column:2;grid-row:1}
+  .device-detail-history-row.has-date .status-tag{grid-column:1/3;grid-row:2}
+  .device-detail-history-row.has-date .device-detail-history-arrow{grid-column:3;grid-row:1/3}
 }
 @media(max-width:420px){
+  .device-detail-hero{grid-template-columns:52px minmax(0,1fr)}
+  .device-detail-hero .case-detail-device-icon{width:40px;height:56px;margin-left:7px}
   .device-detail-history-row{grid-template-columns:1fr 18px}
-  .device-detail-history-number,.device-detail-history-row .status-tag{grid-column:1}
+  .device-detail-history-row.has-date{grid-template-columns:1fr 18px}
+  .device-detail-history-row .device-detail-history-number{grid-column:1;grid-row:1}
+  .device-detail-history-row .status-tag{grid-column:1;grid-row:2}
+  .device-detail-history-row.has-date .device-detail-history-date{grid-column:1;grid-row:1}
+  .device-detail-history-row.has-date .device-detail-history-number{grid-column:1;grid-row:2}
+  .device-detail-history-row.has-date .status-tag{grid-column:1;grid-row:3}
   .device-detail-history-arrow{grid-column:2;grid-row:1/4}
 }
 [hidden]{display:none!important}
