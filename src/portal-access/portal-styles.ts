@@ -32,8 +32,8 @@ button{font:inherit}
 .portal-refresh-bar{display:flex;align-items:center;justify-content:flex-end;gap:12px;min-height:44px;margin-bottom:14px}
 .portal-refresh-button{min-height:42px;padding:0 17px;border:1px solid var(--navy);border-radius:10px;background:var(--navy);color:#fff;font-weight:800;cursor:pointer}
 .portal-refresh-button:hover{background:var(--navy-2)}.portal-refresh-button:disabled{cursor:wait;opacity:.65}
-.portal-refresh-message{color:var(--green);font-size:13px;font-weight:750}.portal-refresh-message:not(:empty){padding:8px 10px;border-radius:8px;background:var(--green-soft)}
-.portal-refresh-message.error{color:var(--red);background:var(--red-soft)}
+.portal-refresh-message{color:var(--muted);font-size:13px;font-weight:750}.portal-refresh-message:empty{display:none}.portal-refresh-message.success{padding:8px 10px;border-radius:8px;background:var(--green-soft);color:var(--green)}
+.portal-refresh-message.error{padding:8px 10px;border-radius:8px;color:var(--red);background:var(--red-soft)}
 .app{
   min-height:100vh;
   display:grid;
@@ -1274,7 +1274,7 @@ body.lightbox-open{overflow:hidden}
 .case-detail-active .portal-refresh-button{display:inline-flex;align-items:center;justify-content:center;gap:9px;min-height:44px;padding:0 18px;border-color:#cbd7e7;background:#fff;color:#07145d;box-shadow:0 3px 10px rgba(31,47,73,.04)}
 .portal-refresh-icon{display:inline-grid;place-items:center;flex:0 0 auto;width:20px;height:20px}.portal-refresh-icon svg{width:20px;height:20px;fill:none;stroke:#0d1895;stroke-width:2.3;stroke-linecap:round;stroke-linejoin:round}
 .case-detail-active .portal-refresh-button:hover{border-color:#8ca5c7;background:#f8faff}
-.case-detail-active .portal-refresh-message{position:absolute;top:50px;right:0;width:max-content;max-width:330px;padding:0!important;background:transparent!important;font-size:11px;font-weight:650;text-align:right}
+.case-detail-active .portal-refresh-message{display:block;max-width:330px;font-size:11px;font-weight:650;text-align:right}
 .case-detail-head{min-height:94px;padding:0 2px 17px;border:0;align-items:flex-start}
 .case-detail-head-copy{min-width:0}.case-detail-breadcrumb{display:flex;align-items:center;gap:12px;margin-bottom:11px;color:#001a72;font-size:13px}.case-detail-breadcrumb button{padding:0;border:0;background:transparent;color:#0d54bc;font:inherit;cursor:pointer}.case-detail-breadcrumb button:hover{text-decoration:underline}.case-detail-title-row{display:flex;align-items:center;gap:14px;flex-wrap:wrap}.case-detail-title-row h1{margin:0;color:#06145d;font-size:30px;line-height:1.05;letter-spacing:-.035em}.case-detail-subtitle{margin:7px 0 0!important;color:#63779a!important;font-size:14px!important}.case-detail-head-meta{display:block;color:#63779a;text-align:right}.case-detail-head-meta p{margin:0;white-space:nowrap;font-size:12px}
 .case-detail-status-pill{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:31px;padding:6px 13px;border-radius:999px;font-size:12px;font-weight:850;line-height:1;text-transform:uppercase;white-space:nowrap}.case-detail-status-pill .case-detail-icon{width:18px;height:18px}.case-detail-status-pill.is-large{min-width:190px;min-height:44px;padding:9px 18px;font-size:17px;text-transform:none}.case-detail-status-pill.is-success{background:#dff3e3;color:#09682b}.case-detail-status-pill.is-warning{background:#fff0d6;color:#b75200}.case-detail-status-pill.is-danger{background:#ffe0e3;color:#bf0718}.case-detail-status-pill.is-info{background:#dcecff;color:#0761cf}.case-detail-status-pill.is-neutral{background:#e7edf5;color:#425776}
@@ -1300,9 +1300,9 @@ body.lightbox-open{overflow:hidden}
 .case-detail-header-main{min-width:0}
 .case-detail-header-actions{position:relative;display:flex;align-items:center;justify-content:flex-end;gap:24px;min-width:0;padding-top:28px}
 .case-detail-header .case-detail-head-meta{position:static;display:block;margin:0;color:#63779a;text-align:right}
-.case-detail-header .case-detail-head-meta p{margin:0;white-space:nowrap;font-size:12px}
+.case-detail-header .case-detail-head-meta .portal-refresh-message{margin:0;white-space:nowrap;font-size:12px}
 .case-detail-header .portal-refresh-bar{position:static;display:flex;align-items:center;justify-content:flex-end;gap:10px;min-height:44px;margin:0}
-.case-detail-header .portal-refresh-message{position:absolute;top:48px;right:0;width:max-content;max-width:330px;padding:0!important;background:transparent!important;font-size:11px;font-weight:650;text-align:right}
+.case-detail-header .portal-refresh-message{position:static;width:auto;max-width:330px;font-size:11px;font-weight:650;text-align:right}
 .case-detail-repair-head{height:auto;min-height:108px;padding-bottom:14px}
 .case-detail-repair-head .case-detail-head-meta{position:static}
 .case-detail-active>.portal-refresh-bar{position:static}
@@ -1314,6 +1314,7 @@ body.lightbox-open{overflow:hidden}
 .page-title-row{display:flex;align-items:center;justify-content:space-between;gap:24px;min-width:0;min-height:44px}
 .page-title-row h1{min-width:0;margin:0}
 .page-title-row .portal-refresh-bar{flex:0 0 auto;min-height:44px;margin:0}
+.page-title-row>.portal-refresh-message{margin-left:auto;text-align:right}
 .page-title-row .portal-refresh-button{display:inline-flex;align-items:center;justify-content:center;gap:9px;line-height:1}
 .page-title-row .portal-refresh-icon{display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto}
 .page-title-row .portal-refresh-icon svg{display:block;stroke:#fff;vertical-align:middle}
@@ -1344,10 +1345,11 @@ body.lightbox-open{overflow:hidden}
   .case-detail-subtitle,.case-detail-repair-head .case-detail-subtitle{margin-top:10px!important;line-height:1.5}
   .case-detail-header-actions{display:flex;align-items:stretch;flex-direction:column;gap:10px;padding-top:14px}
   .case-detail-header .case-detail-head-meta{margin:0;text-align:left}
-  .case-detail-header .case-detail-head-meta p{white-space:normal}
+  .case-detail-header .case-detail-head-meta .portal-refresh-message{white-space:normal}
   .case-detail-header .portal-refresh-bar{align-items:stretch;flex-direction:column;justify-content:flex-start;width:100%;margin:0}
   .case-detail-header .portal-refresh-button,.case-detail-repair-active .portal-refresh-button{width:100%}
   .case-detail-header .portal-refresh-message{position:static;width:auto;max-width:none;text-align:left}
+  .page-title-row>.portal-refresh-message{margin-left:0;text-align:left}
   .case-detail-hero,.case-detail-repair-hero{height:auto;min-height:0;grid-template-columns:82px minmax(0,1fr);gap:0}
   .case-detail-device-icon,.case-detail-repair-hero .case-detail-device-icon{align-self:start;width:64px;height:72px;margin:14px 0 14px 12px}
   .case-detail-device-icon .case-detail-icon,.case-detail-repair-hero .case-detail-device-icon .case-detail-icon{width:40px;height:40px}
