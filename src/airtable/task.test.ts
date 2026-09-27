@@ -16,6 +16,7 @@ describe("task contract mapper", () => {
       [TASK_FIELDS.status]: "Zaplanowane",
       [TASK_FIELDS.serviceOrderLinks]: ["recServiceA", "recServiceB"],
       [TASK_FIELDS.inspectionLinks]: ["recInspectionA", "recInspectionB"],
+      [TASK_FIELDS.contactLinks]: ["recHospitalContactA", "recHospitalContactB"],
       [TASK_FIELDS.selectedContactLinks]: [
         "recContactA",
         "recContactB",
@@ -35,6 +36,7 @@ describe("task contract mapper", () => {
       linkedServiceOrderRecordIds: ["recServiceA", "recServiceB"],
       linkedInspectionRecordIds: ["recInspectionA", "recInspectionB"],
       selectedContactRecordIds: ["recContactA", "recContactB"],
+      hospitalContactRecordIds: ["recHospitalContactA", "recHospitalContactB"],
       sourceHospitalRecordId: "recHospital",
       emmaCustomerStatus: "Wizyta potwierdzona",
       emmaMailTemplate: "Przegląd-przypomnienie_o_wizycie",

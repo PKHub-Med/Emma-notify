@@ -301,6 +301,7 @@ export function buildTaskObservation(
       durationSeconds: task.durationSeconds,
       completed: task.completed,
       selectedContactRecordIds: task.selectedContactRecordIds,
+      fallbackContactRecordIds: task.hospitalContactRecordIds,
       sourceHospitalRecordId: task.sourceHospitalRecordId,
       linkedInspectionRecordIds: task.linkedInspectionRecordIds,
       linkedServiceOrderRecordIds: task.linkedServiceOrderRecordIds,

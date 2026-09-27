@@ -19,6 +19,7 @@ export type MappedTask = {
   linkedServiceOrderRecordIds: string[];
   linkedInspectionRecordIds: string[];
   selectedContactRecordIds: string[];
+  hospitalContactRecordIds: string[];
   sourceHospitalRecordId: string | null;
   emmaCustomerStatus: string | null;
   emmaMailTemplate: string | null;
@@ -48,6 +49,9 @@ export function mapTask(record: AirtableRecord): MappedTask {
     ),
     selectedContactRecordIds: toLinkedRecordIds(
       record.fields[TASK_FIELDS.selectedContactLinks],
+    ),
+    hospitalContactRecordIds: toLinkedRecordIds(
+      record.fields[TASK_FIELDS.contactLinks],
     ),
     sourceHospitalRecordId: toFirstLinkedRecordId(
       record.fields[TASK_FIELDS.sourceHospitalLink],

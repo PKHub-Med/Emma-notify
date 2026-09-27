@@ -151,6 +151,97 @@ describe("dynamic HTML and source mapping", () => {
     expect(many.variables.EMAIL_TITLE).toBe("Liczba zakończonych napraw: 2");
   });
 
+  it("builds REPAIR_RECEIVED without device data when businessNumber is present", async () => {
+    const payload = await buildCommunicationTemplatePayload({
+      delivery: {
+        id: "repair-24903",
+        scenario: CommunicationScenario.REPAIR_RECEIVED,
+        sourceRecordId: "repair-24903",
+        eventSnapshot: {
+          ...repairSnapshot(),
+          businessNumber: "24903",
+          device: {
+            ...repairSnapshot().device,
+            name: null,
+            manufacturer: null,
+            model: null,
+            serialNumber: null,
+            inventoryNumber: null,
+          },
+        },
+      },
+      dataSource: source(), secureUrl, unsubscribeUrl, preparedAt, timeZone: "Europe/Warsaw",
+    });
+
+    expect(payload.templateId).toBe("emma-repair-received");
+    expect(payload.variables.DEVICE_NAME).toBe("Brak danych");
+    expect(payload.variables.MANUFACTURER_MODEL).toBe("— · —");
+    expect(payload.variables.SERIAL_NUMBER).toBe("brak danych");
+    expect(payload.variables.INVENTORY_NUMBER).toBe("brak danych");
+  });
+
+  it("builds a REPAIR_RECEIVED batch when one repair has no device name", async () => {
+    const payload = await buildCommunicationRepairBatchPayload({
+      deliveries: [
+        {
+          id: "repair-24928",
+          scenario: CommunicationScenario.REPAIR_RECEIVED,
+          sourceRecordId: "repair-24928",
+          eventSnapshot: {
+            ...repairSnapshot(),
+            businessNumber: "24928",
+            device: { ...repairSnapshot().device, name: "Aparat USG" },
+          },
+        },
+        {
+          id: "repair-24903",
+          scenario: CommunicationScenario.REPAIR_RECEIVED,
+          sourceRecordId: "repair-24903",
+          eventSnapshot: {
+            ...repairSnapshot(),
+            businessNumber: "24903",
+            device: { ...repairSnapshot().device, name: null },
+          },
+        },
+      ],
+      dataSource: source(), secureUrl, unsubscribeUrl, preparedAt, timeZone: "Europe/Warsaw",
+    });
+
+    expect(payload.templateId).toBe("emma-repair-received");
+    expect(payload.variables.REPAIR_COUNT).toBe(2);
+    expect(payload.variables.REPAIR_ROW_01).toContain("Aparat USG");
+    expect(payload.variables.REPAIR_ROW_01).toContain("24928");
+    expect(payload.variables.REPAIR_ROW_02).toContain("Brak danych");
+    expect(payload.variables.REPAIR_ROW_02).toContain("24903");
+  });
+
+  it("keeps businessNumber required for REPAIR_RECEIVED", async () => {
+    await expect(buildCommunicationTemplatePayload({
+      delivery: {
+        id: "repair-without-business-number",
+        scenario: CommunicationScenario.REPAIR_RECEIVED,
+        sourceRecordId: "repair-without-business-number",
+        eventSnapshot: { ...repairSnapshot(), businessNumber: null },
+      },
+      dataSource: source(), secureUrl, unsubscribeUrl, preparedAt, timeZone: "Europe/Warsaw",
+    })).rejects.toMatchObject({ code: "TEMPLATE_DATA_MISSING" });
+  });
+
+  it("keeps device name required for REPAIR_COMPLETED", async () => {
+    await expect(buildCommunicationTemplatePayload({
+      delivery: {
+        id: "completed-without-device-name",
+        scenario: CommunicationScenario.REPAIR_COMPLETED,
+        sourceRecordId: "completed-without-device-name",
+        eventSnapshot: {
+          ...repairSnapshot(),
+          device: { ...repairSnapshot().device, name: null },
+        },
+      },
+      dataSource: source(), secureUrl, unsubscribeUrl, preparedAt, timeZone: "Europe/Warsaw",
+    })).rejects.toMatchObject({ code: "TEMPLATE_DATA_MISSING" });
+  });
+
   it("blocks an incomplete or cross-hospital inspection set", async () => {
     const incomplete = source();
     incomplete.getInspections = async () => inspections().slice(0, 3);
@@ -429,6 +520,7 @@ function source(): CommunicationTemplateDataSource {
   return {
     async getEmployees() { return employees; },
     async getInspections() { return inspections(); },
+    async getServiceOrders() { return []; },
   };
 }
 

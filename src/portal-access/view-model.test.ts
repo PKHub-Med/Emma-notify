@@ -7,7 +7,7 @@ import {
   StoredFileKind,
 } from "../generated/prisma/enums.js";
 import type { PrismaClient } from "../generated/prisma/client.js";
-import { renderHospitalPortal } from "./portal-page.js";
+import { formatDate, renderHospitalPortal } from "./portal-page.js";
 import {
   decodePortalCaseCursor,
   decodePortalDeviceCursor,
@@ -17,6 +17,7 @@ import {
   isPortalCaseRetained,
   inspectionDisplayStatus,
   InvalidPortalCursorError,
+  mapCase,
   portalRetentionCutoffDate,
   PrismaHospitalPortalStore,
   type HospitalPortalStore,
@@ -25,6 +26,7 @@ import {
   type PortalDevice,
   type PortalDocument,
   type PortalDataScope,
+  type StoredPortalCase,
 } from "./view-model.js";
 
 describe("paginated hospital portal", () => {
@@ -109,6 +111,32 @@ describe("paginated hospital portal", () => {
     expect(inspectionDisplayStatus("DO REALIZACJI", new Date("2026-08-25T10:00:00Z")))
       .toBe("DO REALIZACJI");
     expect(inspectionDisplayStatus("DO REALIZACJI", null)).toBe("DO REALIZACJI");
+  });
+
+  it("shows TrackedCase.inspectionValidUntil for an inspection in progress", () => {
+    const validUntil = new Date("2027-09-01T00:00:00.000Z");
+    const stored: StoredPortalCase = {
+      id: "case-27190", airtableRecordId: "rec2QXkBuCSLO6oeB", businessNumber: "27190",
+      clientOrderNumber: null, emmaCustomerStatus: null, hospitalName: "Szpital",
+      deviceName: "Urządzenie", manufacturer: null, model: null, serialNumber: null,
+      inventoryNumber: null, currentStatus: "W TRAKCIE REALIZACJI", faultDescription: null,
+      sourceCreatedAt: null, reportedAt: null, sourceModifiedAt: null,
+      inspectionDueDate: null, inspectionPerformedAt: null, inspectionResult: null,
+      inspectionValidUntil: validUntil, inspectionScheduledDate: new Date("2026-09-30T00:00:00Z"),
+      inspectionValidation: null,
+      sourceSnapshot: { emmaValidUntil: "inna wartość, której portal nie może użyć" }, events: [],
+    };
+
+    const item = mapCase(stored, "INSPECTION", []);
+
+    expect(item.validUntil).toEqual(validUntil);
+    expect(item.inspectionDetails).toMatchObject({
+      verified: false,
+      validUntil,
+    });
+    expect(`Ważny do: ${formatDate(item.inspectionDetails!.validUntil)}`)
+      .toBe("Ważny do: 01.09.2027");
+    expect(item.inspectionDetails).not.toHaveProperty("validUntilLabel");
   });
   it("renders at most 30 of 3200 records while preserving DB counts", async () => {
     const store = memoryStore(2000, 1200);

@@ -99,7 +99,7 @@ describe("case mappers", () => {
       [INSPECTION_FIELDS.contactLinks]: ["recContact"],
       [INSPECTION_FIELDS.dueDate]: "#ERROR!",
       [INSPECTION_FIELDS.bookingStatus]: [" Nowe ", "", "Potwierdzone"],
-      [INSPECTION_FIELDS.scheduledDate]: "2026-09-01T09:00:00.000Z",
+      [INSPECTION_FIELDS.scheduledDate]: "2026-10-01",
       [INSPECTION_FIELDS.performedAt]: "2026-08-31",
       [INSPECTION_FIELDS.result]: "SPRAWNY",
       [INSPECTION_FIELDS.estimatedDuration]: "720",
@@ -117,7 +117,7 @@ describe("case mappers", () => {
       sourceSnapshot: { estimatedDurationSeconds: 720 },
     });
     expect(mapped.inspectionScheduledDate?.toISOString()).toBe(
-      "2026-09-01T09:00:00.000Z",
+      "2026-10-01T00:00:00.000Z",
     );
     expect(mapped.inspectionPerformedAt?.toISOString()).toBe(
       "2026-08-31T00:00:00.000Z",
@@ -132,6 +132,28 @@ describe("case mappers", () => {
     expect(mapped.inspectionValidUntil).toBeNull();
     expect(mapped.inspectionResult).toBeNull();
   });
+
+  it("maps EMMA: Ważny do from its DD-MM-YYYY contract", () => {
+    const mapped = mapInspection(record("rec27190", {
+      [INSPECTION_FIELDS.emmaValidUntil]: "01-09-2027",
+    }));
+
+    expect(mapped.inspectionValidUntil?.toISOString()).toBe(
+      "2027-09-01T00:00:00.000Z",
+    );
+    expect(mapped.sourceSnapshot.emmaValidUntil).toBe("01-09-2027");
+  });
+
+  it.each(["", "—"])(
+    "does not create inspectionValidUntil from %j",
+    (emmaValidUntil) => {
+      const mapped = mapInspection(record("recNoValidUntil", {
+        [INSPECTION_FIELDS.emmaValidUntil]: emmaValidUntil,
+      }));
+
+      expect(mapped.inspectionValidUntil).toBeNull();
+    },
+  );
 
   it("always maps inspection completedAt to null", () => {
     expect(mapInspection(record("recInspection", {})).completedAt).toBeNull();

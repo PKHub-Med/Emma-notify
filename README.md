@@ -106,12 +106,20 @@ npm run prisma:validate
 npm run db:migrate:deploy
 npm run db:summary
 npm run db:inspect-case -- 19103
+
+$env:TASK_RECORD_ID='recXXXXXXXX'; npm run db:inspect-task
+
+$env:SERVICE_ORDER_NUMBER='24928'; npm run db:inspect-service-order
 npm run db:latest-digest
 ```
 
 `npm run db:summary` jest diagnostyką tylko do odczytu. Pokazuje wyłącznie agregaty spraw, odbiorców, eventów, bufferów (w tym OPEN/READY/CLOSED), digestów i DigestItem, najnowszy czas eventu oraz czasy heartbeat/sync workera; nie wyświetla adresów e-mail, nazw kontaktów, tokenów ani rekordów Airtable.
 
 `npm run db:inspect-case -- <businessNumber>` porównuje wszystkie przeglądy o podanym numerze (numer biznesowy nie jest unikalny) z aktualnymi powiązaniami Airtable. Raport jest tylko do odczytu i pokazuje wyłącznie identyfikatory rekordów, statusy, liczniki, przyczyny eligibility oraz flagi `hasEmail`/`hasNormalizedEmail` — bez nazw i adresów e-mail.
+
+`npm run db:inspect-task` wykonuje diagnostykę read-only pełnego pipeline'u komunikacji dla `TASK_RECORD_ID`: pobiera TASK i powiązane przeglądy z Airtable, odczytuje eventy/delivery z PostgreSQL oraz uruchamia produkcyjny builder payloadu bez zapisywania danych i bez wysyłania maila. Adresy e-mail w raporcie są maskowane.
+
+`npm run db:inspect-service-order` wykonuje read-only diagnostykę naprawy wskazanej przez `SERVICE_ORDER_NUMBER`, porównuje aktualne dane Airtable, `TrackedCase`, snapshot eventu i delivery, rekonstruuje batch napraw oraz uruchamia produkcyjne buildery payloadu bez wysyłki. Dla `TEMPLATE_DATA_MISSING` wskazuje `businessNumber`, `device.name` albo `EMPTY_REPAIR_BATCH`.
 
 `npm run db:latest-digest` pokazuje najnowszy historyczny digest i jego zmiany bez adresu e-mail, nazwy odbiorcy ani sekretów.
 

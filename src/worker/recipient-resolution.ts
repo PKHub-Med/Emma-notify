@@ -8,6 +8,7 @@ import {
 import {
   AIRTABLE_TABLE_IDS,
   CONTACT_FIELD_IDS,
+  HOSPITAL_FIELDS,
 } from "../airtable/field-ids.js";
 import { mapContact, resolveRecipient } from "../airtable/recipient.js";
 import type { AirtableIncrementalSource } from "../airtable/types.js";
@@ -180,93 +181,112 @@ export async function resolveCommunicationEventRecipients(input: {
   now?: () => Date;
   log?: (message: string) => void;
 }): Promise<void> {
-  const contactRecordIds = contactIdsFromSnapshot(input.event);
+  const primaryContactRecordIds = primaryContactIdsFromSnapshot(input.event);
   const recipients: CommunicationEventRecipientInput[] = [];
   const sourceHospitalRecordId = snapshotString(input.event.eventSnapshot, "sourceHospitalRecordId");
   let validClientEmailCount = 0;
 
-  for (const contactRecordId of contactRecordIds) {
-    let contactRecord;
-    try {
-      contactRecord = await input.airtable.fetchRecord(
-        AIRTABLE_TABLE_IDS.contacts,
-        contactRecordId,
-        CONTACT_FIELD_IDS,
-      );
-    } catch {
-      const failedAt = (input.now ?? (() => new Date()))();
-      const failedAttempts = (input.event.recipientResolutionAttemptCount ?? 0) + 1;
-      if (failedAttempts >= MAX_RECIPIENT_RESOLUTION_ATTEMPTS && input.tiemedFallbackEmail) {
-        const normalizedEmail = normalizeEmail(input.tiemedFallbackEmail);
-        await input.store.markResolved(input.event.id, [{
-          recipientType: CommunicationRecipientType.TIEMED_FALLBACK,
-          sourceContactRecordId: null,
-          email: input.tiemedFallbackEmail,
-          normalizedEmail,
-          recipientKey: normalizedEmail,
-          resolutionStatus: CommunicationRecipientResolutionStatus.FALLBACK,
-          resolutionReason: `AIRTABLE_CONTACT_READ_FAILED:${failedAttempts}`,
-        }], failedAt);
-        input.log?.(
-          `COMMUNICATION_RECIPIENT_FALLBACK eventId=${input.event.id} ` +
-          `reason=AIRTABLE_CONTACT_READ_FAILED failedAttempts=${failedAttempts}`,
+  const resolveContactGroup = async (contactRecordIds: readonly string[]): Promise<boolean> => {
+    for (const contactRecordId of contactRecordIds) {
+      let contactRecord;
+      try {
+        contactRecord = await input.airtable.fetchRecord(
+          AIRTABLE_TABLE_IDS.contacts,
+          contactRecordId,
+          CONTACT_FIELD_IDS,
         );
-        return;
+      } catch {
+        await handleAirtableReadFailure(input, contactRecordId);
+        return false;
       }
-      await input.store.markFailed(
-        input.event.id,
-        CommunicationRecipientType.CLIENT,
-        contactRecordId,
-        "AIRTABLE_CONTACT_READ_FAILED",
-        failedAt,
-      );
-      input.log?.(
-        `COMMUNICATION_RECIPIENT_RESOLUTION_FAILED eventId=${input.event.id} reason=AIRTABLE_CONTACT_READ_FAILED`,
-      );
-      return;
-    }
 
-    const resolved = resolveRecipient(contactRecordId, mapContact(contactRecord));
-    if (!resolved.eligible || !resolved.email || !resolved.normalizedEmail) {
-      recipients.push({
-        recipientType: CommunicationRecipientType.CLIENT,
-        sourceContactRecordId: contactRecordId,
-        email: resolved.email,
-        normalizedEmail: null,
-        recipientKey: `INVALID:${contactRecordId}`,
-        resolutionStatus: CommunicationRecipientResolutionStatus.INVALID,
-        resolutionReason: resolved.eligibilityReason,
-      });
-      continue;
-    }
-    if (recipients.some((recipient) =>
-      recipient.normalizedEmail === resolved.normalizedEmail)) continue;
-    validClientEmailCount += 1;
-    if (sourceHospitalRecordId && await input.store.isOptedOut(sourceHospitalRecordId, resolved.normalizedEmail)) {
+      const resolved = resolveRecipient(contactRecordId, mapContact(contactRecord));
+      if (!resolved.eligible || !resolved.email || !resolved.normalizedEmail) {
+        recipients.push({
+          recipientType: CommunicationRecipientType.CLIENT,
+          sourceContactRecordId: contactRecordId,
+          email: resolved.email,
+          normalizedEmail: null,
+          recipientKey: `INVALID:${contactRecordId}`,
+          resolutionStatus: CommunicationRecipientResolutionStatus.INVALID,
+          resolutionReason: resolved.eligibilityReason,
+        });
+        continue;
+      }
+      if (recipients.some((recipient) =>
+        recipient.normalizedEmail === resolved.normalizedEmail)) continue;
+      validClientEmailCount += 1;
+      if (sourceHospitalRecordId && await input.store.isOptedOut(sourceHospitalRecordId, resolved.normalizedEmail)) {
+        recipients.push({
+          recipientType: CommunicationRecipientType.CLIENT,
+          sourceContactRecordId: contactRecordId,
+          email: resolved.email,
+          normalizedEmail: resolved.normalizedEmail,
+          recipientKey: `OPTED_OUT:${resolved.normalizedEmail}`,
+          resolutionStatus: CommunicationRecipientResolutionStatus.INVALID,
+          resolutionReason: "OPTED_OUT",
+        });
+        continue;
+      }
       recipients.push({
         recipientType: CommunicationRecipientType.CLIENT,
         sourceContactRecordId: contactRecordId,
         email: resolved.email,
         normalizedEmail: resolved.normalizedEmail,
-        recipientKey: `OPTED_OUT:${resolved.normalizedEmail}`,
-        resolutionStatus: CommunicationRecipientResolutionStatus.INVALID,
-        resolutionReason: "OPTED_OUT",
+        recipientKey: resolved.normalizedEmail,
+        resolutionStatus: CommunicationRecipientResolutionStatus.READY,
+        resolutionReason: null,
       });
-      continue;
     }
-    recipients.push({
-      recipientType: CommunicationRecipientType.CLIENT,
-      sourceContactRecordId: contactRecordId,
-      email: resolved.email,
-      normalizedEmail: resolved.normalizedEmail,
-      recipientKey: resolved.normalizedEmail,
-      resolutionStatus: CommunicationRecipientResolutionStatus.READY,
-      resolutionReason: null,
-    });
+    return true;
+  };
+
+  if (!await resolveContactGroup(primaryContactRecordIds)) return;
+
+  let readyCount = countReadyRecipients(recipients);
+  if (input.event.sourceEntityType === CommunicationSourceEntityType.TASK && readyCount === 0) {
+    const fallbackContactRecordIds = fallbackContactIdsFromSnapshot(input.event);
+    if (fallbackContactRecordIds.length > 0 && sourceHospitalRecordId) {
+      let hospitalRecord;
+      try {
+        hospitalRecord = await input.airtable.fetchRecord(
+          AIRTABLE_TABLE_IDS.hospitals,
+          sourceHospitalRecordId,
+          [HOSPITAL_FIELDS.contactLinks],
+        );
+      } catch {
+        await handleAirtableReadFailure(input, null);
+        return;
+      }
+
+      if (hospitalRecord) {
+        const hospitalContactIds = new Set(linkedRecordIds(
+          hospitalRecord.fields[HOSPITAL_FIELDS.contactLinks],
+        ));
+        const primaryIds = new Set(primaryContactRecordIds);
+        const scopedFallbackIds: string[] = [];
+        for (const contactRecordId of fallbackContactRecordIds) {
+          if (primaryIds.has(contactRecordId)) continue;
+          if (hospitalContactIds.has(contactRecordId)) {
+            scopedFallbackIds.push(contactRecordId);
+          } else {
+            recipients.push({
+              recipientType: CommunicationRecipientType.CLIENT,
+              sourceContactRecordId: contactRecordId,
+              email: null,
+              normalizedEmail: null,
+              recipientKey: `INVALID_SCOPE:${contactRecordId}`,
+              resolutionStatus: CommunicationRecipientResolutionStatus.INVALID,
+              resolutionReason: "HOSPITAL_SCOPE_MISMATCH",
+            });
+          }
+        }
+        if (!await resolveContactGroup(scopedFallbackIds)) return;
+      }
+    }
   }
 
-  const readyCount = recipients.filter((recipient) =>
-    recipient.resolutionStatus === CommunicationRecipientResolutionStatus.READY).length;
+  readyCount = countReadyRecipients(recipients);
   let fallback = false;
   if (readyCount === 0 && validClientEmailCount === 0) {
     if (!input.tiemedFallbackEmail) {
@@ -313,7 +333,7 @@ function snapshotString(snapshot: unknown, key: string): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
-function contactIdsFromSnapshot(event: RecipientResolutionEvent): string[] {
+function primaryContactIdsFromSnapshot(event: RecipientResolutionEvent): string[] {
   if (!isObject(event.eventSnapshot)) return [];
   const field = event.sourceEntityType === CommunicationSourceEntityType.TASK
     ? "selectedContactRecordIds"
@@ -322,6 +342,63 @@ function contactIdsFromSnapshot(event: RecipientResolutionEvent): string[] {
   if (!Array.isArray(value)) return [];
   return [...new Set(value.filter((item): item is string =>
     typeof item === "string" && item.trim().length > 0))];
+}
+
+function fallbackContactIdsFromSnapshot(event: RecipientResolutionEvent): string[] {
+  if (!isObject(event.eventSnapshot)) return [];
+  return linkedRecordIds(event.eventSnapshot.fallbackContactRecordIds);
+}
+
+function linkedRecordIds(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value.filter((item): item is string =>
+    typeof item === "string" && item.trim().length > 0))];
+}
+
+function countReadyRecipients(recipients: readonly CommunicationEventRecipientInput[]): number {
+  return recipients.filter((recipient) =>
+    recipient.resolutionStatus === CommunicationRecipientResolutionStatus.READY).length;
+}
+
+async function handleAirtableReadFailure(
+  input: {
+    event: RecipientResolutionEvent;
+    store: RecipientResolutionStore;
+    tiemedFallbackEmail: string | null;
+    now?: () => Date;
+    log?: (message: string) => void;
+  },
+  sourceContactRecordId: string | null,
+): Promise<void> {
+  const failedAt = (input.now ?? (() => new Date()))();
+  const failedAttempts = (input.event.recipientResolutionAttemptCount ?? 0) + 1;
+  if (failedAttempts >= MAX_RECIPIENT_RESOLUTION_ATTEMPTS && input.tiemedFallbackEmail) {
+    const normalizedEmail = normalizeEmail(input.tiemedFallbackEmail);
+    await input.store.markResolved(input.event.id, [{
+      recipientType: CommunicationRecipientType.TIEMED_FALLBACK,
+      sourceContactRecordId: null,
+      email: input.tiemedFallbackEmail,
+      normalizedEmail,
+      recipientKey: normalizedEmail,
+      resolutionStatus: CommunicationRecipientResolutionStatus.FALLBACK,
+      resolutionReason: `AIRTABLE_CONTACT_READ_FAILED:${failedAttempts}`,
+    }], failedAt);
+    input.log?.(
+      `COMMUNICATION_RECIPIENT_FALLBACK eventId=${input.event.id} ` +
+      `reason=AIRTABLE_CONTACT_READ_FAILED failedAttempts=${failedAttempts}`,
+    );
+    return;
+  }
+  await input.store.markFailed(
+    input.event.id,
+    CommunicationRecipientType.CLIENT,
+    sourceContactRecordId,
+    "AIRTABLE_CONTACT_READ_FAILED",
+    failedAt,
+  );
+  input.log?.(
+    `COMMUNICATION_RECIPIENT_RESOLUTION_FAILED eventId=${input.event.id} reason=AIRTABLE_CONTACT_READ_FAILED`,
+  );
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {

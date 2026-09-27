@@ -48,9 +48,21 @@ export type TemplateInspection = {
   estimatedDurationSeconds: number | null;
 };
 
+export type TemplateServiceOrder = {
+  airtableRecordId: string;
+  businessNumber: string | null;
+  sourceHospitalRecordId: string | null;
+  deviceName: string | null;
+  manufacturer: string | null;
+  model: string | null;
+  serialNumber: string | null;
+  inventoryNumber: string | null;
+};
+
 export interface CommunicationTemplateDataSource {
   getEmployees(recordIds: readonly string[]): Promise<TemplateEmployee[]>;
   getInspections(recordIds: readonly string[]): Promise<TemplateInspection[]>;
+  getServiceOrders(recordIds: readonly string[]): Promise<TemplateServiceOrder[]>;
 }
 
 export class PrismaCommunicationTemplateDataSource implements CommunicationTemplateDataSource {
@@ -123,6 +135,26 @@ export class PrismaCommunicationTemplateDataSource implements CommunicationTempl
       }))
       .sort((a, b) =>
         (order.get(a.airtableRecordId) ?? 0) - (order.get(b.airtableRecordId) ?? 0));
+  }
+
+  async getServiceOrders(recordIds: readonly string[]): Promise<TemplateServiceOrder[]> {
+    return this.prisma.trackedCase.findMany({
+      where: {
+        caseType: CaseType.SERVICE_ORDER,
+        active: true,
+        airtableRecordId: { in: [...recordIds] },
+      },
+      select: {
+        airtableRecordId: true,
+        businessNumber: true,
+        sourceHospitalRecordId: true,
+        deviceName: true,
+        manufacturer: true,
+        model: true,
+        serialNumber: true,
+        inventoryNumber: true,
+      },
+    });
   }
 
 }
@@ -273,6 +305,7 @@ export async function buildCommunicationTemplatePayload(input: {
   preparedAt: Date;
   timeZone: string;
   officeContact?: CommunicationOfficeContact;
+  allowMissingRepairReceivedDevice?: boolean;
 }): Promise<CommunicationTemplatePayload> {
   if (isRepairScenario(input.delivery.scenario)) {
     return buildCommunicationRepairBatchPayload({
@@ -282,6 +315,9 @@ export async function buildCommunicationTemplatePayload(input: {
       unsubscribeUrl: input.unsubscribeUrl,
       preparedAt: input.preparedAt,
       timeZone: input.timeZone,
+      ...(input.allowMissingRepairReceivedDevice !== undefined
+        ? { allowMissingRepairReceivedDevice: input.allowMissingRepairReceivedDevice }
+        : {}),
     });
   }
 
@@ -467,6 +503,7 @@ export async function buildCommunicationRepairBatchPayload(input: {
   unsubscribeUrl: string;
   preparedAt: Date;
   timeZone: string;
+  allowMissingRepairReceivedDevice?: boolean;
 }): Promise<CommunicationTemplatePayload> {
   if (input.deliveries.length === 0) {
     throw new CommunicationTemplateDataError("TEMPLATE_DATA_MISSING", false);
@@ -481,8 +518,49 @@ export async function buildCommunicationRepairBatchPayload(input: {
     );
   }
 
-  const snapshots = input.deliveries.map((delivery) =>
+  let snapshots = input.deliveries.map((delivery) =>
     object(delivery.eventSnapshot));
+  if (scenario === CommunicationScenario.REPAIR_RECEIVED) {
+    let currentOrders: TemplateServiceOrder[];
+    try {
+      currentOrders = await input.dataSource.getServiceOrders(
+        input.deliveries.map((delivery) => delivery.sourceRecordId),
+      );
+    } catch {
+      throw new CommunicationTemplateDataError("TEMPLATE_DATA_SOURCE_ERROR", true);
+    }
+    const currentByRecordId = new Map(
+      currentOrders.map((order) => [order.airtableRecordId, order]),
+    );
+    snapshots = snapshots.map((snapshot, index) => {
+      const current = currentByRecordId.get(input.deliveries[index]!.sourceRecordId);
+      const snapshotHospital = clean(snapshot.sourceHospitalRecordId);
+      if (!current || !snapshotHospital ||
+          clean(current.sourceHospitalRecordId) !== snapshotHospital) return snapshot;
+      const device = object(snapshot.device);
+      return {
+        ...snapshot,
+        device: {
+          ...device,
+          name: clean(current.deviceName) ?? device.name,
+          manufacturer: clean(current.manufacturer) ?? device.manufacturer,
+          model: clean(current.model) ?? device.model,
+          serialNumber: clean(current.serialNumber) ?? device.serialNumber,
+          inventoryNumber: clean(current.inventoryNumber) ?? device.inventoryNumber,
+        },
+      };
+    });
+    if (input.allowMissingRepairReceivedDevice === false) {
+      const missingRecordIds = snapshots.flatMap((snapshot, index) =>
+        clean(object(snapshot.device).name) ? [] : [input.deliveries[index]!.sourceRecordId]);
+      if (missingRecordIds.length > 0) {
+        throw new CommunicationTemplateDataError("REPAIR_DEVICE_DATA_PENDING", true, {
+          code: "REPAIR_DEVICE_DATA_PENDING",
+          recordIds: missingRecordIds,
+        });
+      }
+    }
+  }
   const rows = snapshots.map((snapshot) => {
     const device = object(snapshot.device);
     return {
@@ -502,7 +580,9 @@ export async function buildCommunicationRepairBatchPayload(input: {
         false,
       ),
       department: display(snapshot.department, "—"),
-      deviceName: required(display(device.name, "")),
+      deviceName: scenario === CommunicationScenario.REPAIR_RECEIVED
+        ? display(device.name, "Brak danych")
+        : required(display(device.name, "")),
       manufacturer: display(device.manufacturer, "—"),
       model: display(device.model, "—"),
       serialNumber: display(device.serialNumber, "brak danych"),

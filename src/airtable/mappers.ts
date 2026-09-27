@@ -252,7 +252,7 @@ export function mapInspection(record: AirtableRecord): MappedCase {
       record.fields[INSPECTION_FIELDS.performedAt],
     ),
     inspectionResult: toOptionalString(record.fields[INSPECTION_FIELDS.result]),
-    inspectionValidUntil: parseAirtableDate(
+    inspectionValidUntil: parseInspectionDueDate(
       record.fields[INSPECTION_FIELDS.emmaValidUntil],
     ),
     inspectionAdminStatus: values.adminStatus,

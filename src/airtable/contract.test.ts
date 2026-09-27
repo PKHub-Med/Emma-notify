@@ -99,6 +99,7 @@ describe("central Airtable contract", () => {
     expect(INSPECTION_FIELDS.adminStatus).toBe("fldG5BLDUibBGubTp");
     expect(INSPECTION_FIELDS.admission).toBe("fldWQzKcmaHodBwLF");
     expect(INSPECTION_FIELDS.dueDate).toBe("fldNMzupWUaEKzn7u");
+    expect(INSPECTION_FIELDS.scheduledDate).toBe("fldKj0qH9JQzPy3CK");
     expect(INSPECTION_FIELDS.estimatedDuration).toBe("fldxx69OVN0ML7ZJG");
   });
 

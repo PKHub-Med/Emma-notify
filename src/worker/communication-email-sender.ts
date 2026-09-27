@@ -41,6 +41,7 @@ import {
 const MAX_ATTEMPTS = 4;
 const STALE_SENDING_MS = 5 * 60_000;
 const RETRY_DELAYS_MS = [60_000, 5 * 60_000, 15 * 60_000, 15 * 60_000] as const;
+const REPAIR_DEVICE_RETRY_DELAYS_MS = [2 * 60_000, 3 * 60_000, 5 * 60_000] as const;
 const CANDIDATE_LIMIT = 1000;
 
 export type PersistedCommunicationSendSnapshot = {
@@ -664,6 +665,7 @@ export async function sendCommunicationRepairBatch(input: {
         unsubscribeUrl: unsubscribeResult.url,
         preparedAt: owner.scheduledFor,
         timeZone: input.config.timeZone,
+        allowMissingRepairReceivedDevice: claimedAttempt(owner) >= MAX_ATTEMPTS,
       });
       payload = addRecipientFallbackNotice(payload, claimed.map((candidate) => ({
         id: candidate.id, scenario: candidate.scenario,
@@ -904,6 +906,7 @@ export async function sendCommunicationDelivery(input: {
         preparedAt: input.now,
         timeZone: input.config.timeZone,
         ...(input.config.officeContact ? { officeContact: input.config.officeContact } : {}),
+        allowMissingRepairReceivedDevice: attempt >= MAX_ATTEMPTS,
       });
       const { EMMA_SECURE_URL: _secureUrl, EMMA_UNSUBSCRIBE_URL: _unsubscribeUrl, ...safeVariables } = payload.variables;
       snapshot = await input.store.saveSnapshot(input.candidate.id, {
@@ -1207,12 +1210,10 @@ async function failRepairBatch(
   for (const candidate of candidates) {
     // Prisma claims increment the persisted attempt count without mutating the
     // fetched candidate object, while in-memory/test stores may mutate it.
-    // Support both semantics so retry timing remains 1/5/15 minutes.
-    const attempt = candidate.status === CommunicationDeliveryStatus.SENDING
-      ? candidate.attemptCount
-      : candidate.attemptCount + 1;
+    // Support both semantics so the selected retry policy receives the real attempt number.
+    const attempt = claimedAttempt(candidate);
     const nextRetryAt = retryable && attempt < MAX_ATTEMPTS
-      ? new Date(input.now.getTime() + RETRY_DELAYS_MS[attempt - 1]!)
+      ? new Date(input.now.getTime() + retryDelayMs(reason, attempt))
       : null;
     await input.store.markFailed(candidate.id, reason, input.now, nextRetryAt);
     input.log?.(
@@ -1246,7 +1247,7 @@ async function fail(
   attempt: number,
 ): Promise<"FAILED"> {
   const nextRetryAt = retryable && attempt < MAX_ATTEMPTS
-    ? new Date(input.now.getTime() + RETRY_DELAYS_MS[attempt - 1]!)
+    ? new Date(input.now.getTime() + retryDelayMs(reason, attempt))
     : null;
   await input.store.markFailed(input.candidate.id, reason, input.now, nextRetryAt);
   input.log?.(
@@ -1255,6 +1256,22 @@ async function fail(
       : `COMMUNICATION_EMAIL_FAILED deliveryId=${input.candidate.id} reason=${reason}`,
   );
   return "FAILED";
+}
+
+function claimedAttempt(candidate: CommunicationSendCandidate): number {
+  // Prisma increments the persisted count without mutating the fetched object;
+  // in-memory stores used by tests mutate both status and count during claim.
+  return candidate.status === CommunicationDeliveryStatus.SENDING
+    ? candidate.attemptCount
+    : candidate.attemptCount + 1;
+}
+
+function retryDelayMs(reason: string, attempt: number): number {
+  if (reason === "REPAIR_DEVICE_DATA_PENDING") {
+    return REPAIR_DEVICE_RETRY_DELAYS_MS[attempt - 1] ??
+      REPAIR_DEVICE_RETRY_DELAYS_MS[REPAIR_DEVICE_RETRY_DELAYS_MS.length - 1]!;
+  }
+  return RETRY_DELAYS_MS[attempt - 1]!;
 }
 
 async function failUnclaimed(

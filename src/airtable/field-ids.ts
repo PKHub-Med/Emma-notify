@@ -18,7 +18,9 @@ export const TASK_FIELDS = {
   status: "fldf9YgAt4q2MfJaL",
   serviceOrderLinks: "fldAxDKX1dJEUygTx",
   inspectionLinks: "flde1xjYgUXSSpHCu",
+  // Airtable: "Osoba kontaktowa (from SZPITAL)".
   contactLinks: "fld3jpkvIZrCAQVbR",
+  // Airtable: "Imie i nazwisko".
   selectedContactLinks: "fldCfGEH3o4QnieTs",
   selectedContactEmailLookup: "fld86wH67E8Hpl5au",
   emmaCustomerStatus: "fldiTY6M5rQLoOFvd",
@@ -110,7 +112,8 @@ export const INSPECTION_FIELDS = {
   dueDate: "fldNMzupWUaEKzn7u",
   sourceModifiedAt: "fldd2z5eJg2GsHLgD",
   bookingStatus: "fldZnO530QNvWM4I8",
-  scheduledDate: "fldsN3Yu1qFao8B87",
+  // Airtable: "Emma: Zadanie data" — canonical ISO YYYY-MM-DD visit date.
+  scheduledDate: "fldKj0qH9JQzPy3CK",
   performedAt: "fldKnyZZ2YdDADoI9",
   // Airtable: "STAN" — technical inspection result.
   result: "fldujTCuvNlwLQSXO",

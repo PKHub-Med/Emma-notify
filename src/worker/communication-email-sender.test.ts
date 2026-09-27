@@ -201,6 +201,91 @@ describe("final reminder validation", () => {
 });
 
 describe("claim, JIT grant and deterministic retry", () => {
+  it("uses current TrackedCase device data for REPAIR_RECEIVED #24928", async () => {
+    const fixture = setup({
+      eventSnapshot: {
+        ...repairSnapshot(),
+        businessNumber: "24928",
+        device: {
+          ...repairSnapshot().device,
+          name: null,
+          manufacturer: null,
+          model: null,
+          serialNumber: null,
+        },
+      },
+    });
+    let currentDeviceName: string | null = null;
+    fixture.dataSource.getServiceOrders = async () => [{
+      airtableRecordId: "recService",
+      businessNumber: "24928",
+      sourceHospitalRecordId: "recHospital",
+      deviceName: currentDeviceName,
+      manufacturer: currentDeviceName ? "GE" : null,
+      model: currentDeviceName ? "Logiq e" : null,
+      serialNumber: currentDeviceName ? "267574WX2" : null,
+      inventoryNumber: currentDeviceName ? "INV-24928" : null,
+    }];
+
+    await run(fixture);
+    expect(fixture.provider.requests).toHaveLength(0);
+    expect(fixture.candidate.nextRetryAt).toEqual(new Date(now.getTime() + 2 * 60_000));
+
+    currentDeviceName = "Aparat USG";
+    await run(fixture, {}, [], new Date(now.getTime() + 2 * 60_000));
+
+    expect(fixture.provider.requests).toHaveLength(1);
+    expect(fixture.provider.requests[0]!.template.variables).toMatchObject({
+      DEVICE_NAME: "Aparat USG",
+      MANUFACTURER_MODEL: "GE · Logiq e",
+      SERIAL_NUMBER: "267574WX2",
+      INVENTORY_NUMBER: "INV-24928",
+    });
+    expect(JSON.stringify(fixture.provider.requests[0]!.template.variables))
+      .not.toContain("Brak danych");
+  });
+
+  it("retries #24903 for 10 minutes before using the final missing-device fallback", async () => {
+    const fixture = setup({
+      eventSnapshot: {
+        ...repairSnapshot(),
+        businessNumber: "24903",
+        device: { ...repairSnapshot().device, name: null },
+      },
+    });
+    fixture.dataSource.getServiceOrders = async () => [{
+      airtableRecordId: "recService",
+      businessNumber: "24903",
+      sourceHospitalRecordId: "recHospital",
+      deviceName: null,
+      manufacturer: null,
+      model: null,
+      serialNumber: null,
+      inventoryNumber: null,
+    }];
+
+    await run(fixture, {}, [], now);
+    expect(fixture.provider.requests).toHaveLength(0);
+    expect(fixture.store.lastError).toBe("REPAIR_DEVICE_DATA_PENDING");
+    expect(fixture.candidate.nextRetryAt).toEqual(new Date(now.getTime() + 2 * 60_000));
+
+    const retryOneAt = new Date(now.getTime() + 2 * 60_000);
+    await run(fixture, {}, [], retryOneAt);
+    expect(fixture.provider.requests).toHaveLength(0);
+    expect(fixture.candidate.nextRetryAt).toEqual(new Date(now.getTime() + 5 * 60_000));
+
+    const retryTwoAt = new Date(now.getTime() + 5 * 60_000);
+    await run(fixture, {}, [], retryTwoAt);
+    expect(fixture.provider.requests).toHaveLength(0);
+    expect(fixture.candidate.nextRetryAt).toEqual(new Date(now.getTime() + 10 * 60_000));
+
+    await run(fixture, {}, [], new Date(now.getTime() + 10 * 60_000));
+    expect(fixture.provider.requests).toHaveLength(1);
+    expect(fixture.provider.requests[0]!.template.variables.DEVICE_NAME).toBe("Brak danych");
+    expect(fixture.candidate.status).toBe(CommunicationDeliveryStatus.SENT);
+    expect(fixture.candidate.attemptCount).toBe(4);
+  });
+
   it("normalizes a legacy numeric-string DEVICE_COUNT before the Resend request", async () => {
     const fixture = setup({
       scenario: CommunicationScenario.INSPECTION_DATE_CONFIRMED,
@@ -747,5 +832,6 @@ function dataSource(): CommunicationTemplateDataSource {
       model: "Epiq", serialNumber: "SN-1", inventoryNumber: null,
       estimatedDurationSeconds: 1200,
     })); },
+    async getServiceOrders() { return []; },
   };
 }

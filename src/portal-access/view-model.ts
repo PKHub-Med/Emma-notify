@@ -118,7 +118,6 @@ export type InspectionDetails = {
   performedAt: Date | null;
   result: string | null;
   validUntil: Date | null;
-  validUntilLabel: string | null;
   notes: string | null;
   faults: string | null;
   admission: string | null;
@@ -1308,8 +1307,7 @@ export function mapCase(
       scheduledAt: stored.inspectionScheduledDate ?? null,
       performedAt: stored.inspectionPerformedAt,
       result: inspectionVerified ? stored.inspectionResult : null,
-      validUntil: inspectionVerified ? stored.inspectionValidUntil : null,
-      validUntilLabel: inspectionVerified ? snapshotText(stored.sourceSnapshot, "emmaValidUntil") : null,
+      validUntil: stored.inspectionValidUntil,
       notes: stored.inspectionNotes ?? null,
       faults: stored.inspectionFaults ?? null,
       admission: inspectionVerified ? stored.inspectionAdmission ?? null : null,

@@ -15,7 +15,10 @@ import type { PrismaClient } from "../generated/prisma/client.js";
 import { CaseType, PortalRefreshStatus } from "../generated/prisma/enums.js";
 import { isPortalCaseRetained } from "../portal-access/view-model.js";
 import type { CommunicationEventStore } from "./communication-event.js";
-import type { IncrementalStore } from "./incremental-store.js";
+import {
+  PrismaIncrementalStore,
+  type IncrementalStore,
+} from "./incremental-store.js";
 import {
   runPortalRefreshWorkerOnce,
   PrismaPortalRefreshWorkerStore,
@@ -252,6 +255,105 @@ describe("portal refresh worker", () => {
     expect(visible()).toHaveLength(2);
   });
 
+  it.each([
+    {
+      scenario: "stores the canonical scheduled date when the database value is null",
+      initialValue: null,
+      airtableValue: "2026-09-30",
+      expectedValue: "2026-09-30T00:00:00.000Z",
+    },
+    {
+      scenario: "keeps the canonical scheduled date when it is unchanged",
+      initialValue: "2026-09-30T00:00:00.000Z",
+      airtableValue: "2026-09-30",
+      expectedValue: "2026-09-30T00:00:00.000Z",
+    },
+    {
+      scenario: "clears the scheduled date when the canonical Airtable field is empty",
+      initialValue: "2026-09-30T00:00:00.000Z",
+      airtableValue: "",
+      expectedValue: null,
+    },
+  ])("$scenario during a normal portal refresh", async ({
+    initialValue,
+    airtableValue,
+    expectedValue,
+  }) => {
+    const inspectionId = "rec2QXkBuCSLO6oeB";
+    const requestStore = new MemoryWorkerStore({
+      id: "refresh-inspection-dates",
+      leaseToken: "assigned-by-claim",
+      sourceHospitalRecordId: "recHospitalA",
+      serviceOrderRecordIds: [],
+      inspectionRecordIds: [inspectionId],
+      deviceRecordIds: [],
+      taskRecordIds: [],
+    });
+    let storedScheduledDate = initialValue === null ? null : new Date(initialValue);
+    let storedSnapshot: Record<string, unknown> | null = null;
+    const trackedCaseUpsert = vi.fn(async (args: {
+      update: {
+        inspectionScheduledDate: Date | null;
+        sourceSnapshot: Record<string, unknown>;
+      };
+    }) => {
+      storedScheduledDate = args.update.inspectionScheduledDate;
+      storedSnapshot = args.update.sourceSnapshot;
+      return { id: "tracked-inspection" };
+    });
+    const transaction = {
+      trackedCase: { upsert: trackedCaseUpsert },
+      trackedCaseDevice: {
+        deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
+        createMany: vi.fn().mockResolvedValue({ count: 0 }),
+      },
+    };
+    const prisma = {
+      trackedCase: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: "tracked-inspection",
+          currentStatus: "W TRAKCIE REALIZACJI",
+        }),
+      },
+      caseRecipient: { deleteMany: vi.fn().mockResolvedValue({ count: 0 }) },
+      $transaction: vi.fn(async (operation: (client: typeof transaction) => Promise<unknown>) =>
+        operation(transaction)),
+    } as unknown as PrismaClient;
+    const fetchRecord = vi.fn(async (
+      tableId: string,
+      recordId: string,
+      fieldIds: readonly string[],
+    ) => {
+      if (tableId === AIRTABLE_TABLE_IDS.hospitals) {
+        return hospitalRecord([inspectionId]);
+      }
+      if (tableId === AIRTABLE_TABLE_IDS.inspections && recordId === inspectionId) {
+        expect(fieldIds).toContain("fldKj0qH9JQzPy3CK");
+        return inspectionScheduledDateRecord(recordId, airtableValue);
+      }
+      throw new Error(`Unexpected record ${tableId}/${recordId}`);
+    });
+
+    await runPortalRefreshWorkerOnce({
+      store: requestStore,
+      airtable: { fetchRecord, fetchAllRecords: vi.fn() } as AirtableIncrementalSource,
+      incrementalStore: new PrismaIncrementalStore(prisma),
+      deviceStore: { upsert: vi.fn() },
+      taskStore: { upsertTask: vi.fn() },
+      communicationStore: noOpCommunicationStore(),
+      quietMinutes: 10,
+      now: () => new Date("2026-09-27T10:00:00.000Z"),
+    });
+
+    expect(INSPECTION_FIELDS.scheduledDate).toBe("fldKj0qH9JQzPy3CK");
+    expect(trackedCaseUpsert).toHaveBeenCalledTimes(1);
+    expect(storedScheduledDate?.toISOString() ?? null).toBe(expectedValue);
+    expect(storedSnapshot).toMatchObject({
+      inspectionScheduledDate: expectedValue,
+    });
+    expect(requestStore.status).toBe(PortalRefreshStatus.SUCCEEDED);
+  });
+
   it("does not create duplicate communication events when the same record is manually refreshed twice", async () => {
     const work = (id: string): PortalRefreshWorkItem => ({
       id,
@@ -414,6 +516,22 @@ function inspectionRecord(id: string, performedAt: string | null): AirtableRecor
       [INSPECTION_FIELDS.businessNumber]: id,
       [INSPECTION_FIELDS.performedAt]: performedAt,
       [INSPECTION_FIELDS.sourceModifiedAt]: "2026-09-12T09:59:00.000Z",
+    },
+  };
+}
+
+function inspectionScheduledDateRecord(
+  id: string,
+  scheduledDate: string,
+): AirtableRecord {
+  return {
+    id,
+    createdTime: "2026-01-10T10:00:00.000Z",
+    fields: {
+      [INSPECTION_FIELDS.businessNumber]: "27190",
+      [INSPECTION_FIELDS.emmaStatus]: "W TRAKCIE REALIZACJI",
+      [INSPECTION_FIELDS.scheduledDate]: scheduledDate,
+      [INSPECTION_FIELDS.sourceModifiedAt]: "2026-09-27T09:59:00.000Z",
     },
   };
 }

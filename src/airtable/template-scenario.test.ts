@@ -65,6 +65,22 @@ describe("communication scenario resolver", () => {
     })).toBeNull();
   });
 
+  it("resolves Wizyta zakończona and the summary template as INSPECTION_COMPLETED", () => {
+    expect(resolveCommunicationScenario({
+      sourceEntityType: "TASK",
+      emmaCustomerStatus: "Wizyta zakończona",
+      emmaMailTemplate: "Przegląd-podsumowanie_wizyty",
+    })).toBe(COMMUNICATION_SCENARIOS.INSPECTION_COMPLETED);
+  });
+
+  it("does not accept the obsolete Zakończono przegląd state", () => {
+    expect(resolveCommunicationScenario({
+      sourceEntityType: "TASK",
+      emmaCustomerStatus: "Zakończono przegląd",
+      emmaMailTemplate: "Przegląd-podsumowanie_wizyty",
+    })).toBeNull();
+  });
+
   it.each(["", "   ", null, undefined])(
     "returns null for blank template %s",
     (emmaMailTemplate) => {

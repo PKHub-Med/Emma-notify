@@ -35,7 +35,7 @@ export const EMMA_COMMUNICATION_CONTRACT = {
     },
     completed: {
       template: "Przegląd-podsumowanie_wizyty",
-      state: "Zakończono przegląd",
+      state: "Wizyta zakończona",
     },
   },
 } as const;

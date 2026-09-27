@@ -5,7 +5,7 @@ import {
   CommunicationScenario,
   CommunicationSourceEntityType,
 } from "../generated/prisma/enums.js";
-import { CONTACT_FIELDS } from "../airtable/field-ids.js";
+import { CONTACT_FIELDS, HOSPITAL_FIELDS } from "../airtable/field-ids.js";
 import type { AirtableIncrementalSource, AirtableRecord } from "../airtable/types.js";
 import {
   MAX_RECIPIENT_RESOLUTION_ATTEMPTS,
@@ -80,6 +80,132 @@ describe("TASK recipient resolution", () => {
       selectedContactEmailLookup: "stale@x.pl",
     });
     expect(ready(result.store)[0]?.normalizedEmail).toBe("fresh@x.pl");
+  });
+
+  it("uses a valid Imie i nazwisko contact without reading or adding hospital fallback", async () => {
+    const result = await resolveInspection(
+      ["recPrimary"], ["recFallback"],
+      {
+        recPrimary: contact("recPrimary", "primary@hospital.pl"),
+        recFallback: contact("recFallback", "fallback@hospital.pl"),
+      },
+      ["recFallback"],
+    );
+
+    expect(ready(result.store)).toMatchObject([
+      { sourceContactRecordId: "recPrimary", normalizedEmail: "primary@hospital.pl" },
+    ]);
+    expect(result.airtable.fetchRecord).toHaveBeenCalledTimes(1);
+    expect(result.airtable.fetchRecord).not.toHaveBeenCalledWith(
+      expect.anything(), "recFallback", expect.anything(),
+    );
+  });
+
+  it("uses the hospital contact when Imie i nazwisko is empty", async () => {
+    const result = await resolveInspection(
+      [], ["recFallback"],
+      { recFallback: contact("recFallback", "fallback@hospital.pl") },
+      ["recFallback"],
+    );
+
+    expect(ready(result.store)).toMatchObject([
+      { sourceContactRecordId: "recFallback", normalizedEmail: "fallback@hospital.pl" },
+    ]);
+    expect(fallback(result.store)).toHaveLength(0);
+  });
+
+  it("uses the hospital contact when Imie i nazwisko has no email", async () => {
+    const result = await resolveInspection(
+      ["recPrimary"], ["recFallback"],
+      {
+        recPrimary: contact("recPrimary", null),
+        recFallback: contact("recFallback", "fallback@hospital.pl"),
+      },
+      ["recFallback"],
+    );
+
+    expect(ready(result.store)).toMatchObject([
+      { sourceContactRecordId: "recFallback", normalizedEmail: "fallback@hospital.pl" },
+    ]);
+  });
+
+  it("uses the hospital contact when Imie i nazwisko is not contactable", async () => {
+    const result = await resolveInspection(
+      ["recPrimary"], ["recFallback"],
+      {
+        recPrimary: contact("recPrimary", "primary@hospital.pl", "NIE"),
+        recFallback: contact("recFallback", "fallback@hospital.pl"),
+      },
+      ["recFallback"],
+    );
+
+    expect(ready(result.store)).toMatchObject([
+      { sourceContactRecordId: "recFallback", normalizedEmail: "fallback@hospital.pl" },
+    ]);
+  });
+
+  it("uses the hospital contact when the primary contact is opted out", async () => {
+    const result = await resolveInspection(
+      ["recPrimary"], ["recFallback"],
+      {
+        recPrimary: contact("recPrimary", "primary@hospital.pl"),
+        recFallback: contact("recFallback", "fallback@hospital.pl"),
+      },
+      ["recFallback"],
+      ["primary@hospital.pl"],
+    );
+
+    expect(ready(result.store)).toMatchObject([
+      { sourceContactRecordId: "recFallback", normalizedEmail: "fallback@hospital.pl" },
+    ]);
+  });
+
+  it("applies the existing opt-out rule to a hospital fallback contact", async () => {
+    const result = await resolveInspection(
+      [], ["recFallback"],
+      { recFallback: contact("recFallback", "fallback@hospital.pl") },
+      ["recFallback"],
+      ["fallback@hospital.pl"],
+    );
+
+    expect(ready(result.store)).toHaveLength(0);
+    expect(fallback(result.store)).toHaveLength(0);
+    expect(invalid(result.store)).toMatchObject([{ resolutionReason: "OPTED_OUT" }]);
+  });
+
+  it("keeps NO_VALID_CLIENT_EMAIL Tiemed fallback when both contact groups are invalid", async () => {
+    const result = await resolveInspection(
+      ["recPrimary"], ["recFallback"],
+      {
+        recPrimary: contact("recPrimary", null),
+        recFallback: contact("recFallback", "not-an-email"),
+      },
+      ["recFallback"],
+    );
+
+    expect(ready(result.store)).toHaveLength(0);
+    expect(fallback(result.store)).toMatchObject([
+      { resolutionReason: "NO_VALID_CLIENT_EMAIL" },
+    ]);
+  });
+
+  it("does not use a fallback contact outside sourceHospitalRecordId", async () => {
+    const result = await resolveInspection(
+      [], ["recOtherHospital"],
+      { recOtherHospital: contact("recOtherHospital", "other@hospital.pl") },
+      ["recThisHospital"],
+    );
+
+    expect(ready(result.store)).toHaveLength(0);
+    expect(fallback(result.store)).toMatchObject([
+      { resolutionReason: "NO_VALID_CLIENT_EMAIL" },
+    ]);
+    expect(invalid(result.store)).toMatchObject([
+      { sourceContactRecordId: "recOtherHospital", resolutionReason: "HOSPITAL_SCOPE_MISMATCH" },
+    ]);
+    expect(result.airtable.fetchRecord).not.toHaveBeenCalledWith(
+      expect.anything(), "recOtherHospital", expect.anything(),
+    );
   });
 });
 
@@ -324,6 +450,31 @@ async function resolveService(ids: string[], contacts: Record<string, AirtableRe
   return { store, airtable };
 }
 
+async function resolveInspection(
+  primaryIds: string[],
+  fallbackIds: string[],
+  contacts: Record<string, AirtableRecord>,
+  hospitalContactIds: string[],
+  optedOutEmails: string[] = [],
+) {
+  const store = new MemoryStore();
+  for (const email of optedOutEmails) store.optedOut.add(`recHospital:${email}`);
+  const airtable = airtableSource({
+    ...contacts,
+    recHospital: hospital("recHospital", hospitalContactIds),
+  });
+  await resolveCommunicationEventRecipients({
+    event: taskEvent(primaryIds, {
+      fallbackContactRecordIds: fallbackIds,
+      sourceHospitalRecordId: "recHospital",
+    }),
+    airtable,
+    store,
+    tiemedFallbackEmail: fallbackEmail,
+  });
+  return { store, airtable };
+}
+
 function taskEvent(ids: string[], extraSnapshot = {}): RecipientResolutionEvent {
   return {
     id: "evtTask",
@@ -333,14 +484,22 @@ function taskEvent(ids: string[], extraSnapshot = {}): RecipientResolutionEvent 
   };
 }
 
-function contact(id: string, email: string | null): AirtableRecord {
+function contact(id: string, email: string | null, contactable = "TAK"): AirtableRecord {
   return {
     id, createdTime: "2026-08-11T08:00:00.000Z",
     fields: {
       [CONTACT_FIELDS.name]: "Contact A",
-      [CONTACT_FIELDS.contactable]: "TAK",
+      [CONTACT_FIELDS.contactable]: contactable,
       [CONTACT_FIELDS.email]: email,
     },
+  };
+}
+
+function hospital(id: string, contactIds: string[]): AirtableRecord {
+  return {
+    id,
+    createdTime: "2026-08-11T08:00:00.000Z",
+    fields: { [HOSPITAL_FIELDS.contactLinks]: contactIds },
   };
 }
 

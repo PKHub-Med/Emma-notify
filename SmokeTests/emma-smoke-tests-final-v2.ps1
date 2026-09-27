@@ -211,7 +211,7 @@ const CONFIG = {
   },
   INSPECTION_COMPLETED: {
     source: "TASK",
-    state: "Zakończono przegląd",
+    state: "Wizyta zakończona",
     template: "Przegląd-podsumowanie_wizyty"
   }
 };

@@ -43,6 +43,16 @@ describe("shared unavailable-feature modal", () => {
     expect(html).not.toContain("inspection-v5-");
   });
 
+  it("renders Ważny do from validUntil even when inspection details are not verified", () => {
+    const html = renderHospitalPortal(emptyView(), "nonce");
+
+    expect(html).toContain("if(!d.verified){detail.append(caseDetailResultTarget(d))");
+    expect(html).toContain(
+      "caseDetailSummaryTile('Ważny do',d.validUntil?formatDate(d.validUntil):null",
+    );
+    expect(html).not.toContain("validUntilLabel");
+  });
+
   it("routes repairs through the shared detail renderer without the legacy timeline", () => {
     const html = renderHospitalPortal(emptyView(), "nonce");
     expect(html).toContain("function renderRepairDetail(item,detail)");
