@@ -186,6 +186,7 @@ export function buildBlockedClientFallbackPayload(input: {
   preparedAt: Date;
   timeZone: string;
   error: CommunicationTemplateDataError;
+  officeContact?: CommunicationOfficeContact;
 }): CommunicationTemplatePayload {
   const delivery = input.deliveries[0];
   if (!delivery) throw new Error("BLOCKED_FALLBACK_DELIVERY_MISSING");
@@ -278,9 +279,15 @@ export function buildBlockedClientFallbackPayload(input: {
     });
   }
   if (scenario === CommunicationScenario.INSPECTION_REMINDER) {
+    const office = input.officeContact ?? {
+      name: "Tiemed", phone: "—", email: "serwis@tiemed.pl",
+    };
+    const phone = displayPhone(office.phone);
     Object.assign(variables, {
-      TECHNICIAN_NAME: "Tiemed", TECHNICIAN_PHONE: "—",
-      TECHNICIAN_PHONE_TEL: "", TECHNICIAN_EMAIL: "—",
+      TECHNICIAN_NAME: display(office.name, "Tiemed"),
+      TECHNICIAN_PHONE: phone,
+      TECHNICIAN_PHONE_TEL: normalizedPhone(phone) ?? "",
+      TECHNICIAN_EMAIL: display(office.email, "—"),
     });
   }
   return { templateId: templateAliasForScenario(scenario), variables };
@@ -465,7 +472,7 @@ export async function buildCommunicationTemplatePayload(input: {
       variables: {
         ...base,
         COORDINATOR_NAME: required(clean(office.name)),
-        COORDINATOR_PHONE: display(office.phone, "—"),
+        COORDINATOR_PHONE: displayPhone(office.phone),
         COORDINATOR_EMAIL: required(clean(office.email)),
         COORDINATOR_REPLY_URL:
           `mailto:${encodeURIComponent(office.email)}?subject=${encodeURIComponent(subject)}`,
@@ -483,15 +490,24 @@ export async function buildCommunicationTemplatePayload(input: {
     }
   }
 
-  const phone = clean(technician?.phone) || "—";
+  const office = input.officeContact ?? {
+    name: "Tiemed", phone: "—", email: "serwis@tiemed.pl",
+  };
+  const phone = firstPerformer
+    ? clean(technician?.phone) || "—"
+    : displayPhone(office.phone);
   return {
     templateId,
     variables: {
       ...base,
-      TECHNICIAN_NAME: clean(technician?.name) || "Tiemed",
+      TECHNICIAN_NAME: firstPerformer
+        ? clean(technician?.name) || "Tiemed"
+        : display(office.name, "Tiemed"),
       TECHNICIAN_PHONE: phone,
       TECHNICIAN_PHONE_TEL: normalizedPhone(phone) ?? "",
-      TECHNICIAN_EMAIL: clean(technician?.email) || "—",
+      TECHNICIAN_EMAIL: firstPerformer
+        ? clean(technician?.email) || "—"
+        : display(office.email, "—"),
     },
   };
 }
@@ -935,6 +951,16 @@ function formatDuration(seconds: number | null): string {
   const hours = Math.floor(minutes / 60);
   const rest = minutes % 60;
   return rest === 0 ? `${hours} godz.` : `${hours} godz. ${rest} min`;
+}
+
+function displayPhone(value: unknown): string {
+  const raw = clean(value);
+  if (!raw) return "—";
+  const digits = raw.replace(/\D/g, "");
+  if (digits.length === 9) {
+    return `${digits.slice(0, 3)} ${digits.slice(3, 6)} ${digits.slice(6)}`;
+  }
+  return raw;
 }
 
 function isRepairScenario(scenario: CommunicationScenario): boolean {

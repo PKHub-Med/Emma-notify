@@ -35,7 +35,7 @@ const workerEnvironmentSchema = z.object({
   EMAIL_FROM: z.string().default(""),
   EMAIL_REPLY_TO: z.email().default("serwis@tiemed.pl"),
   TIEMED_OFFICE_NAME: z.string().default("Tiemed"),
-  TIEMED_OFFICE_PHONE: z.string().default(""),
+  TIEMED_OFFICE_PHONE: z.string().default("727933830"),
   TIEMED_OFFICE_EMAIL: z.email().default("serwis@tiemed.pl"),
   ACCESS_LINK_SIGNING_SECRET: accessLinkSigningSecretSchema,
   PUBLIC_BASE_URL: publicBaseUrlSchema,

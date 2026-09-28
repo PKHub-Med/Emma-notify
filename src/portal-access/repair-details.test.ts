@@ -94,6 +94,7 @@ describe("RepairDetails", () => {
 
   it.each([
     [[2021], "2021"],
+    [[0], null],
     [null, null],
     [undefined, null],
     [[], null],
@@ -117,6 +118,18 @@ describe("RepairDetails", () => {
     }), "REPAIR", [device({ productionYear: "0" })]);
 
     expect(item.repairDetails?.device.productionYear).toBeNull();
+  });
+
+  it.each([
+    ["2022", "2022"],
+    ["0", null],
+    [null, null],
+  ])("normalizes inspection production year %j for portal presentation", (year, expected) => {
+    const item = mapCase(storedRepair({
+      sourceSnapshot: { productionYear: year },
+    }), "INSPECTION", []);
+
+    expect(item.inspectionDetails?.device.productionYear).toBe(expected);
   });
 });
 

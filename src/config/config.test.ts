@@ -127,7 +127,7 @@ describe("loadWorkerConfig", () => {
       communicationSendNotBefore: null,
       emailReplyTo: "serwis@tiemed.pl",
       tiemedOfficeName: "Tiemed",
-      tiemedOfficePhone: "",
+      tiemedOfficePhone: "727933830",
       tiemedOfficeEmail: "serwis@tiemed.pl",
       assetMaxDocumentSourceBytes: 52_428_800,
     });

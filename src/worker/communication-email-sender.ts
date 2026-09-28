@@ -675,7 +675,8 @@ export async function sendCommunicationRepairBatch(input: {
         id: candidate.id, scenario: candidate.scenario,
         sourceRecordId: candidate.event.sourceRecordId,
         eventSnapshot: candidate.event.eventSnapshot,
-      })), owner, grantResult.url, unsubscribeResult.url, input.config.timeZone);
+      })), owner, grantResult.url, unsubscribeResult.url, input.config.timeZone,
+      input.config.officeContact);
       const {
         EMMA_SECURE_URL: _secureUrl,
         EMMA_UNSUBSCRIBE_URL: _unsubscribeUrl,
@@ -1059,6 +1060,7 @@ async function sendUnscopedFallback(
       eventSnapshot: candidate.event.eventSnapshot }],
     secureUrl: "", unsubscribeUrl: "", preparedAt: input.now,
     timeZone: input.config.timeZone, error,
+    ...(input.config.officeContact ? { officeContact: input.config.officeContact } : {}),
   });
   const variables = normalizeCommunicationTemplateVariables(payload.templateId, payload.variables);
   await input.store.rerouteToFallback([candidate.id], fallback, actualFallback, error.code);
@@ -1095,6 +1097,7 @@ function addRecipientFallbackNotice(
   secureUrl: string,
   unsubscribeUrl: string,
   timeZone: string,
+  officeContact?: CommunicationEmailSenderConfig["officeContact"],
 ) {
   if (candidate.recipient.recipientType !== CommunicationRecipientType.TIEMED_FALLBACK) {
     return payload;
@@ -1110,6 +1113,7 @@ function addRecipientFallbackNotice(
         failedAttempts: Number(exhaustedContactRead[1]),
       }, failedAttemptCount: Number(exhaustedContactRead[1]) } : {}),
     }),
+    ...(officeContact ? { officeContact } : {}),
   });
   return { ...payload, variables: {
     ...payload.variables, BLOCKED_NOTICE: diagnostic.variables.BLOCKED_NOTICE ?? "",
@@ -1131,6 +1135,7 @@ async function sendBlockedDelivery(
       eventSnapshot: input.candidate.event.eventSnapshot }],
     secureUrl: grantResult.url, unsubscribeUrl: unsubscribeResult.url,
     preparedAt: input.now, timeZone: input.config.timeZone, error,
+    ...(input.config.officeContact ? { officeContact: input.config.officeContact } : {}),
   });
   if (!isRepairScenario(input.candidate.scenario) && error.diagnostic?.safeRecordIds) {
     try {
@@ -1149,7 +1154,8 @@ async function sendBlockedDelivery(
       payload = addRecipientFallbackNotice(payload, [{ id: input.candidate.id,
         scenario: input.candidate.scenario, sourceRecordId: input.candidate.event.sourceRecordId,
         eventSnapshot: input.candidate.event.eventSnapshot }], input.candidate,
-      grantResult.url, unsubscribeResult.url, input.config.timeZone);
+      grantResult.url, unsubscribeResult.url, input.config.timeZone,
+      input.config.officeContact);
       payload = { ...safePayload, variables: {
         ...safePayload.variables,
         BLOCKED_NOTICE: payload.variables.BLOCKED_NOTICE ?? "",
@@ -1200,6 +1206,7 @@ async function sendBlockedRepairBatch(
       eventSnapshot: candidate.event.eventSnapshot })),
     secureUrl: grantResult.url, unsubscribeUrl: unsubscribeResult.url,
     preparedAt: owner.scheduledFor, timeZone: input.config.timeZone, error,
+    ...(input.config.officeContact ? { officeContact: input.config.officeContact } : {}),
   });
   const variables = normalizeCommunicationTemplateVariables(payload.templateId, payload.variables);
   const ids = candidates.map((candidate) => candidate.id);

@@ -432,6 +432,52 @@ describe("dynamic HTML and source mapping", () => {
     });
   });
 
+  it("uses the central Tiemed contact when the task has no performer", async () => {
+    const payload = await buildCommunicationTemplatePayload({
+      delivery: {
+        id: "delivery",
+        scenario: CommunicationScenario.INSPECTION_REMINDER,
+        sourceRecordId: "task",
+        eventSnapshot: { ...taskSnapshot(), performerRecordIds: [] },
+      },
+      dataSource: source(), secureUrl, unsubscribeUrl, preparedAt,
+      timeZone: "Europe/Warsaw",
+      officeContact: {
+        name: "Tiemed", phone: "727933830", email: "serwis@tiemed.pl",
+      },
+    });
+
+    expect(payload.variables).toMatchObject({
+      TECHNICIAN_NAME: "Tiemed",
+      TECHNICIAN_PHONE: "727 933 830",
+      TECHNICIAN_PHONE_TEL: "tel:727933830",
+      TECHNICIAN_EMAIL: "serwis@tiemed.pl",
+    });
+  });
+
+  it("uses the central Tiemed contact in a blocked reminder payload", () => {
+    const payload = buildBlockedClientFallbackPayload({
+      deliveries: [{
+        id: "delivery",
+        scenario: CommunicationScenario.INSPECTION_REMINDER,
+        sourceRecordId: "task",
+        eventSnapshot: { ...taskSnapshot(), performerRecordIds: [] },
+      }],
+      secureUrl, unsubscribeUrl, preparedAt, timeZone: "Europe/Warsaw",
+      error: new CommunicationTemplateDataError("INSPECTION_SET_INCOMPLETE", false),
+      officeContact: {
+        name: "Tiemed", phone: "727933830", email: "serwis@tiemed.pl",
+      },
+    });
+
+    expect(payload.variables).toMatchObject({
+      TECHNICIAN_NAME: "Tiemed",
+      TECHNICIAN_PHONE: "727 933 830",
+      TECHNICIAN_PHONE_TEL: "tel:727933830",
+      TECHNICIAN_EMAIL: "serwis@tiemed.pl",
+    });
+  });
+
   it("builds a normal eight-device reminder with the first task performer", async () => {
     const ids = Array.from({ length: 8 }, (_, index) => `inspection-${index + 1}`);
     const dataSource: CommunicationTemplateDataSource = {
