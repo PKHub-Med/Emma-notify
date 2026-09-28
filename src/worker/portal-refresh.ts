@@ -239,10 +239,9 @@ export async function runPortalRefreshWorkerOnce(dependencies: {
   };
 
   try {
-    const serviceCommunicationEnabled = await dependencies.communicationStore
-      .isBaselineCompleted("SERVICE_ORDER");
-    const taskCommunicationEnabled = await dependencies.communicationStore
-      .isBaselineCompleted("TASK");
+    // Portal refresh is data-only. It aligns communication cursors but must never
+    // turn historical source state into a new outbound communication.
+    const serviceCommunicationEnabled = false;
     const deviceRecordIds = new Set(claimed.deviceRecordIds);
     const hospital = mapHospital(await dependencies.airtable.fetchRecord(
       AIRTABLE_TABLE_IDS.hospitals,
@@ -263,7 +262,7 @@ export async function runPortalRefreshWorkerOnce(dependencies: {
         record,
         store: dependencies.taskStore,
         communicationStore: dependencies.communicationStore,
-        communicationBaseline: taskCommunicationEnabled,
+        allowEvent: false,
         detectedAt: now(),
         ...(dependencies.log ? { log: dependencies.log } : {}),
       });

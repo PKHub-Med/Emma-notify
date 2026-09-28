@@ -7,6 +7,7 @@ import {
 } from "../generated/prisma/enums.js";
 import {
   createDeliveryPlan,
+  inspectionCompletedLogicalDigestKey,
   runCommunicationDeliveryPlanner,
   type CommunicationDeliveryStore,
   type CurrentTaskState,
@@ -202,6 +203,27 @@ describe("delivery multiplicity, idempotency and processedAt", () => {
     expect(store.deliveries).toHaveLength(1);
   });
 
+  it("deduplicates the same completed digest across event revisions", async () => {
+    const first = event(CommunicationScenario.INSPECTION_COMPLETED, ["recipientA"]);
+    first.id = "event-completed-1";
+    first.eventSnapshot = { sourceHospitalRecordId: "hospitalA", day: "2026-09-28" };
+    first.recipients = [{ id: "recipientA", normalizedEmail: "CLIENT@example.com",
+      recipientKey: "client@example.com" }];
+    const second = structuredClone(first);
+    second.id = "event-completed-2";
+    second.recipients = [{ id: "recipientB", normalizedEmail: "client@example.com",
+      recipientKey: "client@example.com" }];
+    const store = new MemoryDeliveryStore([first, second]);
+
+    await planner(store, new Date("2026-09-28T05:00:00Z"));
+
+    expect(store.deliveries).toHaveLength(1);
+    expect(store.processedEvents).toEqual(new Set([first.id, second.id]));
+    expect(store.deliveries[0]?.logicalDigestKey).toBe(
+      inspectionCompletedLogicalDigestKey(first, first.recipients[0]!),
+    );
+  });
+
   it("does not set processedAt before all deliveries exist", () => {
     const store = new MemoryDeliveryStore([
       event(CommunicationScenario.REPAIR_RECEIVED, ["a", "b"]),
@@ -281,6 +303,8 @@ class MemoryDeliveryStore implements CommunicationDeliveryStore {
     for (const plan of plans) {
       if (this.deliveries.some((item) =>
         item.eventId === event.id && item.recipientId === plan.recipientId)) continue;
+      if (plan.logicalDigestKey && this.deliveries.some((item) =>
+        item.logicalDigestKey === plan.logicalDigestKey)) continue;
       const delivery = {
         ...plan,
         id: `delivery-${this.deliveries.length + 1}`,
@@ -290,10 +314,7 @@ class MemoryDeliveryStore implements CommunicationDeliveryStore {
       this.deliveries.push(delivery);
       created.push(delivery);
     }
-    if (plans.length > 0 && plans.every((plan) => this.deliveries.some((item) =>
-      item.eventId === event.id && item.recipientId === plan.recipientId))) {
-      this.processedEvents.add(event.id);
-    }
+    if (plans.length > 0) this.processedEvents.add(event.id);
     return created;
   }
 
@@ -351,8 +372,8 @@ function event(
     detectedAt: new Date("2026-08-13T07:00:00Z"),
     eventSnapshot: scenario === CommunicationScenario.INSPECTION_REMINDER
       ? reminderSnapshot()
-      : { sourceHospitalRecordId: "recHospital" },
-    recipients: recipientIds.map((id) => ({ id })),
+      : { sourceHospitalRecordId: "recHospital", day: "2026-08-13" },
+    recipients: recipientIds.map((id) => ({ id, recipientKey: id })),
   };
 }
 

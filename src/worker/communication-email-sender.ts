@@ -33,6 +33,7 @@ import {
   type CurrentTaskState,
 } from "./communication-delivery.js";
 import type { CommunicationAssetPreflight } from "../assets/preflight.js";
+import { compareLocalDates, localDateAt, parseLocalDate } from "./communication-time.js";
 import {
   normalizeCommunicationTemplateVariables,
   REPAIR_ROW_SLOT_COUNT,
@@ -61,6 +62,7 @@ export type CommunicationSendCandidate = {
   sendingStartedAt: Date | null;
   nextRetryAt: Date | null;
   sendSnapshot: PersistedCommunicationSendSnapshot | null;
+  logicalDigestKey?: string | null;
   event: {
     detectedAt: Date;
     sourceRecordId: string;
@@ -174,6 +176,7 @@ export class PrismaCommunicationEmailSendStore implements CommunicationEmailSend
         sendingStartedAt: true,
         nextRetryAt: true,
         sendSnapshot: true,
+        logicalDigestKey: true,
         communicationEvent: {
           select: {
             detectedAt: true,
@@ -195,6 +198,7 @@ export class PrismaCommunicationEmailSendStore implements CommunicationEmailSend
       sendingStartedAt: delivery.sendingStartedAt,
       nextRetryAt: delivery.nextRetryAt,
       sendSnapshot: parseSendSnapshot(delivery.sendSnapshot),
+      logicalDigestKey: delivery.logicalDigestKey,
       event: delivery.communicationEvent,
       recipient: delivery.communicationEventRecipient,
     }));
@@ -779,6 +783,19 @@ export async function sendCommunicationDelivery(input: {
 }): Promise<"SENT" | "FAILED" | "CANCELLED" | "SKIPPED"> {
   const activation = input.config.communicationSendNotBefore;
   if (!input.config.communicationEmailsEnabled || !activation) return "SKIPPED";
+  if (input.candidate.scenario === CommunicationScenario.INSPECTION_COMPLETED &&
+      !isCurrentCompletedCandidate(input.candidate, input.now, input.config.timeZone)) {
+    await input.store.cancel(
+      input.candidate.id,
+      CommunicationDeliveryCancelReason.HISTORICAL_COMPLETED,
+      input.now,
+    );
+    input.log?.(
+      `COMMUNICATION_EMAIL_SUPPRESSED deliveryId=${input.candidate.id} ` +
+      `scenario=INSPECTION_COMPLETED reason=HISTORICAL_COMPLETED`,
+    );
+    return "CANCELLED";
+  }
   if (!snapshotString(input.candidate.event.eventSnapshot, "sourceHospitalRecordId")) {
     const reason = isPreActivation(input.candidate, activation)
       ? CommunicationDeliveryCancelReason.MISSING_HOSPITAL_SCOPE_LEGACY
@@ -917,6 +934,11 @@ export async function sendCommunicationDelivery(input: {
         preparedAt: input.now.toISOString(),
       }, input.now);
     } catch (error: unknown) {
+      if (input.candidate.scenario === CommunicationScenario.INSPECTION_COMPLETED &&
+          error instanceof CommunicationTemplateDataError &&
+          error.code === "NO_COMPLETED_INSPECTIONS") {
+        return suppressEmptyCompleted(input);
+      }
       if (error instanceof CommunicationTemplateDataError && !error.retryable &&
           input.config.tiemedFallbackEmail) {
         return sendBlockedDelivery(input, grantResult, unsubscribeResult, error, attempt);
@@ -951,6 +973,11 @@ export async function sendCommunicationDelivery(input: {
     return fail(input, "TEMPLATE_VARIABLES_INVALID", false, attempt);
   }
 
+  if (input.candidate.scenario === CommunicationScenario.INSPECTION_COMPLETED &&
+      isEmptyCompletedVariables(variables)) {
+    return suppressEmptyCompleted(input);
+  }
+
   try {
     // Resend receives ordinary JavaScript Unicode strings end-to-end. Never transcode
     // template variables through binary/latin1 buffers or charset-repair hacks.
@@ -961,7 +988,9 @@ export async function sendCommunicationDelivery(input: {
         id: snapshot.templateId,
         variables,
       },
-      idempotencyKey: communicationIdempotencyKey(input.candidate.id),
+      idempotencyKey: communicationIdempotencyKey(
+        input.candidate.logicalDigestKey ?? input.candidate.id,
+      ),
     });
     if (!response.ok) {
       const failure = classifyProviderFailure(response);
@@ -1008,6 +1037,18 @@ async function sendUnscopedFallback(
   try { actualFallback = resolveFallbackRecipient(input.config, fallback); } catch { return null; }
   const claimed = await input.store.claim(candidate, input.now, input.config.mode, actualFallback);
   if (!claimed) return null;
+  if (candidate.scenario === CommunicationScenario.INSPECTION_COMPLETED) {
+    await input.store.cancel(
+      candidate.id,
+      CommunicationDeliveryCancelReason.EMPTY_COMPLETED,
+      input.now,
+    );
+    input.log?.(
+      `COMMUNICATION_EMAIL_SUPPRESSED deliveryId=${candidate.id} ` +
+      `scenario=INSPECTION_COMPLETED reason=EMPTY_COMPLETED`,
+    );
+    return null;
+  }
   const error = new CommunicationTemplateDataError("MISSING_HOSPITAL_SCOPE", false, {
     code: "MISSING_HOSPITAL_SCOPE", expected: "one hospital", found: null,
     recordIds: [candidate.event.sourceRecordId], safeRecordIds: [],
@@ -1081,7 +1122,7 @@ async function sendBlockedDelivery(
   unsubscribeResult: { url: string },
   error: CommunicationTemplateDataError,
   attempt: number,
-): Promise<"SENT" | "FAILED"> {
+): Promise<"SENT" | "FAILED" | "CANCELLED"> {
   const fallback = input.config.tiemedFallbackEmail;
   if (!fallback) return "FAILED";
   let payload = buildBlockedClientFallbackPayload({
@@ -1116,6 +1157,10 @@ async function sendBlockedDelivery(
     } catch { /* Generic diagnostic-only payload remains safe. */ }
   }
   const variables = normalizeCommunicationTemplateVariables(payload.templateId, payload.variables);
+  if (input.candidate.scenario === CommunicationScenario.INSPECTION_COMPLETED &&
+      isEmptyCompletedVariables(variables)) {
+    return suppressEmptyCompleted(input);
+  }
   const actualFallback = resolveFallbackRecipient(input.config, fallback);
   await input.store.rerouteToFallback([input.candidate.id], fallback, actualFallback, error.code);
   let response: ProviderEmailResult;
@@ -1226,6 +1271,41 @@ async function failRepairBatch(
 
 export function communicationIdempotencyKey(deliveryId: string): string {
   return `emma-communication/${deliveryId}`;
+}
+
+export function isCurrentCompletedCandidate(
+  candidate: Pick<CommunicationSendCandidate, "scenario" | "event">,
+  now: Date,
+  timeZone: string,
+): boolean {
+  if (candidate.scenario !== CommunicationScenario.INSPECTION_COMPLETED) return true;
+  const snapshot = candidate.event.eventSnapshot;
+  const day = typeof snapshot === "object" && snapshot !== null && !Array.isArray(snapshot)
+    ? (snapshot as Record<string, unknown>).day
+    : undefined;
+  const businessDate = parseLocalDate(day);
+  return businessDate !== null &&
+    compareLocalDates(businessDate, localDateAt(now, timeZone)) === 0;
+}
+
+function isEmptyCompletedVariables(variables: Record<string, TemplateVariableValue>): boolean {
+  return ["PASSED_COUNT", "CONDITIONAL_COUNT", "FAILED_COUNT"]
+    .every((key) => Number(variables[key] ?? 0) === 0);
+}
+
+async function suppressEmptyCompleted(
+  input: Parameters<typeof sendCommunicationDelivery>[0],
+): Promise<"CANCELLED"> {
+  await input.store.cancel(
+    input.candidate.id,
+    CommunicationDeliveryCancelReason.EMPTY_COMPLETED,
+    input.now,
+  );
+  input.log?.(
+    `COMMUNICATION_EMAIL_SUPPRESSED deliveryId=${input.candidate.id} ` +
+    `scenario=INSPECTION_COMPLETED reason=EMPTY_COMPLETED`,
+  );
+  return "CANCELLED";
 }
 
 function isPreActivation(candidate: CommunicationSendCandidate, activation: Date): boolean {

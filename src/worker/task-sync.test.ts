@@ -19,6 +19,7 @@ import {
   buildReminderEligibilityFormula,
   TASK_EDITABLE_FIELD_IDS,
   buildTaskSnapshot,
+  COMPLETED_COMMUNICATIONS_PER_RUN_LIMIT,
   runTaskSync,
   type TaskSyncStore,
   type TaskUpsertOutcome,
@@ -286,6 +287,90 @@ describe("task polling and communication events", () => {
     expect(fixture.source.lastOptions).toBeUndefined();
   });
 
+  it("suppresses historical 2025/2026 completed tasks during 28.09.2026 reconcile", async () => {
+    const fixture = taskFixture();
+    fixture.communication.baselineCompleted = true;
+    fixture.source.setCurrent(
+      completedTaskRecord("rec2025", "2025-10-06"),
+      completedTaskRecord("rec2026", "2026-04-08"),
+    );
+
+    await runTaskSync({
+      airtable: fixture.source,
+      store: fixture.store,
+      communicationStore: fixture.communication,
+      requestedMode: "RECONCILE",
+      timeZone: "Europe/Warsaw",
+      now: () => new Date("2026-09-28T04:30:00.000Z"),
+    });
+
+    expect(fixture.communication.events).toHaveLength(0);
+    expect(fixture.communication.resendCalls).toBe(0);
+    expect(fixture.communication.cursors.size).toBe(2);
+  });
+
+  it("updates a changed communication cursor during reconcile without creating an event", async () => {
+    const fixture = taskFixture();
+    fixture.communication.baselineCompleted = true;
+    fixture.communication.cursors.set("TASK:recTask", { signature: "old-contract", revision: 4 });
+    fixture.source.setCurrent(completedTaskRecord("recTask", "2025-11-25"));
+
+    await runTaskSync({
+      airtable: fixture.source,
+      store: fixture.store,
+      communicationStore: fixture.communication,
+      requestedMode: "RECONCILE",
+      now: () => new Date("2026-09-28T04:30:00.000Z"),
+    });
+
+    expect(fixture.communication.events).toHaveLength(0);
+    expect(fixture.communication.cursors.get("TASK:recTask")).toMatchObject({ revision: 5 });
+    expect(fixture.communication.cursors.get("TASK:recTask")?.signature).not.toBe("old-contract");
+  });
+
+  it("creates one current completed event during incremental sync and none on rerun", async () => {
+    const fixture = taskFixture();
+    fixture.communication.baselineCompleted = true;
+    fixture.source.setCurrent(completedTaskRecord("recTask", "2026-09-28"));
+    const input = {
+      airtable: fixture.source,
+      store: fixture.store,
+      communicationStore: fixture.communication,
+      timeZone: "Europe/Warsaw",
+      now: () => new Date("2026-09-28T04:30:00.000Z"),
+    };
+
+    await runTaskSync(input);
+    await runTaskSync(input);
+
+    expect(fixture.communication.events).toHaveLength(1);
+    expect(fixture.communication.events[0]?.observation.scenario).toBe("INSPECTION_COMPLETED");
+  });
+
+  it("opens the completed circuit breaker at 20 events and suppresses the rest", async () => {
+    const fixture = taskFixture();
+    const logs: string[] = [];
+    fixture.communication.baselineCompleted = true;
+    fixture.source.setCurrent(...Array.from({ length: 30 }, (_, index) =>
+      completedTaskRecord(`recCompleted${index}`, "2026-09-28")));
+
+    await runTaskSync({
+      airtable: fixture.source,
+      store: fixture.store,
+      communicationStore: fixture.communication,
+      timeZone: "Europe/Warsaw",
+      now: () => new Date("2026-09-28T04:30:00.000Z"),
+      log: (message) => logs.push(message),
+    });
+
+    expect(fixture.communication.events).toHaveLength(COMPLETED_COMMUNICATIONS_PER_RUN_LIMIT);
+    expect(fixture.communication.cursors.size).toBe(30);
+    expect(logs).toContain(
+      `ERROR COMMUNICATION_COMPLETED_SAFETY_LIMIT_REACHED ` +
+      `limit=${COMPLETED_COMMUNICATIONS_PER_RUN_LIMIT} mode=INCREMENTAL`,
+    );
+  });
+
   it("builds a narrow reminder eligibility formula for tomorrow in Warsaw", () => {
     const formula = buildReminderEligibilityFormula(
       new Date("2026-08-13T22:30:00.000Z"),
@@ -298,7 +383,7 @@ describe("task polling and communication events", () => {
     expect(formula).not.toContain("2026-08-16");
   });
 
-  it("finds tomorrow reminder tasks without advancing the incremental cursor", async () => {
+  it("aligns tomorrow reminder cursors without emitting outside incremental sync", async () => {
     const fixture = taskFixture();
     fixture.communication.baselineCompleted = true;
     fixture.store.checkpoint = {
@@ -323,7 +408,7 @@ describe("task polling and communication events", () => {
     expect(fixture.store.checkpoint.lastSuccessfulSyncAt?.toISOString()).toBe(
       "2026-08-13T04:00:00.000Z",
     );
-    expect(fixture.communication.events[0]?.observation.scenario).toBe("INSPECTION_REMINDER");
+    expect(fixture.communication.events).toHaveLength(0);
   });
 
   it("does not fetch today, day-after-tomorrow or wrong-template tasks", async () => {
@@ -349,7 +434,7 @@ describe("task polling and communication events", () => {
     expect(fixture.communication.events).toHaveLength(0);
   });
 
-  it("keeps one event across 100 reminder eligibility polls", async () => {
+  it("keeps zero events across 100 reminder eligibility polls", async () => {
     const fixture = taskFixture();
     fixture.communication.baselineCompleted = true;
     fixture.source.setCurrent(taskRecord({
@@ -366,7 +451,7 @@ describe("task polling and communication events", () => {
         now: () => new Date("2026-08-14T04:30:00Z"),
       });
     }
-    expect(fixture.communication.events).toHaveLength(1);
+    expect(fixture.communication.events).toHaveLength(0);
   });
 
   it("marks a failed synchronization without creating an event", async () => {
@@ -426,5 +511,18 @@ function taskRecord(overrides: Record<string, unknown> = {}): AirtableRecord {
       [TASK_FIELDS.assigneeLinks]: ["recEmployeeA", "recEmployeeB"],
       ...overrides,
     },
+  };
+}
+
+function completedTaskRecord(id: string, day: string): AirtableRecord {
+  return {
+    ...taskRecord({
+      [TASK_FIELDS.day]: day,
+      [TASK_FIELDS.completed]: true,
+      [TASK_FIELDS.status]: "Zakończone",
+      [TASK_FIELDS.emmaCustomerStatus]: "Wizyta zakończona",
+      [TASK_FIELDS.emmaMailTemplate]: "Przegląd-podsumowanie_wizyty",
+    }),
+    id,
   };
 }

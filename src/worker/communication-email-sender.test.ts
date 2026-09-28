@@ -481,6 +481,52 @@ describe("provider result and retry classification", () => {
       .toEqual(client.provider.requests[0]?.template.variables.REPAIR_ROW_01);
   });
 
+  it("retries a completed delivery with the same logical digest idempotency key", async () => {
+    const logicalDigestKey = "inspection-completed/stable-logical-key";
+    const fixture = setup({
+      scenario: CommunicationScenario.INSPECTION_COMPLETED,
+      logicalDigestKey,
+      eventSnapshot: {
+        ...reminderSnapshot({ day: "2026-08-15" }),
+        linkedInspectionRecordIds: ["inspectionA"],
+      },
+    }, [
+      { ok: false, error: { name: "rate_limit_exceeded", statusCode: 429 } },
+      { ok: true, id: "resend-after-retry" },
+    ]);
+    fixture.dataSource.getInspections = async () => [inspectionFixture("inspectionA", "SPRAWNY")];
+
+    await run(fixture);
+    await run(fixture, {}, [], new Date(now.getTime() + 60_000));
+
+    expect(fixture.provider.requests).toHaveLength(2);
+    expect(fixture.provider.requests.map((request) => request.idempotencyKey)).toEqual([
+      communicationIdempotencyKey(logicalDigestKey),
+      communicationIdempotencyKey(logicalDigestKey),
+    ]);
+  });
+
+  it("sends one valid current completed digest and does not resend it on the next poll", async () => {
+    const fixture = setup({
+      scenario: CommunicationScenario.INSPECTION_COMPLETED,
+      logicalDigestKey: "inspection-completed/current-valid",
+      eventSnapshot: {
+        ...reminderSnapshot({ day: "2026-08-15" }),
+        linkedInspectionRecordIds: ["inspectionA"],
+      },
+    });
+    fixture.dataSource.getInspections = async () => [inspectionFixture("inspectionA", "SPRAWNY")];
+
+    await run(fixture);
+    await run(fixture);
+
+    expect(fixture.provider.requests).toHaveLength(1);
+    expect(fixture.provider.requests[0]?.template.variables).toMatchObject({
+      PASSED_COUNT: "1", CONDITIONAL_COUNT: "0", FAILED_COUNT: "0",
+    });
+    expect(fixture.candidate.status).toBe(CommunicationDeliveryStatus.SENT);
+  });
+
   it("includes exhausted Airtable contact-read attempts in the fallback diagnostic", async () => {
     const fixture = setup({ recipient: {
       recipientType: CommunicationRecipientType.TIEMED_FALLBACK,
@@ -534,18 +580,58 @@ describe("provider result and retry classification", () => {
   it("sends no partial inspection summary when one result is null", async () => {
     const fixture = setup({
       scenario: CommunicationScenario.INSPECTION_COMPLETED,
-      eventSnapshot: { ...reminderSnapshot(), linkedInspectionRecordIds: ["good", "bad", "missing"] },
+      eventSnapshot: { ...reminderSnapshot({ day: "2026-08-15" }), linkedInspectionRecordIds: ["good", "bad", "missing"] },
     });
-    fixture.dataSource.getInspections = async () => [
+    fixture.dataSource.getInspections = async (recordIds) => [
       inspectionFixture("good", "SPRAWNY"), inspectionFixture("bad", "NIESPRAWNY"),
       { ...inspectionFixture("missing", "ZAKOŃCZONY"), inspectionResult: null },
-    ];
+    ].filter((inspection) => recordIds.includes(inspection.airtableRecordId));
     await run(fixture);
     expect(fixture.provider.requests).toHaveLength(1);
     expect(fixture.provider.requests[0]!.to).toBe("test@example.test");
     expect(fixture.provider.requests[0]!.template.variables.BLOCKED_NOTICE)
       .toContain("INSPECTION_RESULT_INCOMPLETE");
     expect(fixture.store.lastError).toBe("BLOCKED_CLIENT:INSPECTION_RESULT_INCOMPLETE");
+  });
+
+  it("suppresses an empty completed summary without calling the provider", async () => {
+    const logs: string[] = [];
+    const fixture = setup({
+      scenario: CommunicationScenario.INSPECTION_COMPLETED,
+      eventSnapshot: {
+        ...reminderSnapshot({ day: "2026-08-15" }),
+        linkedInspectionRecordIds: [],
+      },
+    });
+    fixture.dataSource.getInspections = async () => [];
+
+    await run(fixture, {}, logs);
+
+    expect(fixture.provider.requests).toHaveLength(0);
+    expect(fixture.candidate.status).toBe(CommunicationDeliveryStatus.CANCELLED);
+    expect(fixture.store.cancelReason).toBe(CommunicationDeliveryCancelReason.EMPTY_COMPLETED);
+    expect(logs.join(" ")).toContain("reason=EMPTY_COMPLETED");
+  });
+
+  it("suppresses a historical completed event even when detected today", async () => {
+    const logs: string[] = [];
+    const fixture = setup({
+      scenario: CommunicationScenario.INSPECTION_COMPLETED,
+      detectedAt: now,
+      eventSnapshot: {
+        ...reminderSnapshot({ day: "2025-10-06" }),
+        linkedInspectionRecordIds: ["inspectionA"],
+      },
+    });
+
+    await run(fixture, {}, logs);
+
+    expect(fixture.provider.requests).toHaveLength(0);
+    expect(fixture.candidate.status).toBe(CommunicationDeliveryStatus.CANCELLED);
+    expect(fixture.store.cancelReason).toBe(
+      CommunicationDeliveryCancelReason.HISTORICAL_COMPLETED,
+    );
+    expect(logs.join(" ")).toContain("reason=HISTORICAL_COMPLETED");
   });
 });
 

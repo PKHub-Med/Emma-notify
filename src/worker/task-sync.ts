@@ -17,11 +17,15 @@ import {
   buildTaskObservation,
   observeCommunication,
   type CommunicationEventStore,
+  type CommunicationObservation,
+  type CommunicationObservationResult,
 } from "./communication-event.js";
+import { compareLocalDates, localDateAt, parseLocalDate } from "./communication-time.js";
 import { formatIncrementalSyncFailure } from "./incremental-sync-error.js";
 
 export type TaskSyncMode = "BASELINE" | "INCREMENTAL" | "RECONCILE" | "REMINDER_ELIGIBILITY";
 export type TaskUpsertOutcome = "FIRST_SEEN" | "UNCHANGED" | "CHANGED";
+export const COMPLETED_COMMUNICATIONS_PER_RUN_LIMIT = 20;
 
 export interface TaskSyncStore {
   markRunning(at: Date): Promise<void>;
@@ -151,19 +155,40 @@ export async function runTaskSync(dependencies: {
       durationMs: 0,
     };
 
+    let completedEventsCreated = 0;
+    let completedLimitLogged = false;
     for (const record of records) {
       const detectedAt = now();
+      const task = mapTask(record);
+      const observation = buildTaskObservation(task, detectedAt);
+      const automaticEventAllowed = mode === "INCREMENTAL" &&
+        isCurrentCompletedObservation(observation, detectedAt,
+          dependencies.timeZone ?? "Europe/Warsaw");
+      const completedLimitReached = observation.scenario === "INSPECTION_COMPLETED" &&
+        completedEventsCreated >= COMPLETED_COMMUNICATIONS_PER_RUN_LIMIT;
+      if (completedLimitReached && !completedLimitLogged) {
+        completedLimitLogged = true;
+        dependencies.log?.(
+          `ERROR COMMUNICATION_COMPLETED_SAFETY_LIMIT_REACHED ` +
+          `limit=${COMPLETED_COMMUNICATIONS_PER_RUN_LIMIT} mode=${mode}`,
+        );
+      }
+      const allowEvent = automaticEventAllowed && !completedLimitReached;
       const outcome = await syncSingleTaskRecord({
         record,
         store: dependencies.store,
         communicationStore: dependencies.communicationStore,
-        communicationBaseline,
+        allowEvent,
         detectedAt,
         ...(dependencies.log ? { log: dependencies.log } : {}),
       });
-      if (outcome === "FIRST_SEEN") stats.firstSeen += 1;
-      if (outcome === "CHANGED") stats.changed += 1;
-      if (outcome === "UNCHANGED") stats.unchanged += 1;
+      if (outcome.communicationOutcome === "CREATED" &&
+          observation.scenario === "INSPECTION_COMPLETED") {
+        completedEventsCreated += 1;
+      }
+      if (outcome.taskOutcome === "FIRST_SEEN") stats.firstSeen += 1;
+      if (outcome.taskOutcome === "CHANGED") stats.changed += 1;
+      if (outcome.taskOutcome === "UNCHANGED") stats.unchanged += 1;
     }
 
     const completedAt = now();
@@ -196,20 +221,34 @@ export async function syncSingleTaskRecord(input: {
   record: AirtableRecord;
   store: Pick<TaskSyncStore, "upsertTask">;
   communicationStore: CommunicationEventStore;
-  communicationBaseline: boolean;
+  allowEvent: boolean;
   detectedAt: Date;
   log?: (message: string) => void;
-}): Promise<TaskUpsertOutcome> {
+}): Promise<{
+  taskOutcome: TaskUpsertOutcome;
+  communicationOutcome: CommunicationObservationResult["outcome"];
+}> {
   const task = mapTask(input.record);
-  const outcome = await input.store.upsertTask(task, input.detectedAt);
-  await observeCommunication({
+  const taskOutcome = await input.store.upsertTask(task, input.detectedAt);
+  const communication = await observeCommunication({
     store: input.communicationStore,
     observation: buildTaskObservation(task, input.detectedAt),
-    allowEvent: input.communicationBaseline,
+    allowEvent: input.allowEvent,
     detectedAt: input.detectedAt,
     ...(input.log ? { log: input.log } : {}),
   });
-  return outcome;
+  return { taskOutcome, communicationOutcome: communication.outcome };
+}
+
+export function isCurrentCompletedObservation(
+  observation: CommunicationObservation,
+  now: Date,
+  timeZone: string,
+): boolean {
+  if (observation.scenario !== "INSPECTION_COMPLETED") return true;
+  const businessDate = parseLocalDate(observation.eventSnapshot.day);
+  return businessDate !== null &&
+    compareLocalDates(businessDate, localDateAt(now, timeZone)) === 0;
 }
 
 export const TASK_EDITABLE_FIELD_IDS = [

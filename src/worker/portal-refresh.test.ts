@@ -182,6 +182,11 @@ describe("portal refresh worker", () => {
     );
     expect(requestStore.activeDevices.has("recDeviceForeign")).toBe(false);
     expect(communicationStore.observe).toHaveBeenCalledTimes(1);
+    expect(communicationStore.observe).toHaveBeenCalledWith(
+      expect.any(Object),
+      false,
+      expect.any(Date),
+    );
   });
 
   it("keeps a null repair production year null after a normal refresh with an empty lookup", async () => {
@@ -502,7 +507,7 @@ describe("portal refresh worker", () => {
     await runPortalRefreshWorkerOnce({ ...common, store: new MemoryWorkerStore(work("refresh-2")) });
 
     expect(communicationStore.observedCount).toBe(4);
-    expect(communicationStore.createdCount).toBe(2);
+    expect(communicationStore.createdCount).toBe(0);
   });
 
   it("logs the safe original Airtable cause when a portal refresh fails", async () => {
@@ -685,12 +690,16 @@ class IdempotentCommunicationStore implements CommunicationEventStore {
   createdCount = 0;
   async isBaselineCompleted() { return true; }
   async markBaselineCompleted() {}
-  async observe(observation: Parameters<CommunicationEventStore["observe"]>[0]) {
+  async observe(
+    observation: Parameters<CommunicationEventStore["observe"]>[0],
+    allowEvent: boolean,
+  ) {
     this.observedCount += 1;
     if (this.signatures.has(observation.signature)) {
       return { outcome: "UNCHANGED" as const, revision: 1 };
     }
     this.signatures.add(observation.signature);
+    if (!allowEvent) return { outcome: "SUPPRESSED" as const, revision: 1 };
     this.createdCount += 1;
     return { outcome: "CREATED" as const, revision: 1 };
   }

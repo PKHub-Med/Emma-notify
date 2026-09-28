@@ -104,6 +104,8 @@ enum CommunicationDeliveryCancelReason {
   SOURCE_STATE_CHANGED
   INVALID_REMINDER_DATE
   PRE_ACTIVATION
+  HISTORICAL_COMPLETED
+  EMPTY_COMPLETED
   RECIPIENT_OPTED_OUT
   MISSING_HOSPITAL_SCOPE
   MISSING_HOSPITAL_SCOPE_LEGACY
@@ -361,6 +363,7 @@ model CommunicationDelivery {
   scheduledFor                  DateTime
   readyAt                       DateTime?
   deliveryKey                   String                              @unique
+  logicalDigestKey              String?                             @unique
   scheduleReason                CommunicationDeliveryScheduleReason
   cancelReason                  CommunicationDeliveryCancelReason?
   attemptCount                  Int                                 @default(0)

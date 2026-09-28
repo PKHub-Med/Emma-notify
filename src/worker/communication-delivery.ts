@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { Prisma, type PrismaClient } from "../generated/prisma/client.js";
 import {
   CommunicationDeliveryCancelReason,
@@ -22,7 +23,12 @@ export type DeliveryPlanningEvent = {
   scenario: CommunicationScenario;
   detectedAt: Date;
   eventSnapshot: unknown;
-  recipients: { id: string }[];
+  recipients: {
+    id: string;
+    normalizedEmail?: string | null;
+    email?: string | null;
+    recipientKey?: string;
+  }[];
 };
 
 export type DeliveryPlan = {
@@ -32,6 +38,7 @@ export type DeliveryPlan = {
   readyAt: Date | null;
   scheduleReason: CommunicationDeliveryScheduleReason;
   cancelReason: CommunicationDeliveryCancelReason | null;
+  logicalDigestKey: string | null;
 };
 
 export type PlannedDelivery = DeliveryPlan & {
@@ -104,7 +111,7 @@ export class PrismaCommunicationDeliveryStore implements CommunicationDeliverySt
             },
           },
           orderBy: { id: "asc" },
-          select: { id: true },
+          select: { id: true, normalizedEmail: true, email: true, recipientKey: true },
         },
       },
     });
@@ -129,20 +136,30 @@ export class PrismaCommunicationDeliveryStore implements CommunicationDeliverySt
           select: { id: true },
         });
         if (existing) continue;
-        const delivery = await transaction.communicationDelivery.create({
-          data: {
-            communicationEventId: event.id,
-            communicationEventRecipientId: plan.recipientId,
-            scenario: event.scenario,
-            status: plan.status,
-            scheduledFor: plan.scheduledFor,
-            readyAt: plan.readyAt,
-            deliveryKey: `${event.id}:${plan.recipientId}`,
-            scheduleReason: plan.scheduleReason,
-            cancelReason: plan.cancelReason,
-          },
-          select: { id: true },
-        });
+        const deliveryData = {
+          communicationEventId: event.id,
+          communicationEventRecipientId: plan.recipientId,
+          scenario: event.scenario,
+          status: plan.status,
+          scheduledFor: plan.scheduledFor,
+          readyAt: plan.readyAt,
+          deliveryKey: `${event.id}:${plan.recipientId}`,
+          logicalDigestKey: plan.logicalDigestKey,
+          scheduleReason: plan.scheduleReason,
+          cancelReason: plan.cancelReason,
+        };
+        const delivery = plan.logicalDigestKey
+          ? await transaction.communicationDelivery.upsert({
+              where: { logicalDigestKey: plan.logicalDigestKey },
+              create: deliveryData,
+              update: {},
+              select: { id: true, communicationEventId: true },
+            })
+          : await transaction.communicationDelivery.create({
+              data: deliveryData,
+              select: { id: true, communicationEventId: true },
+            });
+        if (delivery.communicationEventId !== event.id) continue;
         created.push({
           ...plan,
           id: delivery.id,
@@ -151,19 +168,10 @@ export class PrismaCommunicationDeliveryStore implements CommunicationDeliverySt
         });
       }
 
-      const recipientIds = plans.map((plan) => plan.recipientId);
-      const deliveryCount = await transaction.communicationDelivery.count({
-        where: {
-          communicationEventId: event.id,
-          communicationEventRecipientId: { in: recipientIds },
-        },
+      await transaction.communicationEvent.update({
+        where: { id: event.id },
+        data: { processedAt },
       });
-      if (deliveryCount === plans.length) {
-        await transaction.communicationEvent.update({
-          where: { id: event.id },
-          data: { processedAt },
-        });
-      }
       return created;
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
   }
@@ -245,7 +253,7 @@ export async function runCommunicationDeliveryPlanner(input: {
   const events = await input.store.findEventsAwaitingDelivery(PLANNER_LIMIT);
   for (const event of events) {
     const plans = event.recipients.map((recipient) =>
-      createDeliveryPlan(event, recipient.id, planningNow, input.timeZone));
+      createDeliveryPlan(event, recipient, planningNow, input.timeZone));
     const created = await input.store.ensureDeliveries(event, plans, planningNow);
     for (const delivery of created) {
       if (delivery.status === CommunicationDeliveryStatus.CANCELLED) {
@@ -311,10 +319,15 @@ export async function runCommunicationDeliveryPlanner(input: {
 
 export function createDeliveryPlan(
   event: DeliveryPlanningEvent,
-  recipientId: string,
+  recipientInput: DeliveryPlanningEvent["recipients"][number] | string,
   now: Date,
   timeZone: string,
 ): DeliveryPlan {
+  const recipient = typeof recipientInput === "string"
+    ? { id: recipientInput, normalizedEmail: null, email: null, recipientKey: recipientInput }
+    : recipientInput;
+  const recipientId = recipient.id;
+  const logicalDigestKey = inspectionCompletedLogicalDigestKey(event, recipient);
   if (!snapshotString(event.eventSnapshot, "sourceHospitalRecordId")) {
     return {
       recipientId,
@@ -327,6 +340,7 @@ export function createDeliveryPlan(
         ? CommunicationDeliveryScheduleReason.REMINDER_0600
         : CommunicationDeliveryScheduleReason.EVENT_DRIVEN,
       cancelReason: CommunicationDeliveryCancelReason.MISSING_HOSPITAL_SCOPE,
+      logicalDigestKey,
     };
   }
   if (event.scenario === CommunicationScenario.REPAIR_RECEIVED ||
@@ -343,6 +357,7 @@ export function createDeliveryPlan(
       readyAt: ready ? now : null,
       scheduleReason: CommunicationDeliveryScheduleReason.EVENT_DRIVEN,
       cancelReason: null,
+      logicalDigestKey,
     };
   }
   if (event.scenario !== CommunicationScenario.INSPECTION_REMINDER) {
@@ -353,6 +368,7 @@ export function createDeliveryPlan(
       readyAt: now,
       scheduleReason: CommunicationDeliveryScheduleReason.EVENT_DRIVEN,
       cancelReason: null,
+      logicalDigestKey,
     };
   }
 
@@ -381,6 +397,7 @@ export function createDeliveryPlan(
     readyAt: now.getTime() >= scheduledFor.getTime() ? now : null,
     scheduleReason: CommunicationDeliveryScheduleReason.REMINDER_0600,
     cancelReason: null,
+    logicalDigestKey,
   };
 }
 
@@ -430,7 +447,25 @@ function cancelledPlan(
     readyAt: null,
     scheduleReason: CommunicationDeliveryScheduleReason.REMINDER_0600,
     cancelReason,
+    logicalDigestKey: null,
   };
+}
+
+export function inspectionCompletedLogicalDigestKey(
+  event: Pick<DeliveryPlanningEvent, "scenario" | "eventSnapshot">,
+  recipient: Pick<DeliveryPlanningEvent["recipients"][number],
+    "normalizedEmail" | "email" | "recipientKey">,
+): string | null {
+  if (event.scenario !== CommunicationScenario.INSPECTION_COMPLETED) return null;
+  const businessDate = parseLocalDate(snapshotValue(event.eventSnapshot, "day"));
+  const hospital = snapshotString(event.eventSnapshot, "sourceHospitalRecordId");
+  const recipientIdentity = (recipient.normalizedEmail ?? recipient.email ?? recipient.recipientKey ?? "")
+    .trim().toLowerCase();
+  if (!businessDate || !hospital || !recipientIdentity) return null;
+  const date = [businessDate.year, String(businessDate.month).padStart(2, "0"),
+    String(businessDate.day).padStart(2, "0")].join("-");
+  const payload = ["INSPECTION_COMPLETED", date, hospital, recipientIdentity].join("|");
+  return `inspection-completed/${createHash("sha256").update(payload).digest("hex")}`;
 }
 
 function snapshotValue(snapshot: unknown, key: string): unknown {
