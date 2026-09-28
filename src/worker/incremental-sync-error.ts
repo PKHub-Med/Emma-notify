@@ -1,5 +1,6 @@
 import { AirtableRequestError } from "../airtable/client.js";
 import { AIRTABLE_TABLE_IDS } from "../airtable/field-ids.js";
+import { Prisma } from "../generated/prisma/client.js";
 
 export type IncrementalSyncStage =
   | "TASK"
@@ -14,6 +15,37 @@ export class IncrementalSyncStageError extends Error {
     super("Incremental synchronization stage failed", { cause });
     this.name = "IncrementalSyncStageError";
   }
+}
+
+export type SafePrismaValidationDetails = {
+  errorName: "PrismaClientValidationError";
+  errorCode: "PRISMA_VALIDATION";
+  reason: string;
+  model?: string;
+  operation?: string;
+};
+
+export function unwrapIncrementalSyncError(error: unknown): unknown {
+  return error instanceof IncrementalSyncStageError ? error.cause : error;
+}
+
+export function safePrismaValidationDetails(
+  wrappedError: unknown,
+): SafePrismaValidationDetails | null {
+  const error = unwrapIncrementalSyncError(wrappedError);
+  if (!(error instanceof Error) || !isPrismaValidationError(error)) return null;
+  const invocation = error.message.match(
+    /prisma\.([A-Za-z][A-Za-z0-9_]*)\.([A-Za-z][A-Za-z0-9_]*)\(\)/,
+  );
+  return {
+    errorName: "PrismaClientValidationError",
+    errorCode: "PRISMA_VALIDATION",
+    reason: safePrismaValidationReason(error.message),
+    ...(invocation?.[1]
+      ? { model: invocation[1][0]!.toUpperCase() + invocation[1].slice(1) }
+      : {}),
+    ...(invocation?.[2] ? { operation: invocation[2] } : {}),
+  };
 }
 
 export async function atIncrementalStage<T>(
@@ -36,14 +68,24 @@ export function formatIncrementalSyncFailure(input: {
   const stageError = input.error instanceof IncrementalSyncStageError
     ? input.error
     : undefined;
-  const error = stageError?.cause ?? input.error;
+  const error = unwrapIncrementalSyncError(input.error);
   const stage = stageError?.stage ?? input.fallbackStage ?? "UNKNOWN";
   const metadata: string[] = [];
   let errorName = error instanceof Error ? error.name : "Error";
   let errorCode = structuralCode(error) ?? "UNKNOWN";
   let message = "Unexpected incremental synchronization error";
 
-  if (error instanceof AirtableRequestError) {
+  const prismaValidation = safePrismaValidationDetails(error);
+  if (prismaValidation) {
+    errorName = prismaValidation.errorName;
+    errorCode = prismaValidation.errorCode;
+    message = "Prisma client validation failed";
+    if (prismaValidation.model) metadata.push(`model=${safeToken(prismaValidation.model)}`);
+    if (prismaValidation.operation) {
+      metadata.push(`operation=${safeToken(prismaValidation.operation)}`);
+    }
+    metadata.push(`reason=${JSON.stringify(prismaValidation.reason)}`);
+  } else if (error instanceof AirtableRequestError) {
     errorName = error.name;
     errorCode = error.code;
     message = error.message;
@@ -65,6 +107,24 @@ export function formatIncrementalSyncFailure(input: {
     `durationMs=${Math.max(0, input.durationMs)}`,
     ...metadata,
   ].join(" ");
+}
+
+function isPrismaValidationError(error: Error): boolean {
+  return error instanceof Prisma.PrismaClientValidationError ||
+    error.name === "PrismaClientValidationError";
+}
+
+function safePrismaValidationReason(message: string): string {
+  const patterns: Array<{ expression: RegExp; prefix: string }> = [
+    { expression: /Unknown argument `([A-Za-z][A-Za-z0-9_]*)`/, prefix: "Unknown argument" },
+    { expression: /Argument `([A-Za-z][A-Za-z0-9_]*)` is missing/, prefix: "Missing argument" },
+    { expression: /Invalid value for argument `([A-Za-z][A-Za-z0-9_]*)`/, prefix: "Invalid value for argument" },
+  ];
+  for (const { expression, prefix } of patterns) {
+    const field = message.match(expression)?.[1];
+    if (field) return `${prefix} ${safeToken(field)}`;
+  }
+  return "Prisma client validation failed";
 }
 
 function structuralCode(error: unknown): string | null {

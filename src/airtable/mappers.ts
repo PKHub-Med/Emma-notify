@@ -117,6 +117,7 @@ export function mapServiceOrder(record: AirtableRecord): MappedCase {
 
   const {
     department: _department,
+    productionYear: _productionYear,
     completedAt: _completedAt,
     reportedAtRaw: _reportedAtRaw,
     ...storedValues

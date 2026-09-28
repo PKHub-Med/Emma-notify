@@ -27,6 +27,11 @@ import type { DeviceSyncStore } from "./device-sync.js";
 import { syncSingleDeviceRecord } from "./device-sync.js";
 import type { TaskSyncStore } from "./task-sync.js";
 import { syncSingleTaskRecord } from "./task-sync.js";
+import {
+  IncrementalSyncStageError,
+  safePrismaValidationDetails,
+  unwrapIncrementalSyncError,
+} from "./incremental-sync-error.js";
 
 const DEFAULT_LEASE_MS = 5 * 60_000;
 
@@ -374,23 +379,37 @@ export async function runPortalRefreshWorkerOnce(dependencies: {
 }
 
 function portalRefreshFailureDetails(error: unknown): string {
-  if (error instanceof AirtableRequestError) {
+  const rootError = unwrapIncrementalSyncError(error);
+  if (rootError instanceof AirtableRequestError) {
     return [
-      `errorName=${error.name}`,
-      `errorCode=${error.code}`,
-      `requestType=${error.requestType}`,
-      `tableId=${safeLogText(error.tableId)}`,
-      ...(error.airtableErrorType
-        ? [`airtableType=${JSON.stringify(safeLogText(error.airtableErrorType))}`]
+      `errorName=${rootError.name}`,
+      `errorCode=${rootError.code}`,
+      `requestType=${rootError.requestType}`,
+      `tableId=${safeLogText(rootError.tableId)}`,
+      ...(rootError.airtableErrorType
+        ? [`airtableType=${JSON.stringify(safeLogText(rootError.airtableErrorType))}`]
         : []),
-      ...(error.airtableErrorMessage
-        ? [`airtableMessage=${JSON.stringify(safeLogText(error.airtableErrorMessage))}`]
+      ...(rootError.airtableErrorMessage
+        ? [`airtableMessage=${JSON.stringify(safeLogText(rootError.airtableErrorMessage))}`]
         : []),
     ].join(" ");
   }
-  if (error instanceof Error) {
-    return `errorName=${safeLogText(error.name)} errorMessage=${JSON.stringify(
-      safeLogText(error.message),
+  const prismaValidation = safePrismaValidationDetails(rootError);
+  if (prismaValidation) {
+    return [
+      `errorName=${prismaValidation.errorName}`,
+      `errorCode=${prismaValidation.errorCode}`,
+      ...(error instanceof IncrementalSyncStageError ? [`stage=${error.stage}`] : []),
+      ...(prismaValidation.model ? [`model=${safeLogText(prismaValidation.model)}`] : []),
+      ...(prismaValidation.operation
+        ? [`operation=${safeLogText(prismaValidation.operation)}`]
+        : []),
+      `reason=${JSON.stringify(prismaValidation.reason)}`,
+    ].join(" ");
+  }
+  if (rootError instanceof Error) {
+    return `errorName=${safeLogText(rootError.name)} errorMessage=${JSON.stringify(
+      safeLogText(rootError.message),
     )}`;
   }
   return "errorName=UnknownError";

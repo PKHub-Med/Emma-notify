@@ -8,6 +8,32 @@ import { PrismaBaselineStore } from "./baseline-store.js";
 import { PrismaIncrementalStore } from "./incremental-store.js";
 
 describe("TrackedCase completedAt persistence", () => {
+  it("keeps repair productionYear in sourceSnapshot and out of Prisma upsert payloads", async () => {
+    const upsert = vi.fn(async (_args: Prisma.TrackedCaseUpsertArgs) => ({ id: "case-1" }));
+    const transaction = {
+      trackedCase: { upsert },
+      trackedCaseDevice: {
+        deleteMany: vi.fn(async () => ({ count: 0 })),
+        createMany: vi.fn(async () => ({ count: 0 })),
+      },
+    } as unknown as Prisma.TransactionClient;
+    const mapped = serviceOrder("2026-09-11T15:30:00.000Z", undefined, [2021]);
+
+    expect(mapped.sourceSnapshot.productionYear).toBe("2021");
+    expect(mapped).not.toHaveProperty("productionYear");
+    await new PrismaBaselineStore(transaction).upsertCase(
+      mapped,
+      new Date("2026-09-12T08:00:00.000Z"),
+    );
+
+    const payload = upsert.mock.calls[0]?.[0];
+    expect(payload?.create).not.toHaveProperty("productionYear");
+    expect(payload?.update).not.toHaveProperty("productionYear");
+    expect(payload?.create).toMatchObject({
+      sourceSnapshot: expect.objectContaining({ productionYear: "2021" }),
+    });
+  });
+
   it("includes completedAt in baseline create and update payloads", async () => {
     const upsert = vi.fn(async () => ({ id: "case-1" }));
     const transaction = {
@@ -95,7 +121,7 @@ describe("TrackedCase completedAt persistence", () => {
   });
 });
 
-function serviceOrder(completedAt: string, status?: string) {
+function serviceOrder(completedAt: string, status?: string, productionYear?: unknown) {
   const record: AirtableRecord = {
     id: "recService",
     createdTime: "2026-09-01T08:00:00.000Z",
@@ -107,6 +133,9 @@ function serviceOrder(completedAt: string, status?: string) {
       [SERVICE_ORDER_FIELDS.repairValidation]: "OK",
       [SERVICE_ORDER_FIELDS.repairOfferNumber]: "OF/12",
       [SERVICE_ORDER_FIELDS.repairDescription]: "Opis naprawy",
+      ...(productionYear === undefined
+        ? {}
+        : { [SERVICE_ORDER_FIELDS.productionYear]: productionYear }),
       ...(status ? { [SERVICE_ORDER_FIELDS.customerStatus]: status } : {}),
     },
   };

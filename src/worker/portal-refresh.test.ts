@@ -559,6 +559,59 @@ describe("portal refresh worker", () => {
       `airtableMessage="Unknown field: EMMA: Status przeglądu"`,
     );
   });
+
+  it("logs a safe Prisma validation root cause through IncrementalSyncStageError", async () => {
+    const requestStore = new MemoryWorkerStore({
+      id: "refresh-prisma-failed",
+      leaseToken: "assigned-by-claim",
+      sourceHospitalRecordId: "recHospitalA",
+      serviceOrderRecordIds: ["service-A"],
+      inspectionRecordIds: [],
+      deviceRecordIds: [],
+      taskRecordIds: [],
+    });
+    const log = vi.fn();
+    const prismaError = Object.assign(new Error(
+      "Invalid `prisma.trackedCase.upsert()` invocation:\n" +
+      "create: { sourceSnapshot: { patient: sensitive-value } }\n" +
+      "Unknown argument `productionYear`.",
+    ), { name: "PrismaClientValidationError" });
+
+    await runPortalRefreshWorkerOnce({
+      store: requestStore,
+      airtable: {
+        fetchAllRecords: vi.fn(),
+        fetchRecord: vi.fn(async (tableId: string, recordId: string) => {
+          if (tableId === AIRTABLE_TABLE_IDS.hospitals) return hospitalRecord([]);
+          if (tableId === AIRTABLE_TABLE_IDS.serviceOrders) {
+            return serviceOrderRecord(recordId, "recHospitalA");
+          }
+          throw new Error(`Unexpected table ${tableId}`);
+        }),
+      } as AirtableIncrementalSource,
+      incrementalStore: {
+        findCase: vi.fn().mockRejectedValue(prismaError),
+      } as unknown as IncrementalStore,
+      hospitalStore: { upsert: vi.fn() },
+      deviceStore: { upsert: vi.fn() },
+      taskStore: { upsertTask: vi.fn() },
+      communicationStore: noOpCommunicationStore(),
+      quietMinutes: 10,
+      now: () => new Date("2026-09-12T10:00:00.000Z"),
+      log,
+    });
+
+    expect(requestStore.status).toBe(PortalRefreshStatus.FAILED);
+    const failure = String(log.mock.calls[0]?.[0]);
+    expect(failure).toContain(
+      "PORTAL_REFRESH_FAILED requestId=refresh-prisma-failed " +
+      "errorName=PrismaClientValidationError errorCode=PRISMA_VALIDATION stage=DB",
+    );
+    expect(failure).toContain("model=TrackedCase operation=upsert");
+    expect(failure).toContain('reason="Unknown argument productionYear"');
+    expect(failure).not.toContain("sourceSnapshot");
+    expect(failure).not.toContain("sensitive-value");
+  });
 });
 
 class MemoryWorkerStore implements PortalRefreshWorkerStore {

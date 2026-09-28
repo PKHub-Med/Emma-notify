@@ -48,6 +48,17 @@ class FakeAirtable implements AirtableIncrementalSource {
     return this.currentRecords;
   }
 
+  async fetchAllRecordsWithMetrics(
+    tableId: string,
+    fieldIds: readonly string[],
+    options?: AirtableListOptions,
+  ) {
+    return {
+      records: await this.fetchAllRecords(tableId, fieldIds, options),
+      metrics: { pagesFetched: 1, requestsMade: 1 },
+    };
+  }
+
   async fetchRecord(
     _tableId: string,
     recordId: string,
@@ -165,12 +176,49 @@ describe("task polling and communication events", () => {
 
   it("fetches zero records on an identical incremental poll", async () => {
     const fixture = taskFixture();
+    const upsertTask = vi.spyOn(fixture.store, "upsertTask");
+    const observe = vi.spyOn(fixture.communication, "observe");
+    const markSuccessful = vi.spyOn(fixture.store, "markSuccessful");
+    const markFailed = vi.spyOn(fixture.store, "markFailed");
     fixture.source.setCurrent(taskRecord());
     const baseline = await fixture.run();
+    const cursorBeforeEmptyPoll = fixture.communication.cursors.get("TASK:recTask");
+    upsertTask.mockClear();
+    observe.mockClear();
+    markSuccessful.mockClear();
     fixture.source.setCurrent();
-    const incremental = await fixture.run();
+    const logs: string[] = [];
+    const incremental = await runTaskSync({
+      airtable: fixture.source,
+      store: fixture.store,
+      communicationStore: fixture.communication,
+      now: () => new Date("2026-08-11T10:05:00.000Z"),
+      log: (message) => logs.push(message),
+    });
     expect(baseline).toMatchObject({ mode: "BASELINE", recordsFetched: 1 });
-    expect(incremental).toMatchObject({ mode: "INCREMENTAL", recordsFetched: 0 });
+    expect(incremental).toMatchObject({
+      mode: "INCREMENTAL", recordsFetched: 0, pagesFetched: 1, requestsMade: 1,
+    });
+    expect(upsertTask).not.toHaveBeenCalled();
+    expect(observe).not.toHaveBeenCalled();
+    expect(fixture.communication.cursors.size).toBe(1);
+    expect(fixture.communication.cursors.get("TASK:recTask")).toEqual(
+      cursorBeforeEmptyPoll,
+    );
+    expect(markSuccessful).toHaveBeenCalledWith(
+      new Date("2026-08-11T10:05:00.000Z"),
+      false,
+      true,
+    );
+    expect(fixture.store.checkpoint?.lastSuccessfulSyncAt?.toISOString()).toBe(
+      "2026-08-11T10:05:00.000Z",
+    );
+    expect(markFailed).not.toHaveBeenCalled();
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).toContain(
+      "recordsFetched=0 pagesFetched=1 requestsMade=1",
+    );
+    expect(logs[0]).not.toContain("PrismaClientValidationError");
   });
 
   it("creates an event for a new task first seen after baseline", async () => {

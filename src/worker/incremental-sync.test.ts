@@ -324,6 +324,35 @@ describe("incremental status sync", () => {
     expect(dbLogs[0]).not.toContain("query details");
   });
 
+  it("logs only safe Prisma validation metadata and preserves the DB stage", async () => {
+    const store = new MemoryStore();
+    const logs: string[] = [];
+    const prismaError = Object.assign(new Error(
+      "Invalid `prisma.trackedCase.upsert()` invocation:\n" +
+      "create: { sourceSnapshot: { patient: sensitive-value } }\n" +
+      "Unknown argument `productionYear`.",
+    ), { name: "PrismaClientValidationError" });
+    vi.spyOn(store, "getCheckpoint").mockRejectedValue(prismaError);
+
+    await expect(runIncrementalSync({
+      airtable: new FakeAirtable(),
+      store,
+      options: { overlapSeconds: 120, quietMinutes: 1, legacyNotificationsEnabled: false },
+      now: () => date(0),
+      log: (message) => logs.push(message),
+    })).rejects.toThrow("Incremental synchronization stage failed");
+
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).toContain(
+      "INCREMENTAL_SYNC_FAILED stage=DB errorName=PrismaClientValidationError " +
+      "errorCode=PRISMA_VALIDATION",
+    );
+    expect(logs[0]).toContain("model=TrackedCase operation=upsert");
+    expect(logs[0]).toContain('reason="Unknown argument productionYear"');
+    expect(logs[0]).not.toContain("sourceSnapshot");
+    expect(logs[0]).not.toContain("sensitive-value");
+  });
+
   it("does not create an event or buffer when legacy notifications are disabled", async () => {
     const fixture = serviceFixture("A", "B", [
       eligibleContact("recContact", "one@example.com"),

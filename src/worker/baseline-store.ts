@@ -95,14 +95,14 @@ export class PrismaBaselineStore implements BaselineStore {
       sourceSnapshot: sourceSnapshot as Prisma.InputJsonObject,
       lastSeenAt: seenAt,
       active: true,
-    };
+    } satisfies Prisma.TrackedCaseUncheckedCreateInput;
     const {
       sourceHospitalRecordId: _inspectionHospitalScope,
       ...inspectionUpdateData
     } = createData;
-    const updateData = mappedCase.caseType === "INSPECTION"
+    const updateData = (mappedCase.caseType === "INSPECTION"
       ? inspectionUpdateData
-      : createData;
+      : createData) satisfies Prisma.TrackedCaseUncheckedUpdateInput;
     return this.inTransaction(async (transaction) => {
       const trackedCase = await transaction.trackedCase.upsert({
         where: {

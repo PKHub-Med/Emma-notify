@@ -104,6 +104,7 @@ describe("case mappers", () => {
     }));
 
     expect(mapped.sourceSnapshot.productionYear).toBe(expected);
+    expect(mapped).not.toHaveProperty("productionYear");
   });
 
   it("maps an inspection and preserves an invalid due date", () => {
