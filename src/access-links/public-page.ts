@@ -212,7 +212,7 @@ function renderEvent(event: PublicCaseEvent): string {
   const change = oldValue && newValue
     ? `<div>${escapeHtml(oldValue)} → ${escapeHtml(newValue)}</div>`
     : "";
-  return `<div class="event"><div><strong>${label}</strong>${change}</div><time>${escapeHtml(formatDateTime(event.detectedAt))}</time></div>`;
+  return `<div class="event"><div><strong>${label}</strong>${change}</div><time>${escapeHtml(formatDate(event.detectedAt) ?? "—")}</time></div>`;
 }
 
 function detailRow(label: string, value: string | null): string {
@@ -235,14 +235,6 @@ function formatDate(value: Date | null): string | null {
   if (!value) return null;
   return new Intl.DateTimeFormat("pl-PL", {
     day: "2-digit", month: "2-digit", year: "numeric",
-    timeZone: "Europe/Warsaw",
-  }).format(value);
-}
-
-function formatDateTime(value: Date): string {
-  return new Intl.DateTimeFormat("pl-PL", {
-    day: "2-digit", month: "2-digit", year: "numeric",
-    hour: "2-digit", minute: "2-digit", hour12: false,
     timeZone: "Europe/Warsaw",
   }).format(value);
 }

@@ -1046,13 +1046,6 @@ body.lightbox-open{overflow:hidden}
 .list-row-mid span{color:var(--muted);font-size:11px}
 .list-row-side{text-align:right}
 .list-row-side .date{color:var(--muted);font-size:11px;margin-top:5px}
-.device-list-status{
-  display:flex;
-  flex-direction:column;
-  gap:5px;
-  align-items:flex-start;
-}
-.device-row-search{grid-template-columns:minmax(0,1.35fr) minmax(190px,.65fr)}
 .device-card-screen .page-head{margin-bottom:14px}
 @media(max-width:800px){
   .list-row{grid-template-columns:1fr}
@@ -1441,6 +1434,20 @@ body.lightbox-open{overflow:hidden}
   .device-detail-history-row.has-date .device-detail-history-number{grid-column:1;grid-row:2}
   .device-detail-history-row.has-date .status-tag{grid-column:1;grid-row:3}
   .device-detail-history-arrow{grid-column:2;grid-row:1/4}
+}
+/* Device list: four stable logical columns without a visible header. */
+.device-row-search{grid-template-columns:minmax(0,50fr) minmax(0,15fr) minmax(0,17fr) minmax(0,18fr);column-gap:16px}
+.device-row-search .list-row-main{min-width:0}
+.device-row-search .list-row-main b,.device-row-search .list-row-main span{overflow-wrap:anywhere}
+.device-list-cell{display:flex;align-items:center;min-width:0}
+.device-list-device-status,.device-list-inspection-status{justify-content:flex-start}
+.device-list-device-pill{max-width:100%;white-space:normal;text-align:center}
+.device-list-inspection-status .inspection-state{max-width:100%;white-space:normal;text-align:center}
+.device-list-validity .inspection-date{font-size:11px;line-height:1.4;overflow-wrap:anywhere}
+@media(max-width:1080px){
+  .device-row-search{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 12px}
+  .device-row-search .list-row-main,.device-list-validity{grid-column:1/-1}
+  .device-list-cell{align-items:flex-start}
 }
 [hidden]{display:none!important}
 `;

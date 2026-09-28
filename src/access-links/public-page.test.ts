@@ -106,6 +106,8 @@ describe("public AccessLink page", () => {
     expect(result.html).not.toContain("Naprawa w toku jako snapshot");
     expect(result.html).toContain("USG &lt;script&gt;alert(1)&lt;/script&gt;");
     expect(result.html).toContain("Brak &lt;obrazu&gt;");
+    expect(result.html).toContain("08.08.2026");
+    expect(result.html).not.toContain("20:00");
     expect(result.html).not.toContain("<script>alert(1)</script>");
     expect(result.html).not.toContain("client@example.com");
     expect(result.html).not.toContain("recAirtableSecret");

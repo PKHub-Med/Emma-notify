@@ -7,7 +7,7 @@ import {
   StoredFileKind,
 } from "../generated/prisma/enums.js";
 import type { PrismaClient } from "../generated/prisma/client.js";
-import { formatDate, formatDateByPrecision, renderHospitalPortal } from "./portal-page.js";
+import { formatDate, renderHospitalPortal } from "./portal-page.js";
 import {
   decodePortalCaseCursor,
   decodePortalDeviceCursor,
@@ -145,22 +145,13 @@ describe("paginated hospital portal", () => {
 
   it("formats a business date at UTC midnight without exposing the Warsaw offset", () => {
     const value = new Date("2026-09-27T00:00:00.000Z");
-    expect(formatDateByPrecision(value, true)).toBe("27.09.2026");
-    expect(formatDateByPrecision(value, true)).not.toContain("02:00");
+    expect(formatDate(value)).toBe("27.09.2026");
+    expect(formatDate(value)).not.toContain("02:00");
   });
 
-  it("keeps the time for a real inspection-header timestamp", () => {
-    expect(formatDateByPrecision(
-      new Date("2026-09-27T12:32:00.000Z"),
-      false,
-    )).toBe("27.09.2026, 14:32");
-  });
-
-  it.each([
-    [new Date("2026-09-27T00:00:00.000Z"), true, "27.09.2026"],
-    [new Date("2026-09-27T12:32:00.000Z"), false, "27.09.2026, 14:32"],
-  ])("uses reportedAtDateOnly=%s consistently", (value, dateOnly, expected) => {
-    expect(formatDateByPrecision(value, dateOnly)).toBe(expected);
+  it("hides the time for a real inspection-header timestamp", () => {
+    expect(formatDate(new Date("2026-09-27T12:32:00.000Z")))
+      .toBe("27.09.2026");
   });
 
   it("shows TrackedCase.inspectionValidUntil for an inspection in progress", () => {

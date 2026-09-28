@@ -71,21 +71,15 @@ describe("shared unavailable-feature modal", () => {
     expect(repairRenderer).not.toContain("Zdjęcia z przeglądu");
   });
 
-  it("uses the same DATE/DATETIME precision flag in client inspection and repair views", () => {
+  it("uses date-only formatting in client inspection and repair views", () => {
     const html = renderHospitalPortal(emptyView(), "nonce");
+    expect(html).toContain("formatDate(d.headerDate)");
+    expect(html).toContain("node('strong','',formatDate(item.reportedAt))");
+    expect(html).toContain("'Zgłoszono: '+formatDate(d.reportedAt)");
     expect(html).toContain(
-      "formatDateByPrecision(d.headerDate,Boolean(d.headerDateDateOnly))",
+      "caseDetailSummaryTile('Data zgłoszenia',d.reportedAt?formatDate(d.reportedAt):null",
     );
-    expect(html).toContain(
-      "node('strong','',formatDateByPrecision(item.reportedAt,Boolean(item.reportedAtDateOnly)))",
-    );
-    expect(html).toContain(
-      "'Zgłoszono: '+formatDateByPrecision(d.reportedAt,d.reportedAtDateOnly)",
-    );
-    expect(html).toContain(
-      "caseDetailSummaryTile('Data zgłoszenia',d.reportedAt?formatDateByPrecision(d.reportedAt,d.reportedAtDateOnly):null",
-    );
-    expect(html).not.toContain("d.headerDateType+': '+formatDateTime(d.headerDate)");
+    expect(html).not.toContain("formatDateByPrecision");
   });
 
   it("uses one three-box Location section for inspections, repairs and devices", () => {

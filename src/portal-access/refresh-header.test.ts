@@ -29,7 +29,7 @@ describe("shared portal refresh header status", () => {
     expect(header).toContain("actions.append(refreshBar)");
     expect(pageSource).toContain("refreshMessage.dataset.defaultText=defaultText");
     expect(pageSource).toContain("refreshFeedback?.text||defaultText");
-    expect(pageSource).toContain("d.headerDateType+': '+formatDateByPrecision(d.headerDate");
+    expect(pageSource).toContain("d.headerDateType+': '+formatDate(d.headerDate)");
   });
 
   it("disables and restores the button without putting feedback into its label", () => {
@@ -50,6 +50,7 @@ describe("shared portal refresh header status", () => {
       "setRefreshFeedback('success','Dane zaktualizowane • Ostatnia aktualizacja: '",
     );
     expect(pageSource).toContain("setRefreshFeedback(null)");
+    expect(pageSource).toContain("formatTechnicalDateTime(updatedAt)");
     expect(pageSource).not.toContain("refreshMessage.textContent='Dane zaktualizowane");
   });
 
