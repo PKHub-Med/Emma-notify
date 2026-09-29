@@ -2,6 +2,10 @@ import { isDeepStrictEqual } from "node:util";
 import { describe, expect, it, vi } from "vitest";
 import { TASK_FIELDS } from "../airtable/field-ids.js";
 import type { MappedTask } from "../airtable/task.js";
+import {
+  CommunicationDeliveryStatus,
+  CommunicationScenario,
+} from "../generated/prisma/enums.js";
 import type {
   AirtableListOptions,
   AirtableRecord,
@@ -13,6 +17,13 @@ import {
   type CommunicationObservation,
   type CommunicationObservationResult,
 } from "./communication-event.js";
+import {
+  runCommunicationDeliveryPlanner,
+  type CommunicationDeliveryStore,
+  type DeliveryPlan,
+  type DeliveryPlanningEvent,
+  type PlannedDelivery,
+} from "./communication-delivery.js";
 import {
   buildTaskPollingFormula,
   buildTaskIncrementalFormula,
@@ -147,6 +158,36 @@ class MemoryCommunicationStore implements CommunicationEventStore {
     }
     return { outcome: "CREATED", revision, fingerprint };
   }
+}
+
+class ReminderPipelineDeliveryStore implements CommunicationDeliveryStore {
+  readonly deliveries: PlannedDelivery[] = [];
+  private processed = false;
+
+  constructor(private readonly event: DeliveryPlanningEvent) {}
+
+  async findEventsAwaitingDelivery() {
+    return this.processed ? [] : [this.event];
+  }
+
+  async ensureDeliveries(
+    event: DeliveryPlanningEvent,
+    plans: readonly DeliveryPlan[],
+  ) {
+    const created = plans.map((plan, index) => ({
+      ...plan,
+      id: `delivery-${index}`,
+      eventId: event.id,
+      scenario: event.scenario,
+    }));
+    this.deliveries.push(...created);
+    this.processed = true;
+    return created;
+  }
+
+  async findDueReminders() { return []; }
+  async getCurrentTask() { return null; }
+  async transitionReminder() { return false; }
 }
 
 describe("task polling and communication events", () => {
@@ -431,7 +472,7 @@ describe("task polling and communication events", () => {
     expect(formula).not.toContain("2026-08-16");
   });
 
-  it("aligns tomorrow reminder cursors without emitting outside incremental sync", async () => {
+  it("creates one reminder event when tomorrow becomes eligible", async () => {
     const fixture = taskFixture();
     fixture.communication.baselineCompleted = true;
     fixture.store.checkpoint = {
@@ -456,7 +497,10 @@ describe("task polling and communication events", () => {
     expect(fixture.store.checkpoint.lastSuccessfulSyncAt?.toISOString()).toBe(
       "2026-08-13T04:00:00.000Z",
     );
-    expect(fixture.communication.events).toHaveLength(0);
+    expect(fixture.communication.events).toHaveLength(1);
+    expect(fixture.communication.events[0]?.observation.scenario).toBe(
+      "INSPECTION_REMINDER",
+    );
   });
 
   it("does not fetch today, day-after-tomorrow or wrong-template tasks", async () => {
@@ -470,6 +514,11 @@ describe("task polling and communication events", () => {
         [TASK_FIELDS.emmaCustomerStatus]: "Przypomnienie o wizycie",
         [TASK_FIELDS.emmaMailTemplate]: "Inny szablon",
       }), id: "recWrongTemplate" },
+      { ...taskRecord({
+        [TASK_FIELDS.day]: "2026-08-15",
+        [TASK_FIELDS.emmaCustomerStatus]: "Inny status",
+        [TASK_FIELDS.emmaMailTemplate]: "Przegląd-przypomnienie_o_wizycie",
+      }), id: "recWrongStatus" },
     );
     const stats = await runTaskSync({
       airtable: fixture.source,
@@ -482,7 +531,7 @@ describe("task polling and communication events", () => {
     expect(fixture.communication.events).toHaveLength(0);
   });
 
-  it("keeps zero events across 100 reminder eligibility polls", async () => {
+  it("keeps exactly one event across 100 reminder eligibility polls", async () => {
     const fixture = taskFixture();
     fixture.communication.baselineCompleted = true;
     fixture.source.setCurrent(taskRecord({
@@ -499,6 +548,109 @@ describe("task polling and communication events", () => {
         now: () => new Date("2026-08-14T04:30:00Z"),
       });
     }
+    expect(fixture.communication.events).toHaveLength(1);
+  });
+
+  it("passes an eligible reminder event into the existing delivery pipeline", async () => {
+    const fixture = eligibleReminderFixture();
+    await runReminderEligibility(fixture);
+    const observation = fixture.communication.events[0]!.observation;
+    const deliveryStore = new ReminderPipelineDeliveryStore({
+      id: "event-reminder",
+      sourceRecordId: observation.sourceRecordId,
+      scenario: CommunicationScenario.INSPECTION_REMINDER,
+      detectedAt: new Date(observation.eventSnapshot.detectedAt as string),
+      eventSnapshot: observation.eventSnapshot,
+      recipients: [{ id: "recipient-reminder" }],
+    });
+
+    await runCommunicationDeliveryPlanner({
+      store: deliveryStore,
+      timeZone: "Europe/Warsaw",
+      now: () => new Date("2026-08-14T04:30:00Z"),
+    });
+
+    expect(fixture.communication.events).toHaveLength(1);
+    expect(deliveryStore.deliveries).toHaveLength(1);
+    expect(deliveryStore.deliveries[0]).toMatchObject({
+      scenario: CommunicationScenario.INSPECTION_REMINDER,
+      status: CommunicationDeliveryStatus.READY,
+    });
+    expect(fixture.communication.resendCalls).toBe(0);
+  });
+
+  it("does not duplicate an eligibility event during a later incremental sync", async () => {
+    const fixture = eligibleReminderFixture();
+
+    await runReminderEligibility(fixture);
+    await fixture.run();
+
+    expect(fixture.communication.events).toHaveLength(1);
+    expect(fixture.communication.events[0]?.observation.scenario).toBe(
+      "INSPECTION_REMINDER",
+    );
+  });
+
+  it("does not duplicate an incremental event during later reminder eligibility", async () => {
+    const fixture = eligibleReminderFixture();
+
+    await fixture.run();
+    await runReminderEligibility(fixture);
+
+    expect(fixture.communication.events).toHaveLength(1);
+    expect(fixture.communication.events[0]?.observation.scenario).toBe(
+      "INSPECTION_REMINDER",
+    );
+  });
+
+  it("creates a new reminder revision when its signature changes", async () => {
+    const fixture = eligibleReminderFixture();
+    await runReminderEligibility(fixture);
+    fixture.source.setCurrent(reminderTaskRecord("2026-08-16"));
+
+    await runTaskSync({
+      airtable: fixture.source,
+      store: fixture.store,
+      communicationStore: fixture.communication,
+      requestedMode: "REMINDER_ELIGIBILITY",
+      timeZone: "Europe/Warsaw",
+      now: () => new Date("2026-08-15T04:30:00Z"),
+    });
+
+    expect(fixture.communication.events).toHaveLength(2);
+    expect(fixture.communication.events.map((event) => event.observation.eventSnapshot.day))
+      .toEqual(["2026-08-15", "2026-08-16"]);
+  });
+
+  it.each(["BASELINE", "RECONCILE"] as const)(
+    "does not create historical reminder events during %s",
+    async (mode) => {
+      const fixture = taskFixture();
+      fixture.communication.baselineCompleted = mode === "RECONCILE";
+      fixture.source.setCurrent(reminderTaskRecord("2026-08-15"));
+
+      await runTaskSync({
+        airtable: fixture.source,
+        store: fixture.store,
+        communicationStore: fixture.communication,
+        ...(mode === "RECONCILE" ? { requestedMode: "RECONCILE" as const } : {}),
+        timeZone: "Europe/Warsaw",
+        now: () => new Date("2026-08-14T04:30:00Z"),
+      });
+
+      expect(fixture.communication.events).toHaveLength(0);
+    },
+  );
+
+  it("does not emit when an Airtable response contains a reminder that is not tomorrow", async () => {
+    const fixture = taskFixture();
+    fixture.communication.baselineCompleted = true;
+    fixture.source.setCurrent(reminderTaskRecord("2026-08-16"));
+    vi.spyOn(fixture.source, "fetchAllRecords").mockImplementationOnce(async () =>
+      fixture.source.currentRecords);
+
+    await runReminderEligibility(fixture);
+
     expect(fixture.communication.events).toHaveLength(0);
   });
 
@@ -538,6 +690,33 @@ function taskFixture() {
       now: () => new Date("2026-08-11T10:00:00.000Z"),
     }),
   };
+}
+
+function eligibleReminderFixture() {
+  const fixture = taskFixture();
+  fixture.communication.baselineCompleted = true;
+  fixture.source.setCurrent(reminderTaskRecord("2026-08-15"));
+  return fixture;
+}
+
+function runReminderEligibility(fixture: ReturnType<typeof taskFixture>) {
+  return runTaskSync({
+    airtable: fixture.source,
+    store: fixture.store,
+    communicationStore: fixture.communication,
+    requestedMode: "REMINDER_ELIGIBILITY",
+    timeZone: "Europe/Warsaw",
+    now: () => new Date("2026-08-14T04:30:00Z"),
+  });
+}
+
+function reminderTaskRecord(day: string): AirtableRecord {
+  return taskRecord({
+    [TASK_FIELDS.day]: day,
+    [TASK_FIELDS.sourceHospitalLink]: ["recHospital"],
+    [TASK_FIELDS.emmaCustomerStatus]: "Przypomnienie o wizycie",
+    [TASK_FIELDS.emmaMailTemplate]: "Przegląd-przypomnienie_o_wizycie",
+  });
 }
 
 function taskRecord(overrides: Record<string, unknown> = {}): AirtableRecord {

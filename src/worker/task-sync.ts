@@ -161,9 +161,11 @@ export async function runTaskSync(dependencies: {
       const detectedAt = now();
       const task = mapTask(record);
       const observation = buildTaskObservation(task, detectedAt);
-      const automaticEventAllowed = mode === "INCREMENTAL" &&
-        isCurrentCompletedObservation(observation, detectedAt,
-          dependencies.timeZone ?? "Europe/Warsaw");
+      const timeZone = dependencies.timeZone ?? "Europe/Warsaw";
+      const automaticEventAllowed = mode === "REMINDER_ELIGIBILITY"
+        ? isCurrentReminderObservation(observation, detectedAt, timeZone)
+        : mode === "INCREMENTAL" &&
+          isCurrentCompletedObservation(observation, detectedAt, timeZone);
       const completedLimitReached = observation.scenario === "INSPECTION_COMPLETED" &&
         completedEventsCreated >= COMPLETED_COMMUNICATIONS_PER_RUN_LIMIT;
       if (completedLimitReached && !completedLimitLogged) {
@@ -249,6 +251,18 @@ export function isCurrentCompletedObservation(
   const businessDate = parseLocalDate(observation.eventSnapshot.day);
   return businessDate !== null &&
     compareLocalDates(businessDate, localDateAt(now, timeZone)) === 0;
+}
+
+export function isCurrentReminderObservation(
+  observation: CommunicationObservation,
+  now: Date,
+  timeZone: string,
+): boolean {
+  if (observation.scenario !== "INSPECTION_REMINDER") return false;
+  const visitDate = parseLocalDate(observation.eventSnapshot.day);
+  const tomorrow = parseLocalDate(addDaysToZonedDate(dateInTimeZone(now, timeZone), 1));
+  return visitDate !== null && tomorrow !== null &&
+    compareLocalDates(visitDate, tomorrow) === 0;
 }
 
 export const TASK_EDITABLE_FIELD_IDS = [
