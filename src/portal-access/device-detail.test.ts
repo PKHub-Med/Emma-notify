@@ -46,6 +46,12 @@ describe("Device detail redesign", () => {
     expect(pageSource).toContain("caseCache.set(item.sourceRecordId,item)");
   });
 
+  it("describes empty histories as the last three months instead of the communication scope", () => {
+    expect(pageSource).toContain("Brak przeglądów z ostatnich 3 miesięcy.");
+    expect(pageSource).toContain("Brak napraw z ostatnich 3 miesięcy.");
+    expect(pageSource).not.toContain("Brak danych w obecnym zakresie historii.");
+  });
+
   it("omits the empty history date instead of rendering a dash or reserving its column", () => {
     const historyRow = pageSource.slice(
       pageSource.indexOf("function deviceHistoryRow"),

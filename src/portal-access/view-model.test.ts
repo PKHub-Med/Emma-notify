@@ -54,7 +54,7 @@ describe("paginated hospital portal", () => {
     const html = renderHospitalPortal(view, "nonce", new Date(), "/p/token");
     expect(html.match(/>Aktualizuj dane</g)).toHaveLength(1);
     expect(html).toContain("Aktualizuję dane…");
-    expect(html).toContain("Dane zaktualizowane");
+    expect(html).toContain("Ostatnia aktualizacja:");
     expect(html).toContain("Nie udało się zaktualizować danych. Spróbuj ponownie.");
     expect(html).toContain("setTimeout(resolve,1000)");
     expect(html).toContain("/data/refresh");
@@ -614,11 +614,11 @@ describe("paginated hospital portal", () => {
     expect(await store.findScopedDevice({
       hospitalId: "H2", accessLevel: PortalAccessLevel.FULL, contextType: "REPAIR", contextId: "repair-H1",
     }, "device-H2", 30)).not.toBeNull();
-    const historyQuery = queries.find((query) => query.strings.join("?").includes('FROM "TrackedCaseDevice" case_device'))!;
+    const historyQuery = queries.find((query) => query.strings.join("?").includes('FROM "TrackedCaseDevice" history_link'))!;
     const historySql = historyQuery.strings.join("?");
     expect(historySql).toContain('c."sourceHospitalRecordId" =');
     expect(historyQuery.values).toContain("H2");
-    expect(historySql).toContain('FROM "TrackedCaseDevice" case_device');
+    expect(historySql).toContain('FROM "TrackedCaseDevice" history_link');
   });
 
   it("filters Device detail and Case search through every junction link", async () => {
@@ -731,11 +731,11 @@ describe("paginated hospital portal", () => {
     await store.findScopedDevice({
       hospitalId: "hospital-A", accessLevel: PortalAccessLevel.FULL, contextType: "REPAIR", contextId: "repair-other",
     }, "device-A", 30);
-    const detailCasesQuery = queries.find((query) => query.strings.join("?").includes('FROM "TrackedCaseDevice" case_device'))!;
+    const detailCasesQuery = queries.find((query) => query.strings.join("?").includes('FROM "TrackedCaseDevice" history_link'))!;
     const detailCasesSql = detailCasesQuery.strings.join("?");
     expect(detailCasesSql).toContain('c."sourceHospitalRecordId" =');
-    expect(detailCasesSql).toContain('FROM "TrackedCaseDevice" case_device');
-    expect(detailCasesSql).toContain('case_device."deviceAirtableId" =');
+    expect(detailCasesSql).toContain('FROM "TrackedCaseDevice" history_link');
+    expect(detailCasesSql).toContain('history_link."deviceAirtableId" =');
     expect(detailCasesQuery.values).toContain("hospital-A");
     expect(detailCasesQuery.values).toContain("device-A");
     expect(detailCasesSql).not.toContain('context_task."airtableRecordId"');
@@ -824,6 +824,16 @@ describe("paginated hospital portal", () => {
     expect(html).toContain("history.pushState({portalScreen:'deviceCard',deviceId:id}");
     expect(html).toContain("window.addEventListener('popstate'");
     expect(html).toContain("document.getElementById('deviceBack').addEventListener('click',()=>history.back())");
+  });
+
+  it("keeps list hashes from being overridden by the focused Case", async () => {
+    const html = renderHospitalPortal(
+      await new HospitalPortalViewModelService(memoryStore(1, 1)).build(auth()),
+      "nonce",
+    );
+    expect(html).toContain("const initialScreen=location.hash==='#repairs'?'repairs':location.hash==='#inspections'?'inspections':'summary'");
+    expect(html).toContain("if(portalModel.focusedCase&&initialScreen==='summary')openCase(portalModel.focusedCase.sourceRecordId)");
+    expect(html).not.toContain("if(portalModel.focusedCase)openCase(portalModel.focusedCase.sourceRecordId)");
   });
 
   it("escapes XSS and preserves Polish UTF-8", async () => {

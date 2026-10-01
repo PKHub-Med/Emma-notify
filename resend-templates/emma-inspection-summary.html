@@ -5,7 +5,28 @@
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <title>Podsumowanie przeglądów · {{{VISIT_DATE}}}</title>
     <style>
-      @media only screen and (max-width:680px){.wrap{width:100%!important} .px{padding-left:18px!important;padding-right:18px!important} .mobile-stack{display:block!important;width:100%!important} .meta-label{width:130px!important}}
+      .mr-lp,.mr-time,.mr-break{display:none;mso-hide:all;}
+      .mr-status{display:none;mso-hide:all;padding:5px 8px;border-radius:999px;border:1px solid;font-size:12px;line-height:18px;font-weight:800;white-space:nowrap;}
+      .mr-defective{background:#F8E9E9;color:#9A4949;border-color:#EECFCF;}
+      .mr-conditional{background:#FBF1DB;color:#8B6117;border-color:#EFDCA9;}
+      .mr-working{background:#E7F3EF;color:#2B7A64;border-color:#C9E5DC;}
+      @media only screen and (max-width:680px){
+        .wrap{width:100%!important}
+        .px{padding-left:18px!important;padding-right:18px!important}
+        .mobile-stack{display:block!important;width:100%!important}
+        .meta-label{width:130px!important}
+        .desktop-result-header,.rr-lp,.rr-status,.rr-time{display:none!important;mso-hide:all!important}
+        .result-row{display:table-row!important;width:100%!important}
+        .rr-details{display:table-cell!important;width:100%!important;max-width:100%!important;border-right:0!important;word-break:normal!important;overflow-wrap:normal!important}
+        .mr-lp{display:inline!important;mso-hide:none!important}
+        .mr-status{display:block!important;mso-hide:none!important;float:right!important;margin:0 0 8px 10px!important}
+        .mr-time{display:block!important;mso-hide:none!important}
+        .mr-break{display:block!important;mso-hide:none!important}
+        .dr-separator{display:none!important;mso-hide:all!important}
+      }
+      @media only screen and (max-width:420px){
+        .mr-status{float:none!important;margin:0 0 8px!important;text-align:left!important;white-space:normal!important}
+      }
     </style>
   </head>
   <body
@@ -109,13 +130,13 @@
                     border="0"
                     style="border:1px solid #D9E1EB;background:#ffffff;border-collapse:separate;border-spacing:0;table-layout:fixed;"
                   >
-                    <tr>
+                    <tr class="desktop-result-header">
                       <td style="padding:9px 8px;border-bottom:1px solid #D9E1EB;border-right:1px solid #D9E1EB;background:#F7F9FC;font-size:12px;line-height:18px;color:#66758A;font-weight:800;width:34px;text-align:center;">LP.</td>
                       <td style="padding:9px 10px;border-bottom:1px solid #D9E1EB;border-right:1px solid #D9E1EB;background:#F7F9FC;font-size:12px;line-height:18px;color:#66758A;font-weight:800;">URZĄDZENIE I DANE</td>
                       <td style="padding:9px 8px;border-bottom:1px solid #D9E1EB;border-right:1px solid #D9E1EB;background:#F7F9FC;font-size:12px;line-height:18px;color:#66758A;font-weight:800;width:120px;text-align:center;">STATUS</td>
                       <td style="padding:9px 8px;border-bottom:1px solid #D9E1EB;background:#F7F9FC;font-size:12px;line-height:18px;color:#66758A;font-weight:800;width:120px;text-align:center;">SZACUNKOWY CZAS</td>
                     </tr>
-                    <!-- CODEX: RESULT_ROWS jest gotowym HTML-em <tr>...</tr> generowanym w backendzie. Sortuj: NIESPRAWNY -> WARUNKOWO DOPUSZCZONY -> SPRAWNY. Każdą wartość z Airtable HTML-escapeuj. -->
+                    <!-- CODEX: Każdy RESULT_ROW jest czterokolumnowym wierszem desktop, który poniżej 680 px ukrywa trzy wąskie komórki i zmienia komórkę danych w pełnoszeroki blok. Sortuj: NIESPRAWNY -> WARUNKOWO DOPUSZCZONY -> SPRAWNY. Każdą wartość z Airtable HTML-escapeuj. -->
                     {{{RESULT_ROW_01}}}
 {{{RESULT_ROW_02}}}
 {{{RESULT_ROW_03}}}

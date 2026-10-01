@@ -758,8 +758,18 @@ function resultRows(
     const bottomBorder = index < items.length - 1
       ? "border-bottom:1px solid #D9E1EB;"
       : "";
-    const details = `<div style="font-size:14px;line-height:20px;font-weight:800;color:#1F2F49;">${htmlEscape(display(inspection.deviceName, "Urządzenie"))}</div><div style="margin-top:3px;font-size:12px;line-height:18px;color:#34445D;">${htmlEscape(display(inspection.manufacturer, "—"))} &#183; ${htmlEscape(display(inspection.model, "—"))}</div><div style="margin-top:4px;font-size:12px;line-height:18px;color:#66758A;">SN: ${htmlEscape(display(inspection.serialNumber, "—"))} &#183; Nr inw.: ${htmlEscape(display(inspection.inventoryNumber, "—"))}<br>Numer sprawy: ${htmlEscape(display(inspection.businessNumber, "—"))}<br>Nr zlecenia klienta: ${htmlEscape(display(inspection.clientOrderNumber, "brak numeru"))}</div>`;
-    return `<tr><td style="padding:13px 8px;${bottomBorder}border-right:1px solid #D9E1EB;text-align:center;vertical-align:middle;font-size:12px;line-height:18px;color:#34445D;">${index + 1}</td><td style="padding:13px 12px;${bottomBorder}border-right:1px solid #D9E1EB;vertical-align:top;">${details}</td><td style="padding:13px 10px;${bottomBorder}border-right:1px solid #D9E1EB;text-align:center;vertical-align:middle;">${statusBadge(result.label, inspectionResultTone(result.key))}</td><td style="padding:13px 8px;${bottomBorder}text-align:center;vertical-align:middle;font-size:12px;line-height:18px;font-weight:700;color:#1F2F49;white-space:nowrap;">${htmlEscape(formatDuration(inspection.estimatedDurationSeconds))}</td></tr>`;
+    const deviceName = htmlEscape(display(inspection.deviceName, "Urządzenie"));
+    const manufacturer = htmlEscape(display(inspection.manufacturer, "—"));
+    const model = htmlEscape(display(inspection.model, "—"));
+    const serialNumber = htmlEscape(display(inspection.serialNumber, "—"));
+    const inventoryNumber = htmlEscape(display(inspection.inventoryNumber, "—"));
+    const businessNumber = htmlEscape(display(inspection.businessNumber, "—"));
+    const clientOrderNumber = htmlEscape(display(inspection.clientOrderNumber, "brak numeru"));
+    const duration = htmlEscape(formatDuration(inspection.estimatedDurationSeconds));
+    const badge = statusBadge(result.label, inspectionResultTone(result.key));
+    const mobileBadge = `<span class="mr-status mr-${result.key.toLowerCase()}" style="display:none;mso-hide:all;">${htmlEscape(result.label)}</span>`;
+    const details = `<div style="font-size:14px;line-height:20px;font-weight:800;color:#1F2F49;">${mobileBadge}<span class="mr-lp" style="display:none;mso-hide:all;">${index + 1}. </span>${deviceName}</div><div style="margin-top:3px;font-size:12px;line-height:18px;color:#34445D;">${manufacturer}<span class="dr-separator"> &#183; </span><br class="mr-break" style="display:none;mso-hide:all;">${model}</div><div style="margin-top:4px;font-size:12px;line-height:18px;color:#66758A;">SN: ${serialNumber}<span class="dr-separator"> &#183; </span><br class="mr-break" style="display:none;mso-hide:all;">Nr inw.: ${inventoryNumber}<br>Numer sprawy: ${businessNumber}<br>Nr zlecenia klienta: ${clientOrderNumber}</div><div class="mr-time" style="display:none;mso-hide:all;margin-top:10px;font-size:12px;line-height:18px;font-weight:700;color:#1F2F49;">Szacunkowy czas: ${duration}</div>`;
+    return `<tr class="result-row"><td class="rr-lp" style="padding:13px 8px;${bottomBorder}border-right:1px solid #D9E1EB;text-align:center;vertical-align:middle;font-size:12px;line-height:18px;color:#34445D;">${index + 1}</td><td class="rr-details" style="padding:13px 12px;${bottomBorder}border-right:1px solid #D9E1EB;vertical-align:top;">${details}</td><td class="rr-status" style="padding:13px 10px;${bottomBorder}border-right:1px solid #D9E1EB;text-align:center;vertical-align:middle;">${badge}</td><td class="rr-time" style="padding:13px 8px;${bottomBorder}text-align:center;vertical-align:middle;font-size:12px;line-height:18px;font-weight:700;color:#1F2F49;white-space:nowrap;">${duration}</td></tr>`;
   });
 }
 

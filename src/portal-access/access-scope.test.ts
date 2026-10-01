@@ -48,11 +48,11 @@ describe("portal access scope", () => {
     });
   });
 
-  it("limits Device history in COMMUNICATION and reports the locked remainder", async () => {
+  it("keeps Device history independent from the communication-only Case list", async () => {
     const detail = await serviceAt(new PolicyStore(), PortalAccessLevel.COMMUNICATION)
       .getDevice(auth(), "device-0", { limit: 30 });
-    expect(detail?.cases.items).toHaveLength(2);
-    expect(detail?.lockedCaseCount).toBe(13);
+    expect(detail?.cases.items).toHaveLength(15);
+    expect(detail?.lockedCaseCount).toBe(0);
   });
 
   it("FULL returns all Hospital data and the full 15-item Device history", async () => {
@@ -142,11 +142,10 @@ class PolicyStore implements HospitalPortalStore {
   async findScopedDevice(scope: PortalDataScope, sourceRecordId: string, limit: number) {
     const found = this.visibleDevices(scope).find((item) => item.sourceRecordId === sourceRecordId);
     if (!found) return null;
-    const total = this.cases.filter((item) => item.deviceId === sourceRecordId).length;
-    const visible = this.visibleCases(scope).filter((item) => item.deviceId === sourceRecordId);
+    const visible = this.cases.filter((item) => item.deviceId === sourceRecordId);
     return {
       ...found, cases: { items: visible.slice(0, limit), nextCursor: null },
-      lockedCaseCount: Math.max(0, total - visible.length),
+      lockedCaseCount: 0,
     };
   }
 

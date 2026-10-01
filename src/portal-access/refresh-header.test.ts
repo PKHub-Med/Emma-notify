@@ -47,8 +47,9 @@ describe("shared portal refresh header status", () => {
 
   it("replaces the default meta with the successful refresh time", () => {
     expect(pageSource).toContain(
-      "setRefreshFeedback('success','Dane zaktualizowane • Ostatnia aktualizacja: '",
+      "setRefreshFeedback('success','Ostatnia aktualizacja: '",
     );
+    expect(pageSource).not.toContain("Dane zaktualizowane •");
     expect(pageSource).toContain("setRefreshFeedback(null)");
     expect(pageSource).toContain("formatTechnicalDateTime(updatedAt)");
     expect(pageSource).not.toContain("refreshMessage.textContent='Dane zaktualizowane");

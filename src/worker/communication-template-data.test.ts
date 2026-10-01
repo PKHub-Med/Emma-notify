@@ -119,6 +119,27 @@ describe("dynamic HTML and source mapping", () => {
     expect(String(payload.variables.TRUNCATION_NOTICE)).toContain(count > 30 ? `30 z ${count}` : "");
   });
 
+  it.each([
+    CommunicationScenario.REPAIR_RECEIVED,
+    CommunicationScenario.REPAIR_COMPLETED,
+    CommunicationScenario.REPAIR_DELAYED_PARTS,
+  ])("routes the %s mail CTA to the Repairs list", async (scenario) => {
+    const cta = String((await build(scenario)).variables.EMMA_SECURE_URL);
+    expect(cta).toContain(`href="${secureUrl}#repairs"`);
+    expect(cta).not.toMatch(/cases\/|#case|caseCard/);
+  });
+
+  it.each([
+    CommunicationScenario.INSPECTION_DATE_PROPOSED,
+    CommunicationScenario.INSPECTION_DATE_CONFIRMED,
+    CommunicationScenario.INSPECTION_REMINDER,
+    CommunicationScenario.INSPECTION_COMPLETED,
+  ])("routes the %s mail CTA to the Inspections list", async (scenario) => {
+    const cta = String((await build(scenario)).variables.EMMA_SECURE_URL);
+    expect(cta).toContain(`href="${secureUrl}#inspections"`);
+    expect(cta).not.toMatch(/cases\/|#case|caseCard/);
+  });
+
   it("uses EMAIL_TITLE as the delayed-parts subject for one and many repairs", async () => {
     const syncScript = readFileSync("scripts/sync-resend-templates.mjs", "utf8");
     const delayedBlock = syncScript.slice(syncScript.indexOf('alias: "emma-repair-delayed-parts-phase1"'));
@@ -420,6 +441,31 @@ describe("dynamic HTML and source mapping", () => {
     expect(rows).toContain("border-radius:999px");
     expect(rows).toContain("Numer sprawy: 25793");
     expect(rows).toContain("Nr zlecenia klienta: ADZP-381-353/25");
+  });
+
+  it("renders each completed inspection as a desktop row that becomes a full-width mobile block", async () => {
+    const row = String((await build(CommunicationScenario.INSPECTION_COMPLETED)).variables.RESULT_ROW_01);
+    expect(row).toContain('<tr class="result-row">');
+    expect(row.match(/<td\b/g)).toHaveLength(4);
+    expect(row).toContain('class="rr-details"');
+    expect(row).toContain('class="mr-lp"');
+    expect(row).toContain('class="mr-status mr-defective"');
+    expect(row).toContain('class="mr-lp" style="display:none;mso-hide:all;">1. </span>Łóżko &lt;OIOM&gt;');
+    expect(row).toContain('Żółty Medical<span class="dr-separator"> &#183; </span><br class="mr-break"');
+    expect(row).toContain('SN: SN<span class="dr-separator"> &#183; </span><br class="mr-break"');
+    expect(row).toContain("Numer sprawy: 25793");
+    expect(row).toContain("Nr zlecenia klienta: ADZP-381-353/25");
+    expect(row).toContain("Szacunkowy czas: 12 min");
+    expect(row).not.toContain("min-width");
+  });
+
+  it("switches the result table to mobile blocks only below 680px", () => {
+    const html = readFileSync("resend-templates/emma-inspection-summary.html", "utf8");
+    expect(html).toContain('@media only screen and (max-width:680px)');
+    expect(html).toContain('.desktop-result-header,.rr-lp,.rr-status,.rr-time{display:none!important');
+    expect(html).toContain('.rr-details{display:table-cell!important;width:100%!important');
+    expect(html).toContain('<tr class="desktop-result-header">');
+    expect(html).not.toContain("min-width");
   });
 
   it("always uses the first task performer, including that employee email", async () => {

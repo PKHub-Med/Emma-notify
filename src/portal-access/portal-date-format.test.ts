@@ -29,7 +29,7 @@ describe("portal date presentation", () => {
     expect(calls).toHaveLength(2);
     expect(pageSource).toContain("const formatTechnicalDateTime=value=>value?new Intl.DateTimeFormat('pl-PL',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'");
     expect(pageSource).toContain("'Ostatnia aktualizacja: '+formatTechnicalDateTime(item.sourceModifiedAt)");
-    expect(pageSource).toContain("'Dane zaktualizowane • Ostatnia aktualizacja: '+formatTechnicalDateTime(updatedAt)");
+    expect(pageSource).toContain("'Ostatnia aktualizacja: '+formatTechnicalDateTime(updatedAt)");
   });
 
   it("keeps the reachable legacy case timeline date-only", () => {

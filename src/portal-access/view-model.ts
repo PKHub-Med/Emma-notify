@@ -287,6 +287,7 @@ export type PortalCaseCursorKey = {
   type: "REPAIR" | "INSPECTION";
   sourceRecordId: string;
   sortKey: bigint;
+  deviceId?: string | null;
 };
 
 type SummaryCountRow = {
@@ -559,12 +560,24 @@ export class PrismaHospitalPortalStore implements HospitalPortalStore {
   }
 
   async findScopedCase(scope: PortalDataScope, sourceRecordId: string): Promise<PortalCaseListItem | null> {
-    const keys = await this.prisma.$queryRaw<PageKey[]>(Prisma.sql`
+    let keys = await this.prisma.$queryRaw<PageKey[]>(Prisma.sql`
       WITH scoped AS (${scopedCasesSql(scope, portalRetentionCutoffDate(this.now()))})
       SELECT type, "sourceRecordId", "sortKey" FROM scoped
       WHERE "sourceRecordId" = ${sourceRecordId}
       LIMIT 1
     `);
+    if (keys.length === 0 && scope.accessLevel === PortalAccessLevel.COMMUNICATION) {
+      keys = await this.prisma.$queryRaw<PageKey[]>(Prisma.sql`
+        WITH scoped AS (${deviceHistoryCasesSql(
+          scope,
+          portalRetentionCutoffDate(this.now()),
+        )})
+        SELECT type, "sourceRecordId", "sortKey", "deviceId" FROM scoped
+        WHERE "sourceRecordId" = ${sourceRecordId}
+        ORDER BY "sortKey" DESC, type DESC, "sourceRecordId" DESC
+        LIMIT 1
+      `);
+    }
     return (await this.loadCases(scope, keys, true))[0] ?? null;
   }
 
@@ -631,16 +644,29 @@ export class PrismaHospitalPortalStore implements HospitalPortalStore {
       this.findHospital(scope.hospitalId),
     ]);
     if (!device) return null;
-    const cases = await this.pageCases(scope, {
-      filter: "ALL", query: null, cursor, limit, deviceId: sourceRecordId,
-    });
-    const counts = await this.deviceCaseCounts(scope, sourceRecordId);
+    const cases = await this.loadDeviceHistoryCases(scope, sourceRecordId);
     return {
       ...device,
       location: portalLocation(hospital, null, device.department),
       cases,
-      lockedCaseCount: Math.max(0, counts.total - counts.visible),
+      lockedCaseCount: 0,
     };
+  }
+
+  private async loadDeviceHistoryCases(
+    scope: PortalDataScope,
+    sourceRecordId: string,
+  ): Promise<PortalPage<PortalCaseListItem>> {
+    const keys = await this.prisma.$queryRaw<PageKey[]>(Prisma.sql`
+      WITH scoped AS (${deviceHistoryCasesSql(
+        scope,
+        portalRetentionCutoffDate(this.now()),
+        sourceRecordId,
+      )})
+      SELECT type, "sourceRecordId", "sortKey", "deviceId" FROM scoped
+      ORDER BY "sortKey" DESC, type DESC, "sourceRecordId" DESC
+    `);
+    return { items: await this.loadCases(scope, keys, false), nextCursor: null };
   }
 
   async listDocuments(scope: PortalDataScope, query: string | null): Promise<PortalDocument[]> {
@@ -671,31 +697,6 @@ export class PrismaHospitalPortalStore implements HospitalPortalStore {
       unique.map((asset) => asset.storedFile.sourceRecordId),
     );
     return mapPortalAssets(unique, cases).filter((asset) => asset.kind === "DOCUMENT");
-  }
-
-  private async deviceCaseCounts(
-    scope: PortalDataScope,
-    sourceRecordId: string,
-  ): Promise<{ total: number; visible: number }> {
-    const [totalRows, visibleRows] = await Promise.all([
-      this.prisma.$queryRaw<CountRow[]>(Prisma.sql`
-        SELECT COUNT(*) AS count FROM "TrackedCase" c
-        JOIN "TrackedCaseDevice" cd ON cd."trackedCaseId" = c.id
-        WHERE c.active = true AND c."sourceHospitalRecordId" = ${scope.hospitalId}
-          AND cd."deviceAirtableId" = ${sourceRecordId}
-          AND ${retainedCasePredicateSql(portalRetentionCutoffDate(this.now()))}
-      `),
-      this.prisma.$queryRaw<CountRow[]>(Prisma.sql`
-        WITH scoped AS (${scopedCasesSql(scope, portalRetentionCutoffDate(this.now()))})
-        SELECT COUNT(*) AS count FROM scoped
-        JOIN "TrackedCaseDevice" cd ON cd."trackedCaseId" = scoped."trackedCaseId"
-        WHERE cd."deviceAirtableId" = ${sourceRecordId}
-      `),
-    ]);
-    return {
-      total: Number(totalRows[0]?.count ?? 0n),
-      visible: Number(visibleRows[0]?.count ?? 0n),
-    };
   }
 
   private async loadDevice(scope: PortalDataScope, sourceRecordId: string): Promise<PortalDevice | null> {
@@ -783,12 +784,20 @@ export class PrismaHospitalPortalStore implements HospitalPortalStore {
   ): Promise<PortalCaseListItem[]> {
     if (keys.length === 0) return [];
     const ids = keys.map((key) => key.sourceRecordId);
+    const caseIdentityWhere = {
+      sourceHospitalRecordId: scope.hospitalId,
+      active: true,
+      OR: keys.map((key) => ({
+        airtableRecordId: key.sourceRecordId,
+        caseType: key.type === "REPAIR" ? "SERVICE_ORDER" as const : "INSPECTION" as const,
+      })),
+    };
     const rows: StoredPortalCase[] = includeDetails
       ? await this.prisma.trackedCase.findMany({
-          where: { airtableRecordId: { in: ids } }, select: CASE_SELECT,
+          where: caseIdentityWhere, select: CASE_SELECT,
         })
       : (await this.prisma.trackedCase.findMany({
-          where: { airtableRecordId: { in: ids } }, select: CASE_LIST_SELECT,
+          where: caseIdentityWhere, select: CASE_LIST_SELECT,
         })).map((row) => ({ ...row, events: [] }));
     const hospital = await this.findHospital(scope.hospitalId);
     const inspectionIds = keys.filter((key) => key.type === "INSPECTION").map((key) => key.sourceRecordId);
@@ -802,10 +811,19 @@ export class PrismaHospitalPortalStore implements HospitalPortalStore {
       select: { emmaCustomerStatus: true, linkedInspectionRecordIds: true },
     });
     const caseIds = rows.map((row) => row.id);
-    const caseDeviceLinks = caseIds.length === 0 ? [] : await this.prisma.trackedCaseDevice.findMany({
+    const allCaseDeviceLinks = caseIds.length === 0 ? [] : await this.prisma.trackedCaseDevice.findMany({
       where: { trackedCaseId: { in: caseIds } },
       orderBy: [{ trackedCaseId: "asc" }, { deviceAirtableId: "asc" }],
       select: { trackedCaseId: true, deviceAirtableId: true },
+    });
+    const historyDeviceByCase = new Map(keys.flatMap((key) => key.deviceId
+      ? [[key.sourceRecordId, key.deviceId] as const]
+      : []));
+    const caseSourceByTrackedId = new Map(rows.map((row) => [row.id, row.airtableRecordId]));
+    const caseDeviceLinks = allCaseDeviceLinks.filter((link) => {
+      const caseSourceId = caseSourceByTrackedId.get(link.trackedCaseId);
+      const historyDeviceId = caseSourceId ? historyDeviceByCase.get(caseSourceId) : undefined;
+      return historyDeviceId === undefined || historyDeviceId === link.deviceAirtableId;
     });
     const linkedDeviceIds = [...new Set(caseDeviceLinks.map((link) => link.deviceAirtableId))];
     const linkedDevices = linkedDeviceIds.length === 0 ? [] : await this.prisma.trackedDevice.findMany({
@@ -1166,52 +1184,132 @@ function authorizedCasesSql(scope: PortalDataScope): Prisma.Sql {
   return portalCasesSql(scope, null);
 }
 
+type DeviceHistoryOptions = {
+  cutoffDate: string;
+  deviceId?: string;
+};
+
+function deviceHistoryCasesSql(
+  scope: PortalDataScope,
+  cutoffDate: string,
+  deviceId?: string,
+): Prisma.Sql {
+  return portalCasesSql(scope, null, {
+    cutoffDate,
+    ...(deviceId === undefined ? {} : { deviceId }),
+  });
+}
+
 function portalCasesSql(
   scope: PortalDataScope,
   retentionCutoffDate: string | null,
+  deviceHistory?: DeviceHistoryOptions,
 ): Prisma.Sql {
-  const serviceOrderRetention = retentionCutoffDate === null
-    ? Prisma.empty
-    : Prisma.sql`AND ${retainedCaseTypePredicateSql("SERVICE_ORDER", retentionCutoffDate)}`;
-  const inspectionRetention = retentionCutoffDate === null
-    ? Prisma.empty
-    : Prisma.sql`AND ${retainedCaseTypePredicateSql("INSPECTION", retentionCutoffDate)}`;
-  return Prisma.sql`
-    SELECT 'REPAIR'::text AS type, c.id AS "trackedCaseId",
-      c."airtableRecordId" AS "sourceRecordId", c."deviceName", c.manufacturer, c.model,
-      c."serialNumber", c."inventoryNumber",
-      COALESCE(c."emmaCustomerStatus", c."currentStatus", 'Brak informacji') AS status,
-      FLOOR(EXTRACT(EPOCH FROM COALESCE((SELECT MAX(e."detectedAt") FROM "CaseEvent" e
+  const serviceOrderRetention = deviceHistory
+    ? Prisma.sql`AND c."reportedAt" IS NOT NULL
+        AND c."reportedAt" >= CAST(${deviceHistory.cutoffDate} AS date)`
+    : retentionCutoffDate === null
+      ? Prisma.empty
+      : Prisma.sql`AND ${retainedCaseTypePredicateSql("SERVICE_ORDER", retentionCutoffDate)}`;
+  const inspectionRetention = deviceHistory
+    ? Prisma.sql`AND c."inspectionPerformedAt" IS NOT NULL
+        AND c."inspectionPerformedAt" >= CAST(${deviceHistory.cutoffDate} AS date)`
+    : retentionCutoffDate === null
+      ? Prisma.empty
+      : Prisma.sql`AND ${retainedCaseTypePredicateSql("INSPECTION", retentionCutoffDate)}`;
+  const serviceOrderVisibility = deviceHistory
+    ? deviceHistoryCaseSql(scope, deviceHistory.deviceId)
+    : visibleCaseSql(scope, "SERVICE_ORDER");
+  const inspectionVisibility = deviceHistory
+    ? deviceHistoryCaseSql(scope, deviceHistory.deviceId)
+    : visibleCaseSql(scope, "INSPECTION");
+  const serviceOrderSortKey = deviceHistory
+    ? Prisma.sql`FLOOR(EXTRACT(EPOCH FROM c."reportedAt") * 1000)::bigint`
+    : Prisma.sql`FLOOR(EXTRACT(EPOCH FROM COALESCE((SELECT MAX(e."detectedAt") FROM "CaseEvent" e
         WHERE e."trackedCaseId" = c.id AND e."visibleToCustomer" = true),
-        c."sourceModifiedAt", c."sourceCreatedAt", TIMESTAMP '1970-01-01 00:00:00')) * 1000)::bigint AS "sortKey",
-      NULL::timestamp AS "validUntil", c."businessNumber", c."clientOrderNumber",
-      c."sourceSnapshot"->>'department' AS department
-    FROM "TrackedCase" c
-    WHERE c."caseType" = 'SERVICE_ORDER' AND c.active = true
-      AND c."sourceHospitalRecordId" = ${scope.hospitalId}
-      ${serviceOrderRetention}
-      ${visibleCaseSql(scope, "SERVICE_ORDER")}
-    UNION ALL
-    SELECT 'INSPECTION'::text AS type, c.id AS "trackedCaseId",
-      c."airtableRecordId" AS "sourceRecordId", c."deviceName", c.manufacturer, c.model,
-      c."serialNumber", c."inventoryNumber",
-      COALESCE(NULLIF(BTRIM(c."currentStatus"), ''), 'Dane wymagają weryfikacji') AS status,
-      (CASE UPPER(TRIM(COALESCE(c."currentStatus", '')))
+        c."sourceModifiedAt", c."sourceCreatedAt", TIMESTAMP '1970-01-01 00:00:00')) * 1000)::bigint`;
+  const inspectionSortKey = deviceHistory
+    ? Prisma.sql`FLOOR(EXTRACT(EPOCH FROM c."inspectionPerformedAt") * 1000)::bigint`
+    : Prisma.sql`(CASE UPPER(TRIM(COALESCE(c."currentStatus", '')))
         WHEN 'NIESPRAWNE' THEN 3
         WHEN 'WARUNKOWO DOPUSZCZONE' THEN 2
         WHEN 'SPRAWNE' THEN 1
         ELSE 0 END)::bigint * 1000000000000000::bigint
       + FLOOR(EXTRACT(EPOCH FROM COALESCE((SELECT MAX(e."detectedAt") FROM "CaseEvent" e
         WHERE e."trackedCaseId" = c.id AND e."visibleToCustomer" = true),
-        c."sourceModifiedAt", c."sourceCreatedAt", TIMESTAMP '1970-01-01 00:00:00')) * 1000)::bigint AS "sortKey",
+        c."sourceModifiedAt", c."sourceCreatedAt", TIMESTAMP '1970-01-01 00:00:00')) * 1000)::bigint`;
+  const historyDeviceId = deviceHistory
+    ? deviceHistoryDeviceIdSql(scope, deviceHistory.deviceId)
+    : Prisma.sql`NULL::text`;
+  return Prisma.sql`
+    SELECT 'REPAIR'::text AS type, c.id AS "trackedCaseId",
+      c."airtableRecordId" AS "sourceRecordId", c."deviceName", c.manufacturer, c.model,
+      c."serialNumber", c."inventoryNumber",
+      COALESCE(c."emmaCustomerStatus", c."currentStatus", 'Brak informacji') AS status,
+      ${serviceOrderSortKey} AS "sortKey", ${historyDeviceId} AS "deviceId",
+      NULL::timestamp AS "validUntil", c."businessNumber", c."clientOrderNumber",
+      c."sourceSnapshot"->>'department' AS department
+    FROM "TrackedCase" c
+    WHERE c."caseType" = 'SERVICE_ORDER' AND c.active = true
+      AND c."sourceHospitalRecordId" = ${scope.hospitalId}
+      ${serviceOrderRetention}
+      ${serviceOrderVisibility}
+    UNION ALL
+    SELECT 'INSPECTION'::text AS type, c.id AS "trackedCaseId",
+      c."airtableRecordId" AS "sourceRecordId", c."deviceName", c.manufacturer, c.model,
+      c."serialNumber", c."inventoryNumber",
+      COALESCE(NULLIF(BTRIM(c."currentStatus"), ''), 'Dane wymagają weryfikacji') AS status,
+      ${inspectionSortKey} AS "sortKey", ${historyDeviceId} AS "deviceId",
       c."inspectionValidUntil" AS "validUntil", c."businessNumber", c."clientOrderNumber",
       c."sourceSnapshot"->>'department' AS department
     FROM "TrackedCase" c
     WHERE c."caseType" = 'INSPECTION' AND c.active = true
       AND c."sourceHospitalRecordId" = ${scope.hospitalId}
       ${inspectionRetention}
-      ${visibleCaseSql(scope, "INSPECTION")}
+      ${inspectionVisibility}
   `;
+}
+
+function deviceHistoryCaseSql(
+  scope: PortalDataScope,
+  deviceId?: string,
+): Prisma.Sql {
+  const exactDevice = deviceId
+    ? Prisma.sql`AND history_link."deviceAirtableId" = ${deviceId}`
+    : Prisma.empty;
+  return Prisma.sql`AND EXISTS (
+    SELECT 1
+    FROM "TrackedCaseDevice" history_link
+    JOIN "TrackedDevice" d
+      ON d."airtableRecordId" = history_link."deviceAirtableId"
+    WHERE history_link."trackedCaseId" = c.id
+      ${exactDevice}
+      AND d.active = true
+      AND d."sourceHospitalRecordId" = ${scope.hospitalId}
+      ${visibleDeviceSql(scope)}
+  )`;
+}
+
+function deviceHistoryDeviceIdSql(
+  scope: PortalDataScope,
+  deviceId?: string,
+): Prisma.Sql {
+  const exactDevice = deviceId
+    ? Prisma.sql`AND history_device_link."deviceAirtableId" = ${deviceId}`
+    : Prisma.empty;
+  return Prisma.sql`(
+    SELECT history_device_link."deviceAirtableId"
+    FROM "TrackedCaseDevice" history_device_link
+    JOIN "TrackedDevice" d
+      ON d."airtableRecordId" = history_device_link."deviceAirtableId"
+    WHERE history_device_link."trackedCaseId" = c.id
+      ${exactDevice}
+      AND d.active = true
+      AND d."sourceHospitalRecordId" = ${scope.hospitalId}
+      ${visibleDeviceSql(scope)}
+    ORDER BY history_device_link."deviceAirtableId"
+    LIMIT 1
+  )`;
 }
 
 function warsawDateKey(value: Date): string {
