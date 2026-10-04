@@ -221,6 +221,10 @@ describe("case mappers", () => {
       relatedRepairNumber: "24872",
       inspectionDeviceTagged: "TAK",
       inspectionDeviceEpc: "EPC-123",
+      sourceSnapshot: expect.objectContaining({
+        inspectionAdminStatus: "UMÓWIONE",
+        inspectionValidation: "OK",
+      }),
     });
     expect(mapped.inspectionValidUntil?.toISOString()).toBe("2027-09-10T00:00:00.000Z");
   });

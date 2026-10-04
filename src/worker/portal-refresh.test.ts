@@ -439,6 +439,97 @@ describe("portal refresh worker", () => {
     expect(requestStore.status).toBe(PortalRefreshStatus.SUCCEEDED);
   });
 
+  it("replaces stale Inspection validation during a data-only portal refresh", async () => {
+    const inspectionId = "recInspectionValidation";
+    const requestStore = new MemoryWorkerStore({
+      id: "refresh-validation",
+      leaseToken: "assigned-by-claim",
+      sourceHospitalRecordId: "recHospitalA",
+      serviceOrderRecordIds: [],
+      inspectionRecordIds: [inspectionId],
+      deviceRecordIds: [],
+      taskRecordIds: [],
+    });
+    let storedValidation: string | null = null;
+    let storedStatus: string | null = "DO WERYFIKACJI";
+    let storedSnapshot: Record<string, unknown> = { inspectionValidation: null };
+    const trackedCaseUpsert = vi.fn(async (args: {
+      update: {
+        currentStatus: string | null;
+        inspectionValidation: string | null;
+        sourceSnapshot: Record<string, unknown>;
+      };
+    }) => {
+      storedStatus = args.update.currentStatus;
+      storedValidation = args.update.inspectionValidation;
+      storedSnapshot = args.update.sourceSnapshot;
+      return { id: "tracked-inspection" };
+    });
+    const transaction = {
+      trackedCase: { upsert: trackedCaseUpsert },
+      trackedCaseDevice: {
+        deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
+        createMany: vi.fn().mockResolvedValue({ count: 0 }),
+      },
+    };
+    const prisma = {
+      trackedCase: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: "tracked-inspection",
+          currentStatus: "DO WERYFIKACJI",
+        }),
+      },
+      caseRecipient: { deleteMany: vi.fn().mockResolvedValue({ count: 0 }) },
+      $transaction: vi.fn(async (operation: (client: typeof transaction) => Promise<unknown>) =>
+        operation(transaction)),
+    } as unknown as PrismaClient;
+    const fetchRecord = vi.fn(async (tableId: string, recordId: string) => {
+      if (tableId === AIRTABLE_TABLE_IDS.hospitals) return hospitalRecord([inspectionId]);
+      if (tableId === AIRTABLE_TABLE_IDS.inspections) {
+        return {
+          id: recordId,
+          createdTime: "2026-01-10T10:00:00.000Z",
+          fields: {
+            [INSPECTION_FIELDS.emmaStatus]: "WYKONANY",
+            [INSPECTION_FIELDS.validation]: "OK",
+            [INSPECTION_FIELDS.adminStatus]: "ZAKOŃCZONE",
+            [INSPECTION_FIELDS.result]: "SPRAWNY",
+            [INSPECTION_FIELDS.performedAt]: "2026-09-27",
+          },
+        };
+      }
+      throw new Error(`Unexpected record ${tableId}/${recordId}`);
+    });
+    const communicationStore = noOpCommunicationStore();
+    const observe = vi.spyOn(communicationStore, "observe");
+
+    await runPortalRefreshWorkerOnce({
+      store: requestStore,
+      airtable: {
+        fetchRecord,
+        fetchAllRecords: vi.fn(async () => [hospitalRecord([inspectionId])]),
+      } as AirtableIncrementalSource,
+      incrementalStore: new PrismaIncrementalStore(prisma),
+      hospitalStore: noOpHospitalStore(),
+      deviceStore: { upsert: vi.fn() },
+      taskStore: { upsertTask: vi.fn() },
+      communicationStore,
+      quietMinutes: 10,
+      now: () => new Date("2026-09-27T10:00:00.000Z"),
+    });
+
+    expect(storedStatus).toBe("WYKONANY");
+    expect(storedValidation).toBe("OK");
+    expect(storedSnapshot).toMatchObject({
+      currentStatus: "WYKONANY",
+      inspectionAdminStatus: "ZAKOŃCZONE",
+      inspectionResult: "SPRAWNY",
+      inspectionValidation: "OK",
+    });
+    expect(observe).not.toHaveBeenCalled();
+    expect(requestStore.status).toBe(PortalRefreshStatus.SUCCEEDED);
+  });
+
   it.each([
     {
       scenario: "stores the canonical scheduled date when the database value is null",

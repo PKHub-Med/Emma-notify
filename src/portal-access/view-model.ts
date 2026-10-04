@@ -1377,7 +1377,11 @@ export function mapCase(
   const rawCurrentStatus = type === "INSPECTION"
     ? stored.currentStatus?.trim() ?? ""
     : stored.emmaCustomerStatus || stored.currentStatus || "Brak informacji";
-  const inspectionVerified = isInspectionVerified(rawCurrentStatus, stored.inspectionValidation);
+  const inspectionVerificationFailure = inspectionVerificationFailureReason(
+    rawCurrentStatus,
+    stored.inspectionValidation,
+  );
+  const inspectionVerified = inspectionVerificationFailure === null;
   const currentStatus = type === "INSPECTION"
     ? inspectionPortalStatus(rawCurrentStatus, stored.inspectionValidation)
     : rawCurrentStatus;
@@ -1421,8 +1425,13 @@ export function mapCase(
     description: stored.faultDescription, history, documents: [], photos: [], photoLabel: "Zdjęcia",
   };
   if (type === "INSPECTION") {
-    if (!inspectionVerified) {
-      console.warn(`PORTAL_INSPECTION_VALIDATION_FAILED sourceRecordId=${stored.airtableRecordId}`);
+    if (inspectionVerificationFailure) {
+      console.warn(
+        `PORTAL_INSPECTION_VALIDATION_FAILED sourceRecordId=${stored.airtableRecordId} ` +
+        `currentStatus=${safeInspectionValidationLogValue(rawCurrentStatus)} ` +
+        `inspectionValidation=${safeInspectionValidationLogValue(stored.inspectionValidation)} ` +
+        `reason=${inspectionVerificationFailure}`,
+      );
     }
     item.inspectionDetails = {
       id: stored.airtableRecordId,
@@ -1560,11 +1569,36 @@ export function inspectionDisplayStatus(status: string, performedAt: Date | null
   return status;
 }
 
-function isInspectionVerified(status: string, validation: string | null | undefined): boolean {
-  const normalizedStatus = status.trim().toLocaleUpperCase("pl-PL");
-  return normalizedStatus.length > 0
-    && normalizedStatus !== "DO WERYFIKACJI"
-    && validation?.trim().toLocaleUpperCase("pl-PL") === "OK";
+export type InspectionVerificationFailureReason =
+  | "MISSING_CURRENT_STATUS"
+  | "CURRENT_STATUS_REQUIRES_VERIFICATION"
+  | "MISSING_VALIDATION"
+  | "VALIDATION_NOT_OK";
+
+export function inspectionVerificationFailureReason(
+  status: string | null | undefined,
+  validation: string | null | undefined,
+): InspectionVerificationFailureReason | null {
+  const normalizedStatus = status?.trim().toLocaleUpperCase("pl-PL") ?? "";
+  if (!normalizedStatus) return "MISSING_CURRENT_STATUS";
+  if (normalizedStatus === "DO WERYFIKACJI") {
+    return "CURRENT_STATUS_REQUIRES_VERIFICATION";
+  }
+  const normalizedValidation = validation?.trim().toLocaleUpperCase("pl-PL") ?? "";
+  if (!normalizedValidation) return "MISSING_VALIDATION";
+  return normalizedValidation === "OK" ? null : "VALIDATION_NOT_OK";
+}
+
+export function isInspectionVerified(
+  status: string | null | undefined,
+  validation: string | null | undefined,
+): boolean {
+  return inspectionVerificationFailureReason(status, validation) === null;
+}
+
+function safeInspectionValidationLogValue(value: string | null | undefined): string {
+  const normalized = value?.replace(/[\u0000-\u001f\u007f]+/g, " ").trim().slice(0, 100);
+  return normalized ? JSON.stringify(normalized) : "<null>";
 }
 
 export function inspectionPortalStatus(

@@ -280,7 +280,14 @@ export function mapInspection(record: AirtableRecord): MappedCase {
     repairValidation: null,
     repairOfferNumber: null,
     repairDescription: null,
-    sourceSnapshot: { ...values },
+    sourceSnapshot: {
+      ...values,
+      // Keep canonical persisted names in the snapshot as well as the legacy
+      // short keys. The dedicated TrackedCase columns remain authoritative.
+      inspectionAdminStatus: values.adminStatus,
+      inspectionResult: toOptionalString(record.fields[INSPECTION_FIELDS.result]),
+      inspectionValidation: values.validation,
+    },
     contactRecordIds: toLinkedRecordIds(
       record.fields[INSPECTION_FIELDS.contactLinks],
     ),

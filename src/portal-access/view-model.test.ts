@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   CommunicationAssetRole,
   CommunicationScenario,
@@ -155,6 +155,7 @@ describe("paginated hospital portal", () => {
   });
 
   it("shows TrackedCase.inspectionValidUntil for an inspection in progress", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const validUntil = new Date("2027-09-01T00:00:00.000Z");
     const stored: StoredPortalCase = {
       id: "case-27190", airtableRecordId: "rec2QXkBuCSLO6oeB", businessNumber: "27190",
@@ -194,6 +195,12 @@ describe("paginated hospital portal", () => {
       hospitalShortName: "WUM",
       department: "Kardiologia",
     });
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining(
+        'currentStatus="W TRAKCIE REALIZACJI" inspectionValidation=<null> reason=MISSING_VALIDATION',
+      ),
+    );
+    warn.mockRestore();
   });
   it("renders at most 30 of 3200 records while preserving DB counts", async () => {
     const store = memoryStore(2000, 1200);

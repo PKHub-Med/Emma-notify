@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   inspectionDesignVariant,
   inspectionPortalStatus,
+  inspectionVerificationFailureReason,
+  isInspectionVerified,
   polishPhotoCountLabel,
 } from "./view-model.js";
 
@@ -33,6 +35,20 @@ describe("inspection photo count", () => {
 });
 
 describe("inspection customer-facing status", () => {
+  it.each([
+    ["WYKONANY", "OK", null],
+    [null, "OK", "MISSING_CURRENT_STATUS"],
+    ["DO WERYFIKACJI", "OK", "CURRENT_STATUS_REQUIRES_VERIFICATION"],
+    ["WYKONANY", null, "MISSING_VALIDATION"],
+    ["WYKONANY", "BŁĄD: brak wyniku", "VALIDATION_NOT_OK"],
+  ] as const)(
+    "validates status=%j validation=%j with reason %j",
+    (status, validation, reason) => {
+      expect(inspectionVerificationFailureReason(status, validation)).toBe(reason);
+      expect(isInspectionVerified(status, validation)).toBe(reason === null);
+    },
+  );
+
   it.each(["ZF", "Zafakturowano", "UMÓWIONE"])(
     "uses the neutral verification state instead of administrative status %s",
     (adminStatus) => {

@@ -5,6 +5,7 @@ import {
   HOSPITAL_FIELD_IDS,
   HOSPITAL_FIELDS,
   INSPECTION_FIELD_IDS,
+  INSPECTION_FIELDS,
 } from "../airtable/field-ids.js";
 import { mapHospital } from "../airtable/hospital.js";
 import { mapInspection } from "../airtable/mappers.js";
@@ -45,7 +46,11 @@ async function main(): Promise<void> {
           inspectionDueDate: true,
           inspectionScheduledDate: true,
           inspectionPerformedAt: true,
+          inspectionResult: true,
+          inspectionAdminStatus: true,
+          inspectionValidation: true,
           currentStatus: true,
+          sourceSnapshot: true,
           devices: {
             orderBy: { deviceAirtableId: "asc" },
             select: { deviceAirtableId: true },
@@ -76,6 +81,18 @@ async function main(): Promise<void> {
     console.info(JSON.stringify({
       mode: "READ_ONLY",
       inspectionAirtableRecordId: sourceRecordId,
+      airtableFieldsById: {
+        [INSPECTION_FIELDS.emmaStatus]:
+          inspectionRecord.fields[INSPECTION_FIELDS.emmaStatus] ?? null,
+        [INSPECTION_FIELDS.validation]:
+          inspectionRecord.fields[INSPECTION_FIELDS.validation] ?? null,
+        [INSPECTION_FIELDS.adminStatus]:
+          inspectionRecord.fields[INSPECTION_FIELDS.adminStatus] ?? null,
+        [INSPECTION_FIELDS.result]:
+          inspectionRecord.fields[INSPECTION_FIELDS.result] ?? null,
+        [INSPECTION_FIELDS.performedAt]:
+          inspectionRecord.fields[INSPECTION_FIELDS.performedAt] ?? null,
+      },
       existsInTrackedCase: trackedCase !== null,
       sourceHospitalRecordId: trackedCase?.sourceHospitalRecordId ?? null,
       hospitalsFromHospitalInspectionLinks: hospitals,
@@ -103,6 +120,33 @@ async function main(): Promise<void> {
         airtable: inspection.currentStatus,
         local: trackedCase?.currentStatus ?? null,
       },
+      validation: {
+        airtable: inspection.inspectionValidation,
+        localColumn: trackedCase?.inspectionValidation ?? null,
+        localSnapshot: snapshotValue(trackedCase?.sourceSnapshot, "inspectionValidation"),
+      },
+      inspectionAdminStatus: {
+        airtable: inspection.inspectionAdminStatus,
+        localColumn: trackedCase?.inspectionAdminStatus ?? null,
+        localSnapshot: snapshotValue(trackedCase?.sourceSnapshot, "inspectionAdminStatus"),
+      },
+      inspectionResult: {
+        airtable: inspection.inspectionResult,
+        localColumn: trackedCase?.inspectionResult ?? null,
+        localSnapshot: snapshotValue(trackedCase?.sourceSnapshot, "inspectionResult"),
+      },
+      postgres: {
+        currentStatus: trackedCase?.currentStatus ?? null,
+        sourceHospitalRecordId: trackedCase?.sourceHospitalRecordId ?? null,
+        active: trackedCase?.active ?? null,
+        sourceSnapshotInspectionValidation:
+          snapshotValue(trackedCase?.sourceSnapshot, "inspectionValidation"),
+        sourceSnapshotInspectionAdminStatus:
+          snapshotValue(trackedCase?.sourceSnapshot, "inspectionAdminStatus"),
+        sourceSnapshotInspectionResult:
+          snapshotValue(trackedCase?.sourceSnapshot, "inspectionResult"),
+        inspectionPerformedAt: trackedCase?.inspectionPerformedAt ?? null,
+      },
     }, null, 2));
   } finally {
     await prisma.$disconnect();
@@ -113,3 +157,9 @@ void main().catch((error: unknown) => {
   console.error(error instanceof Error ? error.message : error);
   process.exitCode = 1;
 });
+
+function snapshotValue(snapshot: unknown, key: string): unknown {
+  return typeof snapshot === "object" && snapshot !== null && !Array.isArray(snapshot)
+    ? (snapshot as Record<string, unknown>)[key] ?? null
+    : null;
+}
