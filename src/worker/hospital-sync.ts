@@ -12,6 +12,7 @@ export interface HospitalSyncStore {
   synchronizeInspectionScopes(
     index: InspectionHospitalScopeIndex,
     log?: (message: string) => void,
+    recordIds?: readonly string[],
   ): Promise<InspectionHospitalScopeStats>;
   markRunning(at: Date): Promise<void>;
   markSuccessful(at: Date): Promise<void>;
@@ -38,8 +39,9 @@ export class PrismaHospitalSyncStore implements HospitalSyncStore {
   async synchronizeInspectionScopes(
     index: InspectionHospitalScopeIndex,
     log: (message: string) => void = console.warn,
+    recordIds?: readonly string[],
   ): Promise<InspectionHospitalScopeStats> {
-    return synchronizeInspectionHospitalScopes(this.prisma, index, log);
+    return synchronizeInspectionHospitalScopes(this.prisma, index, log, recordIds);
   }
 
   async markRunning(at: Date): Promise<void> {
@@ -133,9 +135,14 @@ export async function synchronizeInspectionHospitalScopes(
   prisma: PrismaClient | Prisma.TransactionClient,
   index: InspectionHospitalScopeIndex,
   log: (message: string) => void = console.warn,
+  recordIds?: readonly string[],
 ): Promise<InspectionHospitalScopeStats> {
+  const scopedRecordIds = recordIds ? [...new Set(recordIds)] : undefined;
   const inspections = await prisma.trackedCase.findMany({
-    where: { caseType: CaseType.INSPECTION },
+    where: {
+      caseType: CaseType.INSPECTION,
+      ...(scopedRecordIds ? { airtableRecordId: { in: scopedRecordIds } } : {}),
+    },
     select: { id: true, airtableRecordId: true, sourceHospitalRecordId: true },
   });
   let repaired = 0;

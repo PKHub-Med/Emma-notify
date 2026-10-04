@@ -71,6 +71,28 @@ describe("Hospital -> Inspection canonical scope", () => {
     ));
   });
 
+  it("limits a scoped repair query to the explicit Inspection Record IDs", async () => {
+    const findMany = vi.fn(async () => []);
+    const prisma = {
+      trackedCase: { findMany, update: vi.fn() },
+    } as unknown as PrismaClient;
+
+    await synchronizeInspectionHospitalScopes(
+      prisma,
+      new Map(),
+      vi.fn(),
+      ["inspection-A", "inspection-A"],
+    );
+
+    expect(findMany).toHaveBeenCalledWith({
+      where: {
+        caseType: "INSPECTION",
+        airtableRecordId: { in: ["inspection-A"] },
+      },
+      select: { id: true, airtableRecordId: true, sourceHospitalRecordId: true },
+    });
+  });
+
   it("uses one paginated Hospital list operation for a 26k-like relation set", async () => {
     const records = Array.from({ length: 362 }, (_, hospitalIndex) =>
       hospitalRecord(`hospital-${hospitalIndex}`, Array.from(
