@@ -20,6 +20,7 @@
     "db:inspect-case": "node dist/db/inspect-case.js",
     "db:inspect-task": "npm run build && node dist/db/inspect-task.js",
     "db:inspect-service-order": "npm run build && node dist/db/inspect-service-order.js",
+    "db:inspect-inspection-scope": "npm run build && node dist/db/inspect-inspection-scope.js",
     "db:latest-digest": "node dist/db/latest-digest.js",
     "db:retry-detail-url-failures": "node dist/db/retry-detail-url-failures.js",
     "backfill:data": "npm run build && node dist/worker/data-only-backfill.js",

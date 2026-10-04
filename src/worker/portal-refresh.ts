@@ -9,6 +9,7 @@ import {
   AIRTABLE_TABLE_IDS,
   DEVICE_FIELD_IDS,
   HOSPITAL_FIELD_IDS,
+  HOSPITAL_FIELDS,
   INSPECTION_FIELD_IDS,
   SERVICE_ORDER_FIELD_IDS,
   TASK_FIELD_IDS,
@@ -16,7 +17,10 @@ import {
 import { AirtableRequestError } from "../airtable/client.js";
 import { mapDevice } from "../airtable/device.js";
 import { mapHospital } from "../airtable/hospital.js";
-import type { HospitalSyncStore } from "./hospital-sync.js";
+import {
+  buildInspectionHospitalScopeIndex,
+  type HospitalSyncStore,
+} from "./hospital-sync.js";
 import { mapInspection, mapServiceOrder } from "../airtable/mappers.js";
 import { mapTask } from "../airtable/task.js";
 import type { AirtableIncrementalSource, AirtableRecord } from "../airtable/types.js";
@@ -216,7 +220,7 @@ export async function runPortalRefreshWorkerOnce(dependencies: {
   store: PortalRefreshWorkerStore;
   airtable: AirtableIncrementalSource;
   incrementalStore: IncrementalStore;
-  hospitalStore: Pick<HospitalSyncStore, "upsert">;
+  hospitalStore: Pick<HospitalSyncStore, "upsert" | "synchronizeInspectionScopes">;
   deviceStore: Pick<DeviceSyncStore, "upsert">;
   taskStore: Pick<TaskSyncStore, "upsertTask">;
   communicationStore: CommunicationEventStore;
@@ -255,6 +259,17 @@ export async function runPortalRefreshWorkerOnce(dependencies: {
     ));
     await dependencies.hospitalStore.upsert(hospital, now());
     const currentHospitalInspectionIds = new Set(hospital.linkedInspectionRecordIds);
+    // The request snapshot is derived from local portal scope and may therefore
+    // omit historical inspections whose scope is null. Airtable's Hospital link
+    // is the discovery source; the full Hospital index is also required to fail
+    // closed when the same Inspection is linked to more than one Hospital.
+    const hospitalRecords = await dependencies.airtable.fetchAllRecords(
+      AIRTABLE_TABLE_IDS.hospitals,
+      [HOSPITAL_FIELDS.inspectionLinks],
+    );
+    const inspectionScopeIndex = buildInspectionHospitalScopeIndex(
+      hospitalRecords.map(mapHospital),
+    );
     await syncRecords(claimed.taskRecordIds, async (recordId) => {
       const record = await dependencies.airtable.fetchRecord(
         AIRTABLE_TABLE_IDS.tasks, recordId, TASK_FIELD_IDS,
@@ -308,7 +323,11 @@ export async function runPortalRefreshWorkerOnce(dependencies: {
       claimed.sourceHospitalRecordId,
     ), renewLease, dependencies.log);
 
-    await syncRecords(claimed.inspectionRecordIds, async (recordId) => {
+    const inspectionRecordIds = [...new Set([
+      ...claimed.inspectionRecordIds,
+      ...currentHospitalInspectionIds,
+    ])];
+    await syncRecords(inspectionRecordIds, async (recordId) => {
       if (!currentHospitalInspectionIds?.has(recordId)) {
         await dependencies.store.deactivateCase(
           CaseType.INSPECTION,
@@ -317,11 +336,6 @@ export async function runPortalRefreshWorkerOnce(dependencies: {
         );
         return;
       }
-      if (!await dependencies.store.isCaseInHospital(
-        CaseType.INSPECTION,
-        recordId,
-        claimed.sourceHospitalRecordId,
-      )) return;
       const record = await dependencies.airtable.fetchRecord(
         AIRTABLE_TABLE_IDS.inspections, recordId, INSPECTION_FIELD_IDS,
       );
@@ -343,6 +357,13 @@ export async function runPortalRefreshWorkerOnce(dependencies: {
       recordId,
       claimed.sourceHospitalRecordId,
     ), renewLease, dependencies.log);
+
+    // Run after upserts so newly discovered Inspection rows are included. This
+    // only updates canonical data scope; it cannot create communication events.
+    await dependencies.hospitalStore.synchronizeInspectionScopes(
+      inspectionScopeIndex,
+      dependencies.log,
+    );
 
     await syncRecords([...deviceRecordIds], async (recordId) => {
       const record = await dependencies.airtable.fetchRecord(
