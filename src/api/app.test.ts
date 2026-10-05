@@ -27,6 +27,7 @@ import {
   encodePortalCaseCursor,
   type HospitalPortalViewModel,
   type PortalCaseListItem,
+  type PortalDevice,
   type PortalDeviceDetail,
   type PortalDocument,
 } from "../portal-access/view-model.js";
@@ -45,6 +46,131 @@ afterEach(async () => {
 });
 
 describe("public API", () => {
+  it("keeps the /d portal token across every data request and after a successful refresh", async () => {
+    const grant = portalRecord({ sourceHospitalRecordId: "hospital-flow" });
+    const caseItem = portalCase("case-flow", "FLOW-1");
+    const deviceItem: PortalDevice = {
+      sourceRecordId: "device-flow", deviceName: "Aparat USG", manufacturer: "Acme",
+      model: "U1", serialNumber: "SN-1", inventoryNumber: "INV-1", department: "SOR",
+      validUntil: null, inspectionPerformedAt: null, inspectionResult: null, status: "SPRAWNY",
+      productionYear: "2024", commissionedAt: null, warrantyUntil: null, repairEpc: null,
+      sourceModifiedAt: new Date("2026-10-05T08:00:00Z"),
+    };
+    const deviceDetail: PortalDeviceDetail = {
+      ...deviceItem,
+      location: { hospitalName: "Hospital Flow", hospitalShortName: "HF", department: "SOR" },
+      cases: { items: [caseItem], nextCursor: null },
+      lockedCaseCount: 0,
+    };
+    const documentItem: PortalDocument = {
+      id: "asset-flow", fileName: "protokol.pdf", title: "Protokol", kind: "DOCUMENT",
+      role: "PRIMARY_DOCUMENT", documentType: "Protokol", sourceRecordId: caseItem.sourceRecordId,
+      caseType: "REPAIR", deviceName: deviceItem.deviceName, manufacturer: deviceItem.manufacturer,
+      model: deviceItem.model, serialNumber: deviceItem.serialNumber, caseNumber: caseItem.caseNumber,
+      caseDate: null, createdAt: new Date("2026-10-05T08:00:00Z"),
+    };
+    const authorizations: PortalAuthorizationContext[] = [];
+    const recordAuthorization = (authorization: PortalAuthorizationContext) => {
+      authorizations.push(authorization);
+    };
+    const request = vi.fn(async (authorization: PortalAuthorizationContext) => {
+      recordAuthorization(authorization);
+      return {
+        requestId: "refresh-flow", status: PortalRefreshStatus.PENDING,
+        requestedAt: new Date("2026-10-05T08:01:00Z"), completedAt: null,
+      };
+    });
+    const status = vi.fn(async (authorization: PortalAuthorizationContext) => {
+      recordAuthorization(authorization);
+      return {
+        requestId: "refresh-flow", status: PortalRefreshStatus.SUCCEEDED,
+        requestedAt: new Date("2026-10-05T08:01:00Z"),
+        completedAt: new Date("2026-10-05T08:01:05Z"),
+      };
+    });
+    const initialView = emptyPortalView();
+    initialView.hospital = { shortName: "HF", name: "Hospital Flow", address: null };
+    initialView.summary = { requiresAction: 0, repairs: 1, inspections: 0, devices: 1 };
+    initialView.initialCases = { items: [caseItem], nextCursor: null };
+    const { baseUrl } = await startApp(
+      new MemoryStore(null), grant, new MemoryUnsubscribeStore(null),
+      async (authorization) => {
+        recordAuthorization(authorization);
+        return initialView;
+      },
+      {
+        listCases: async (authorization) => {
+          recordAuthorization(authorization);
+          return { items: [caseItem], nextCursor: null };
+        },
+        getCase: async (authorization, id) => {
+          recordAuthorization(authorization);
+          return id === caseItem.sourceRecordId ? caseItem : null;
+        },
+        listDevices: async (authorization) => {
+          recordAuthorization(authorization);
+          return { items: [deviceItem], nextCursor: null };
+        },
+        getDevice: async (authorization, id) => {
+          recordAuthorization(authorization);
+          return id === deviceItem.sourceRecordId ? deviceDetail : null;
+        },
+        listDocuments: async (authorization) => {
+          recordAuthorization(authorization);
+          return { items: [documentItem], nextCursor: null };
+        },
+        portalRefresh: { request, status },
+      },
+    );
+
+    const token = signPortalGrantToken(grant, secret);
+    const initial = await fetch(`${baseUrl}/d/${token}`);
+    const html = await initial.text();
+    expect(initial.status).toBe(200);
+    expect(html).toContain("Hospital Flow");
+    expect(html).toContain("FLOW-1");
+    const embeddedBasePath = html.match(/const dataBasePath=("[^"]+");/)?.[1];
+    expect(embeddedBasePath).toBeDefined();
+    const dataBasePath = JSON.parse(embeddedBasePath!) as string;
+    expect(dataBasePath).toBe(`/p/${token}`);
+    const dataUrl = (path: string) => `${baseUrl}${dataBasePath}/data/${path}`;
+
+    const expectedRequests: Array<[string, unknown]> = [
+      ["cases", { items: [caseItem], nextCursor: null }],
+      [`cases/${caseItem.sourceRecordId}`, caseItem],
+      ["devices", { items: [deviceItem], nextCursor: null }],
+      [`devices/${deviceItem.sourceRecordId}`, deviceDetail],
+      ["documents", { items: [documentItem], nextCursor: null }],
+    ];
+    for (const [path, expectedBody] of expectedRequests) {
+      const response = await fetch(dataUrl(path));
+      expect(response.status, path).toBe(200);
+      expect(await response.json(), path).toEqual(JSON.parse(JSON.stringify(expectedBody)));
+    }
+
+    const refresh = await fetch(dataUrl("refresh"), { method: "POST" });
+    expect(refresh.status).toBe(202);
+    expect(await refresh.json()).toMatchObject({ requestId: "refresh-flow", status: "PENDING" });
+    const refreshStatus = await fetch(dataUrl("refresh/refresh-flow"));
+    expect(refreshStatus.status).toBe(200);
+    expect(await refreshStatus.json()).toMatchObject({
+      requestId: "refresh-flow", status: "SUCCEEDED",
+      completedAt: "2026-10-05T08:01:05.000Z",
+    });
+
+    for (const path of ["cases", "devices", "documents"]) {
+      const response = await fetch(dataUrl(path));
+      expect(response.status, `after refresh: ${path}`).toBe(200);
+      expect((await response.json()).items).toHaveLength(1);
+    }
+    expect(authorizations).toHaveLength(11);
+    expect(authorizations).toEqual(authorizations.map(() => expect.objectContaining({
+      portalAccessGrantId: grant.id,
+      communicationDeliveryId: grant.communicationDeliveryId,
+      sourceHospitalRecordId: grant.sourceHospitalRecordId,
+    })));
+  });
+
   it("creates refreshes only from verified portal authorization and ignores client scope fields", async () => {
     const grant = portalRecord();
     const request = vi.fn().mockResolvedValue({
@@ -562,7 +688,11 @@ async function startApp(
     listCases?: (
       authorization: PortalAuthorizationContext,
       options: { filter?: string; query?: string; cursor?: string; limit?: number },
-    ) => Promise<{ items: []; nextCursor: string | null }>;
+    ) => Promise<{ items: PortalCaseListItem[]; nextCursor: string | null }>;
+    listDevices?: (
+      authorization: PortalAuthorizationContext,
+      options: { query?: string; cursor?: string; limit?: number },
+    ) => Promise<{ items: PortalDevice[]; nextCursor: string | null }>;
     getCase?: (
       authorization: PortalAuthorizationContext,
       id: string,
@@ -598,7 +728,7 @@ async function startApp(
       build: buildPortal,
       listCases: dataViews.listCases ?? (async () => ({ items: [], nextCursor: null })),
       getCase: dataViews.getCase ?? (async () => null),
-      listDevices: async () => ({ items: [], nextCursor: null }),
+      listDevices: dataViews.listDevices ?? (async () => ({ items: [], nextCursor: null })),
       getDevice: dataViews.getDevice ?? (async () => null),
       listDocuments: dataViews.listDocuments ?? (async () => ({ items: [], nextCursor: null })),
     }, ...(dataViews.publicFiles ? { publicFiles: dataViews.publicFiles } : {}),
