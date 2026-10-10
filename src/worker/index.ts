@@ -374,12 +374,14 @@ async function pollCommunicationEmail(): Promise<void> {
       dataSource: communicationTemplateDataSource,
       config: {
         communicationEmailsEnabled: config.communicationEmailsEnabled,
+        communicationEmailDebug: config.communicationEmailDebug,
         communicationAssetsEnabled: config.communicationAssetsEnabled,
         communicationSendNotBefore: config.communicationSendNotBefore,
         mode: config.emailMode,
         testEmail: config.testEmail,
         productionEmailsEnabled: config.productionEmailsEnabled,
         resendApiKey: config.resendApiKey,
+        emailFrom: config.emailFrom,
         replyTo: config.emailReplyTo,
         timeZone: config.communicationTimezone,
         officeContact: {
@@ -424,6 +426,7 @@ async function pollRecipientResolution(): Promise<void> {
       airtable,
       store: recipientResolutionStore,
       tiemedFallbackEmail: config.tiemedFallbackEmail,
+      debugEnabled: config.communicationEmailDebug,
       log: (message) => console.info(message),
     });
   } catch {

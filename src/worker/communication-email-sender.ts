@@ -38,6 +38,15 @@ import {
   normalizeCommunicationTemplateVariables,
   REPAIR_ROW_SLOT_COUNT,
 } from "./communication-template-registry.js";
+import {
+  assertEmailDebugTraceAvailable,
+  buildEmailDebugHtml,
+  debugEmailSubject,
+  parseRecipientResolutionDebugTrace,
+  renderDebugEmailHtml,
+  type RecipientResolutionDebugTrace,
+} from "./communication-email-debug.js";
+import { normalizeEmail } from "../shared/normalize-email.js";
 
 const MAX_ATTEMPTS = 4;
 const STALE_SENDING_MS = 5 * 60_000;
@@ -67,6 +76,7 @@ export type CommunicationSendCandidate = {
     detectedAt: Date;
     sourceRecordId: string;
     eventSnapshot: unknown;
+    recipientResolutionDebug?: RecipientResolutionDebugTrace | null;
   };
   recipient: {
     recipientType: CommunicationRecipientType;
@@ -133,11 +143,13 @@ export interface CommunicationUnsubscribeGrantProvider {
 
 export type CommunicationEmailSenderConfig = {
   communicationEmailsEnabled: boolean;
+  communicationEmailDebug: boolean;
   communicationSendNotBefore: Date | null;
   mode: EmailMode;
   testEmail: string | null;
   productionEmailsEnabled: boolean;
   resendApiKey: string | null;
+  emailFrom: string | null;
   replyTo: string;
   timeZone: string;
   communicationAssetsEnabled?: boolean;
@@ -182,6 +194,7 @@ export class PrismaCommunicationEmailSendStore implements CommunicationEmailSend
             detectedAt: true,
             sourceRecordId: true,
             eventSnapshot: true,
+            recipientResolutionDebug: true,
           },
         },
         communicationEventRecipient: {
@@ -199,7 +212,12 @@ export class PrismaCommunicationEmailSendStore implements CommunicationEmailSend
       nextRetryAt: delivery.nextRetryAt,
       sendSnapshot: parseSendSnapshot(delivery.sendSnapshot),
       logicalDigestKey: delivery.logicalDigestKey,
-      event: delivery.communicationEvent,
+      event: {
+        ...delivery.communicationEvent,
+        recipientResolutionDebug: parseRecipientResolutionDebugTrace(
+          delivery.communicationEvent.recipientResolutionDebug,
+        ),
+      },
       recipient: delivery.communicationEventRecipient,
     }));
   }
@@ -586,6 +604,7 @@ export async function sendCommunicationRepairBatch(input: {
       actualRecipientEmail,
       testEmail: input.config.testEmail,
     });
+    assertEmailDebugSafety(input.config, actualRecipientEmail, eligible);
   } catch (error: unknown) {
     const reason = recipientErrorCode(error);
     for (const candidate of eligible) {
@@ -748,6 +767,9 @@ export async function sendCommunicationRepairBatch(input: {
       to: actualRecipientEmail,
       replyTo: input.config.replyTo,
       template: { id: snapshot.templateId, variables },
+      ...communicationEmailDebugOverrides(
+        input.config, claimed, actualRecipientEmail, snapshot.templateId, variables,
+      ),
       idempotencyKey: communicationBatchIdempotencyKey(claimed.map((item) => item.id)),
     });
     if (!response.ok) {
@@ -836,6 +858,7 @@ export async function sendCommunicationDelivery(input: {
       actualRecipientEmail,
       testEmail: input.config.testEmail,
     });
+    assertEmailDebugSafety(input.config, actualRecipientEmail, [input.candidate]);
   } catch (error: unknown) {
     return failUnclaimed(input, recipientErrorCode(error));
   }
@@ -989,6 +1012,9 @@ export async function sendCommunicationDelivery(input: {
         id: snapshot.templateId,
         variables,
       },
+      ...communicationEmailDebugOverrides(
+        input.config, [input.candidate], actualRecipientEmail, snapshot.templateId, variables,
+      ),
       idempotencyKey: communicationIdempotencyKey(
         input.candidate.logicalDigestKey ?? input.candidate.id,
       ),
@@ -1019,7 +1045,57 @@ function resolveFallbackRecipient(config: CommunicationEmailSenderConfig, fallba
     productionEmailsEnabled: config.productionEmailsEnabled,
   });
   assertTestRecipient({ mode: config.mode, actualRecipientEmail: actual, testEmail: config.testEmail });
+  assertEmailDebugRecipient(config, actual);
   return actual;
+}
+
+function assertEmailDebugSafety(
+  config: CommunicationEmailSenderConfig,
+  actualRecipientEmail: string,
+  candidates: readonly CommunicationSendCandidate[],
+): void {
+  if (!config.communicationEmailDebug) return;
+  assertEmailDebugRecipient(config, actualRecipientEmail);
+  try {
+    assertEmailDebugTraceAvailable(candidates);
+  } catch {
+    throw new RecipientSafetyError("EMAIL_DEBUG_TRACE_MISSING");
+  }
+}
+
+function assertEmailDebugRecipient(
+  config: CommunicationEmailSenderConfig,
+  actualRecipientEmail: string,
+): void {
+  if (!config.communicationEmailDebug) return;
+  const expected = normalizeEmail(config.testEmail ?? "");
+  const actual = normalizeEmail(actualRecipientEmail);
+  if (config.mode !== "TEST" || !expected || actual !== expected) {
+    throw new RecipientSafetyError("DEBUG_EMAIL_UNSAFE");
+  }
+  if (!config.emailFrom) throw new RecipientSafetyError("DEBUG_EMAIL_FROM_MISSING");
+}
+
+function communicationEmailDebugOverrides(
+  config: CommunicationEmailSenderConfig,
+  candidates: readonly CommunicationSendCandidate[],
+  actualRecipientEmail: string,
+  templateId: string,
+  variables: Record<string, TemplateVariableValue>,
+): { from?: string; subject?: string; html?: string } {
+  if (!config.communicationEmailDebug) return {};
+  assertEmailDebugSafety(config, actualRecipientEmail, candidates);
+  const debugBlock = buildEmailDebugHtml({
+    candidates,
+    actualTo: actualRecipientEmail,
+    testEmail: config.testEmail!,
+    variables,
+  });
+  return {
+    from: config.emailFrom!,
+    subject: debugEmailSubject(templateId, variables),
+    html: renderDebugEmailHtml(templateId, variables, debugBlock),
+  };
 }
 
 async function sendUnscopedFallback(
@@ -1036,6 +1112,7 @@ async function sendUnscopedFallback(
   if (!fallback || !input.config.resendApiKey) return null;
   let actualFallback: string;
   try { actualFallback = resolveFallbackRecipient(input.config, fallback); } catch { return null; }
+  try { assertEmailDebugSafety(input.config, actualFallback, [candidate]); } catch { return null; }
   const claimed = await input.store.claim(candidate, input.now, input.config.mode, actualFallback);
   if (!claimed) return null;
   if (candidate.scenario === CommunicationScenario.INSPECTION_COMPLETED) {
@@ -1069,6 +1146,9 @@ async function sendUnscopedFallback(
     response = await input.provider.send({
       to: actualFallback, replyTo: input.config.replyTo,
       template: { id: payload.templateId, variables },
+      ...communicationEmailDebugOverrides(
+        input.config, [candidate], actualFallback, payload.templateId, variables,
+      ),
       idempotencyKey: `emma-communication-blocked-unscoped/${candidate.id}`,
     });
   } catch {
@@ -1162,18 +1242,21 @@ async function sendBlockedDelivery(
       } };
     } catch { /* Generic diagnostic-only payload remains safe. */ }
   }
+  const actualFallback = resolveFallbackRecipient(input.config, fallback);
   const variables = normalizeCommunicationTemplateVariables(payload.templateId, payload.variables);
   if (input.candidate.scenario === CommunicationScenario.INSPECTION_COMPLETED &&
       isEmptyCompletedVariables(variables)) {
     return suppressEmptyCompleted(input);
   }
-  const actualFallback = resolveFallbackRecipient(input.config, fallback);
   await input.store.rerouteToFallback([input.candidate.id], fallback, actualFallback, error.code);
   let response: ProviderEmailResult;
   try {
     response = await input.provider.send({
       to: actualFallback, replyTo: input.config.replyTo,
       template: { id: payload.templateId, variables },
+      ...communicationEmailDebugOverrides(
+        input.config, [input.candidate], actualFallback, payload.templateId, variables,
+      ),
       idempotencyKey: `emma-communication-blocked/${input.candidate.event.sourceRecordId}/${input.candidate.scenario}`,
     });
   } catch {
@@ -1208,15 +1291,18 @@ async function sendBlockedRepairBatch(
     preparedAt: owner.scheduledFor, timeZone: input.config.timeZone, error,
     ...(input.config.officeContact ? { officeContact: input.config.officeContact } : {}),
   });
-  const variables = normalizeCommunicationTemplateVariables(payload.templateId, payload.variables);
   const ids = candidates.map((candidate) => candidate.id);
   const actualFallback = resolveFallbackRecipient(input.config, fallback);
+  const variables = normalizeCommunicationTemplateVariables(payload.templateId, payload.variables);
   await input.store.rerouteToFallback(ids, fallback, actualFallback, error.code);
   let response: ProviderEmailResult;
   try {
     response = await input.provider.send({
       to: actualFallback, replyTo: input.config.replyTo,
       template: { id: payload.templateId, variables },
+      ...communicationEmailDebugOverrides(
+        input.config, candidates, actualFallback, payload.templateId, variables,
+      ),
       idempotencyKey: `${communicationBatchIdempotencyKey(ids)}-blocked`,
     });
   } catch {

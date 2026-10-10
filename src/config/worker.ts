@@ -49,6 +49,7 @@ const workerEnvironmentSchema = z.object({
     isValidCronExpression,
     "Invalid five-field cron expression",
   ),
+  COMMUNICATION_EMAIL_DEBUG: strictBooleanString,
   COMMUNICATION_EMAILS_ENABLED: strictBooleanString,
   COMMUNICATION_SEND_NOT_BEFORE: z.string().default(""),
   ...assetEnvironmentShape,
@@ -58,6 +59,14 @@ const workerEnvironmentSchema = z.object({
       code: "custom",
       path: ["TIEMED_FALLBACK_EMAIL"],
       message: "TIEMED_FALLBACK_EMAIL is required when communication emails are enabled",
+    });
+  }
+  if (value.COMMUNICATION_EMAIL_DEBUG &&
+      (value.EMAIL_MODE !== "TEST" || !value.TEST_EMAIL.trim() || !value.EMAIL_FROM.trim())) {
+    context.addIssue({
+      code: "custom",
+      path: ["COMMUNICATION_EMAIL_DEBUG"],
+      message: "COMMUNICATION_EMAIL_DEBUG requires EMAIL_MODE=TEST, TEST_EMAIL and EMAIL_FROM",
     });
   }
 });
@@ -86,6 +95,7 @@ export type WorkerConfig = BaseConfig & AssetConfig & {
   tiemedFallbackEmail: string | null;
   communicationTimezone: string;
   communicationDigestCron: string;
+  communicationEmailDebug: boolean;
   communicationEmailsEnabled: boolean;
   communicationSendNotBefore: Date | null;
 };
@@ -124,6 +134,7 @@ export function loadWorkerConfig(environment: NodeJS.ProcessEnv): WorkerConfig {
     tiemedFallbackEmail: parsed.data.TIEMED_FALLBACK_EMAIL.trim() || null,
     communicationTimezone: parsed.data.COMMUNICATION_TIMEZONE,
     communicationDigestCron: parsed.data.COMMUNICATION_DIGEST_CRON,
+    communicationEmailDebug: parsed.data.COMMUNICATION_EMAIL_DEBUG,
     communicationEmailsEnabled: parsed.data.COMMUNICATION_EMAILS_ENABLED,
     communicationSendNotBefore: parseIsoTimestamp(
       parsed.data.COMMUNICATION_SEND_NOT_BEFORE,

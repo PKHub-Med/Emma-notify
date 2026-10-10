@@ -327,6 +327,7 @@ model CommunicationEvent {
   recipientsResolvedAt DateTime?
   recipientResolutionAttemptCount Int @default(0)
   nextRecipientResolutionAt DateTime?
+  recipientResolutionDebug Json?
   recipients       CommunicationEventRecipient[]
   deliveries       CommunicationDelivery[]
 

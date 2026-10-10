@@ -6,7 +6,10 @@ export type RecipientErrorCode =
   | "TEST_EMAIL_MISSING"
   | "PRODUCTION_EMAILS_BLOCKED"
   | "INVALID_RECIPIENT"
-  | "TEST_RECIPIENT_GUARD_FAILED";
+  | "TEST_RECIPIENT_GUARD_FAILED"
+  | "DEBUG_EMAIL_UNSAFE"
+  | "DEBUG_EMAIL_FROM_MISSING"
+  | "EMAIL_DEBUG_TRACE_MISSING";
 
 export class RecipientSafetyError extends Error {
   constructor(readonly code: RecipientErrorCode) {

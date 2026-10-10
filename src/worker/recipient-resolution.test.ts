@@ -5,7 +5,7 @@ import {
   CommunicationScenario,
   CommunicationSourceEntityType,
 } from "../generated/prisma/enums.js";
-import { CONTACT_FIELDS, HOSPITAL_FIELDS } from "../airtable/field-ids.js";
+import { CONTACT_FIELDS, HOSPITAL_FIELDS, TASK_FIELDS } from "../airtable/field-ids.js";
 import type { AirtableIncrementalSource, AirtableRecord } from "../airtable/types.js";
 import {
   MAX_RECIPIENT_RESOLUTION_ATTEMPTS,
@@ -276,6 +276,41 @@ describe("fallback and failures", () => {
 });
 
 describe("recipient resolution idempotency and safety", () => {
+  it("captures the actual Airtable fields and decisions only when debug is enabled", async () => {
+    const store = new MemoryStore();
+    await resolveCommunicationEventRecipients({
+      event: taskEvent(["recA", "recB"], { sourceHospitalRecordId: "recHospital" }),
+      airtable: airtableSource({
+        recA: contact("recA", " Same@Example.PL "),
+        recB: contact("recB", "same@example.pl"),
+      }),
+      store,
+      tiemedFallbackEmail: fallbackEmail,
+      debugEnabled: true,
+    });
+
+    expect(store.debugTrace?.sourceFields).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        codeName: "TASK_FIELDS.selectedContactLinks",
+        airtableFieldId: TASK_FIELDS.selectedContactLinks,
+        airtableDisplayName: "Imie i nazwisko",
+        value: ["recA", "recB"],
+      }),
+    ]));
+    expect(store.debugTrace?.contacts).toMatchObject([
+      { recordId: "recA", rawEmail: " Same@Example.PL ", decision: "ACCEPTED", reason: "ELIGIBLE" },
+      { recordId: "recB", rawEmail: "same@example.pl", decision: "SKIPPED", reason: "DUPLICATE_NORMALIZED_EMAIL" },
+    ]);
+    expect(store.debugTrace?.finalRecipients).toMatchObject([
+      { address: "same@example.pl", source: "CONTACT:recA", status: "READY" },
+    ]);
+  });
+
+  it("does not persist recipient debug data when debug is disabled", async () => {
+    const result = await resolveTask(["recA"], { recA: contact("recA", "a@x.pl") });
+    expect(result.store.debugTrace).toBeNull();
+  });
+
   it("a repeated resolution keeps one recipient without duplicates", async () => {
     const store = new MemoryStore();
     const airtable = airtableSource({ recA: contact("recA", "a@x.pl") });
@@ -374,12 +409,19 @@ class MemoryStore implements RecipientResolutionStore {
   failedReason: string | null = null;
   processedAtWrites = 0;
   optedOut = new Set<string>();
+  debugTrace: import("./communication-email-debug.js").RecipientResolutionDebugTrace | null = null;
   async isOptedOut(hospital: string, email: string) { return this.optedOut.has(`${hospital}:${email}`); }
   async findUnresolved(): Promise<RecipientResolutionEvent[]> { return []; }
-  async markResolved(_eventId: string, recipients: readonly CommunicationEventRecipientInput[], at: Date) {
+  async markResolved(
+    _eventId: string,
+    recipients: readonly CommunicationEventRecipientInput[],
+    at: Date,
+    debugTrace?: import("./communication-email-debug.js").RecipientResolutionDebugTrace,
+  ) {
     if (this.resolvedAt) return;
     this.recipients = [...recipients];
     this.resolvedAt = at;
+    this.debugTrace = debugTrace ?? null;
   }
   async markFailed(
     _eventId: string,
@@ -441,6 +483,7 @@ async function resolveService(ids: string[], contacts: Record<string, AirtableRe
   await resolveCommunicationEventRecipients({
     event: {
       id: "evtService",
+      sourceRecordId: "recService",
       sourceEntityType: CommunicationSourceEntityType.SERVICE_ORDER,
       scenario: CommunicationScenario.REPAIR_RECEIVED,
       eventSnapshot: { contactRecordIds: ids },
@@ -478,6 +521,7 @@ async function resolveInspection(
 function taskEvent(ids: string[], extraSnapshot = {}): RecipientResolutionEvent {
   return {
     id: "evtTask",
+    sourceRecordId: "recTask",
     sourceEntityType: CommunicationSourceEntityType.TASK,
     scenario: CommunicationScenario.INSPECTION_REMINDER,
     eventSnapshot: { selectedContactRecordIds: ids, ...extraSnapshot },

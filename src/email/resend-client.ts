@@ -11,6 +11,8 @@ export type ProviderEmailRequest = {
     id: string;
     variables: Record<string, TemplateVariableValue>;
   };
+  html?: string;
+  text?: string;
   idempotencyKey: string;
 };
 
@@ -26,14 +28,27 @@ export function createResendClient(apiKey: string | null): EmailProvider {
   const resend = new Resend(apiKey ?? "");
   return {
     async send(request) {
-      const response = await resend.emails.send(
-        {
+      if (request.html && (!request.from || !request.subject)) {
+        throw new Error("Raw HTML email requires from and subject");
+      }
+      const message = request.html
+        ? {
+          from: request.from!,
+          to: request.to,
+          ...(request.replyTo ? { replyTo: request.replyTo } : {}),
+          subject: request.subject!,
+          html: request.html,
+          ...(request.text ? { text: request.text } : {}),
+        }
+        : {
           to: request.to,
           ...(request.from ? { from: request.from } : {}),
           ...(request.replyTo ? { replyTo: request.replyTo } : {}),
           ...(request.subject ? { subject: request.subject } : {}),
           template: request.template,
-        },
+        };
+      const response = await resend.emails.send(
+        message,
         { idempotencyKey: request.idempotencyKey },
       );
       if (response.error) {

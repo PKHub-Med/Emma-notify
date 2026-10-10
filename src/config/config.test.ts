@@ -124,6 +124,7 @@ describe("loadWorkerConfig", () => {
       tiemedFallbackEmail: "fallback@example.test",
       communicationTimezone: "Europe/Warsaw",
       communicationDigestCron: "0 6,14 * * *",
+      communicationEmailDebug: false,
       communicationEmailsEnabled: false,
       communicationSendNotBefore: null,
       emailReplyTo: "serwis@tiemed.pl",
@@ -205,6 +206,29 @@ describe("loadWorkerConfig", () => {
       ...workerEnvironment,
       COMMUNICATION_DIGEST_CRON: "not-a-cron",
     })).toThrow(/COMMUNICATION_DIGEST_CRON/);
+  });
+
+  it("allows email diagnostics only in TEST mode with TEST_EMAIL", () => {
+    expect(loadWorkerConfig({
+      ...workerEnvironment,
+      COMMUNICATION_EMAIL_DEBUG: "true",
+      EMAIL_MODE: "TEST",
+      TEST_EMAIL: "debug@example.test",
+      EMAIL_FROM: "Tiemed <debug@example.test>",
+    }).communicationEmailDebug).toBe(true);
+    expect(() => loadWorkerConfig({
+      ...workerEnvironment,
+      COMMUNICATION_EMAIL_DEBUG: "true",
+      EMAIL_MODE: "PRODUCTION",
+      TEST_EMAIL: "debug@example.test",
+      EMAIL_FROM: "Tiemed <debug@example.test>",
+    })).toThrow(/COMMUNICATION_EMAIL_DEBUG/);
+    expect(() => loadWorkerConfig({
+      ...workerEnvironment,
+      COMMUNICATION_EMAIL_DEBUG: "true",
+      EMAIL_MODE: "TEST",
+      TEST_EMAIL: "",
+    })).toThrow(/COMMUNICATION_EMAIL_DEBUG/);
   });
 
   it("accepts an optional Tiemed fallback email", () => {

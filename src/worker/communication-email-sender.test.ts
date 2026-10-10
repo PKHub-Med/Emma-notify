@@ -20,6 +20,7 @@ import {
 } from "./communication-email-sender.js";
 import type { CommunicationTemplateDataSource } from "./communication-template-data.js";
 import type { CommunicationAssetPreflight } from "../assets/preflight.js";
+import type { RecipientResolutionDebugTrace } from "./communication-email-debug.js";
 
 const now = new Date("2026-08-15T10:00:00Z");
 const activation = new Date("2026-08-15T09:00:00Z");
@@ -112,6 +113,84 @@ describe("communication email activation and recipient safety", () => {
     expect(fixture.candidate.recipient.email).toBe(intended);
     expect(fixture.store.actualRecipientEmail).toBe("test@example.test");
     expect(fixture.store.emailMode).toBe("TEST");
+  });
+
+  it("keeps rendered content and provider routing unchanged when email debug is disabled", async () => {
+    const fixture = setup();
+    await run(fixture, { communicationEmailDebug: false });
+    const request = fixture.provider.requests[0]!;
+    expect(request.to).toBe("test@example.test");
+    expect(request.html).toBeUndefined();
+    expect(request.template.id).toBe("emma-repair-received");
+    expect(request.template.variables).not.toHaveProperty("EMAIL_DEBUG_BLOCK");
+  });
+
+  it("adds per-repair resolution diagnostics and final provider routing in TEST mode", async () => {
+    const first = communicationCandidate({
+      id: "delivery-debug-a",
+      event: {
+        detectedAt: activation,
+        sourceRecordId: "recServiceA",
+        eventSnapshot: { ...repairSnapshot(), hospitalName: "Szpital Testowy" },
+        recipientResolutionDebug: debugTrace("recServiceA", "contact-a@example.pl"),
+      },
+    });
+    const second = communicationCandidate({
+      id: "delivery-debug-b",
+      event: {
+        detectedAt: activation,
+        sourceRecordId: "recServiceB",
+        eventSnapshot: { ...repairSnapshot(), businessNumber: "SO-2", hospitalName: "Szpital Testowy" },
+        recipientResolutionDebug: debugTrace("recServiceB", "contact-a@example.pl"),
+      },
+    });
+    const provider = new MockProvider([{ ok: true, id: "resend-debug" }]);
+    await runCommunicationEmailSender({
+      store: new MultiMemorySendStore([first, second]),
+      provider,
+      grants: new FixedGrants(),
+      unsubscribeGrants: new FixedUnsubscribeGrants(),
+      dataSource: dataSource(),
+      config: { ...config(), communicationEmailDebug: true },
+      now: () => now,
+    });
+
+    const block = provider.requests[0]!.html ?? "";
+    expect(provider.requests[0]!.to).toBe("test@example.test");
+    expect(block).toContain("DIAGNOSTYKA ODBIORCÓW — TYLKO TEST");
+    expect(block).toContain("recServiceA");
+    expect(block).toContain("recServiceB");
+    expect(block).toContain("CONTACT_FIELDS.email");
+    expect(block).toContain("contact-a@example.pl");
+    expect(block).toContain("Provider To: <strong>test@example.test</strong>");
+    expect(block).toContain("Provider CC: nieużywane");
+    expect(block).toContain("Przekierowanie testowe: <strong>TAK</strong>");
+    expect(block).not.toContain("{{{");
+  });
+
+  it("fails closed when debug is requested outside the configured test recipient", async () => {
+    const fixture = setup({
+      event: {
+        detectedAt: activation,
+        sourceRecordId: "recService",
+        eventSnapshot: repairSnapshot(),
+        recipientResolutionDebug: debugTrace("recService", "client@example.com"),
+      },
+    });
+    await run(fixture, {
+      communicationEmailDebug: true,
+      mode: "PRODUCTION",
+      productionEmailsEnabled: true,
+    });
+    expect(fixture.provider.requests).toHaveLength(0);
+    expect(fixture.store.lastError).toBe("DEBUG_EMAIL_UNSAFE");
+  });
+
+  it("fails closed when debug trace was not captured during recipient resolution", async () => {
+    const fixture = setup();
+    await run(fixture, { communicationEmailDebug: true });
+    expect(fixture.provider.requests).toHaveLength(0);
+    expect(fixture.store.lastError).toBe("EMAIL_DEBUG_TRACE_MISSING");
   });
 
   it("sends one new scoped REPAIR_COMPLETED only to TEST_EMAIL", async () => {
@@ -834,11 +913,13 @@ function run(
 function config(): CommunicationEmailSenderConfig {
   return {
     communicationEmailsEnabled: true,
+    communicationEmailDebug: false,
     communicationSendNotBefore: activation,
     mode: "TEST",
     testEmail: "test@example.test",
     productionEmailsEnabled: false,
     resendApiKey: "re_test_mock",
+    emailFrom: "Tiemed <debug@example.test>",
     replyTo: "serwis@tiemed.pl",
     timeZone: "Europe/Warsaw",
     tiemedFallbackEmail: "fallback@tiemed.pl",
@@ -919,5 +1000,48 @@ function dataSource(): CommunicationTemplateDataSource {
       estimatedDurationSeconds: 1200,
     })); },
     async getServiceOrders() { return []; },
+  };
+}
+
+function debugTrace(sourceRecordId: string, email: string): RecipientResolutionDebugTrace {
+  return {
+    version: 1,
+    sourceEntityType: "SERVICE_ORDER",
+    sourceRecordId,
+    hospitalRecordId: "recHospital",
+    hospitalName: "Szpital Testowy",
+    sourceFields: [{
+      codeName: "SERVICE_ORDER_FIELDS.contactLinks",
+      airtableFieldId: "fldv7yrcmRzlfnoqQ",
+      airtableDisplayName: null,
+      value: ["recContact"],
+    }],
+    contacts: [{
+      recordId: "recContact",
+      source: "PRIMARY_CONTACT_LINK",
+      fields: [{
+        codeName: "CONTACT_FIELDS.email",
+        airtableFieldId: "fld6IwoRq2X6KSVQk",
+        airtableDisplayName: null,
+        value: email,
+      }],
+      rawEmail: email,
+      normalizedEmail: email,
+      decision: "ACCEPTED",
+      reason: "ELIGIBLE",
+    }],
+    consideredAddresses: [{
+      address: email,
+      normalizedAddress: email,
+      source: "PRIMARY_CONTACT_LINK:recContact:CONTACT_FIELDS.email",
+      decision: "ACCEPTED",
+      reason: "ELIGIBLE",
+    }],
+    finalRecipients: [{
+      address: email,
+      source: "CONTACT:recContact",
+      status: "READY",
+      reason: null,
+    }],
   };
 }
