@@ -5,7 +5,9 @@ import {
   AIRTABLE_TABLE_IDS,
   TASK_FIELD_IDS,
   TASK_FIELDS,
+  INSPECTION_FIELDS,
 } from "../airtable/field-ids.js";
+import { parseAirtableDate } from "../airtable/values.js";
 import { mapTask, type MappedTask } from "../airtable/task.js";
 import type {
   AirtableIncrementalSource,
@@ -117,6 +119,7 @@ export async function runTaskSync(dependencies: {
   overlapSeconds?: number;
   requestedMode?: "AUTO" | "RECONCILE" | "REMINDER_ELIGIBILITY";
   timeZone?: string;
+  mailTestMode?: boolean;
   now?: () => Date;
   log?: (message: string) => void;
 }): Promise<TaskSyncStats> {
@@ -165,7 +168,14 @@ export async function runTaskSync(dependencies: {
       const automaticEventAllowed = mode === "REMINDER_ELIGIBILITY"
         ? isCurrentReminderObservation(observation, detectedAt, timeZone)
         : mode === "INCREMENTAL" &&
-          isCurrentCompletedObservation(observation, detectedAt, timeZone);
+          (dependencies.mailTestMode
+            ? await isCurrentlyPerformedCompletedTask(
+                task,
+                dependencies.airtable,
+                detectedAt,
+                timeZone,
+              )
+            : isCurrentCompletedObservation(observation, detectedAt, timeZone));
       const completedLimitReached = observation.scenario === "INSPECTION_COMPLETED" &&
         completedEventsCreated >= COMPLETED_COMMUNICATIONS_PER_RUN_LIMIT;
       if (completedLimitReached && !completedLimitLogged) {
@@ -251,6 +261,32 @@ export function isCurrentCompletedObservation(
   const businessDate = parseLocalDate(observation.eventSnapshot.day);
   return businessDate !== null &&
     compareLocalDates(businessDate, localDateAt(now, timeZone)) === 0;
+}
+
+export async function isCurrentlyPerformedCompletedTask(
+  task: MappedTask,
+  airtable: AirtableIncrementalSource,
+  now: Date,
+  timeZone: string,
+): Promise<boolean> {
+  const observation = buildTaskObservation(task, now);
+  if (observation.scenario !== "INSPECTION_COMPLETED") return true;
+  if (task.linkedInspectionRecordIds.length === 0) return false;
+  const today = localDateAt(now, timeZone);
+  try {
+    const performedDates = await Promise.all(task.linkedInspectionRecordIds.map(async (recordId) => {
+      const record = await airtable.fetchRecord(
+        AIRTABLE_TABLE_IDS.inspections,
+        recordId,
+        [INSPECTION_FIELDS.performedAt],
+      );
+      return parseAirtableDate(record.fields[INSPECTION_FIELDS.performedAt]);
+    }));
+    return performedDates.every((performedAt) => performedAt !== null &&
+      compareLocalDates(localDateAt(performedAt, timeZone), today) === 0);
+  } catch {
+    return false;
+  }
 }
 
 export function isCurrentReminderObservation(

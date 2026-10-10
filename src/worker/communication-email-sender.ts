@@ -33,7 +33,12 @@ import {
   type CurrentTaskState,
 } from "./communication-delivery.js";
 import type { CommunicationAssetPreflight } from "../assets/preflight.js";
-import { compareLocalDates, localDateAt, parseLocalDate } from "./communication-time.js";
+import {
+  compareLocalDates,
+  localDateAt,
+  parseLocalDate,
+  repairBatchScheduledFor,
+} from "./communication-time.js";
 import {
   normalizeCommunicationTemplateVariables,
   REPAIR_ROW_SLOT_COUNT,
@@ -142,6 +147,7 @@ export interface CommunicationUnsubscribeGrantProvider {
 }
 
 export type CommunicationEmailSenderConfig = {
+  mailTestMode?: boolean;
   communicationEmailsEnabled: boolean;
   communicationEmailDebug: boolean;
   communicationSendNotBefore: Date | null;
@@ -564,6 +570,15 @@ export async function sendCommunicationRepairBatch(input: {
 
   const eligible: CommunicationSendCandidate[] = [];
   for (const candidate of input.candidates) {
+    if (!input.config.mailTestMode && input.config.mode === "PRODUCTION" &&
+        !input.config.communicationEmailDebug &&
+        input.now.getTime() < repairBatchScheduledFor(
+          candidate.event.detectedAt,
+          input.config.timeZone,
+          "0 6,14 * * *",
+        ).getTime()) {
+      continue;
+    }
     if (!snapshotString(candidate.event.eventSnapshot, "sourceHospitalRecordId")) {
       const reason = isPreActivation(candidate, activation)
         ? CommunicationDeliveryCancelReason.MISSING_HOSPITAL_SCOPE_LEGACY
@@ -607,6 +622,10 @@ export async function sendCommunicationRepairBatch(input: {
     assertEmailDebugSafety(input.config, actualRecipientEmail, eligible);
   } catch (error: unknown) {
     const reason = recipientErrorCode(error);
+    if (reason === "EMAIL_DEBUG_TRACE_MISSING" && input.config.mailTestMode) {
+      input.log?.("COMMUNICATION_EMAIL_BARRIER_BLOCKED reason=EMAIL_DEBUG_TRACE_MISSING");
+      return result;
+    }
     for (const candidate of eligible) {
       const claimed = await input.store.claim(candidate, input.now, input.config.mode, "");
       if (claimed) {
@@ -807,6 +826,21 @@ export async function sendCommunicationDelivery(input: {
   const activation = input.config.communicationSendNotBefore;
   if (!input.config.communicationEmailsEnabled || !activation) return "SKIPPED";
   if (input.candidate.scenario === CommunicationScenario.INSPECTION_COMPLETED &&
+      input.config.mailTestMode &&
+      !await isCurrentlyPerformedCompletedCandidate(
+        input.candidate,
+        input.dataSource,
+        input.now,
+        input.config.timeZone,
+      )) {
+    input.log?.(
+      `COMMUNICATION_EMAIL_BARRIER_BLOCKED deliveryId=${input.candidate.id} ` +
+      `scenario=INSPECTION_COMPLETED reason=HISTORICAL_PERFORMED_INSPECTION`,
+    );
+    return "SKIPPED";
+  }
+  if (input.candidate.scenario === CommunicationScenario.INSPECTION_COMPLETED &&
+      !input.config.mailTestMode &&
       !isCurrentCompletedCandidate(input.candidate, input.now, input.config.timeZone)) {
     await input.store.cancel(
       input.candidate.id,
@@ -860,7 +894,24 @@ export async function sendCommunicationDelivery(input: {
     });
     assertEmailDebugSafety(input.config, actualRecipientEmail, [input.candidate]);
   } catch (error: unknown) {
-    return failUnclaimed(input, recipientErrorCode(error));
+    const reason = recipientErrorCode(error);
+    if (reason === "EMAIL_DEBUG_TRACE_MISSING" && input.config.mailTestMode) {
+      input.log?.(
+        `COMMUNICATION_EMAIL_BARRIER_BLOCKED deliveryId=${input.candidate.id} ` +
+        `reason=EMAIL_DEBUG_TRACE_MISSING`,
+      );
+      return "SKIPPED";
+    }
+    return failUnclaimed(input, reason);
+  }
+  if (!input.config.mailTestMode && input.config.mode === "PRODUCTION" &&
+      isRepairScenario(input.candidate.scenario) &&
+      input.now.getTime() < repairBatchScheduledFor(
+        input.candidate.event.detectedAt,
+        input.config.timeZone,
+        "0 6,14 * * *",
+      ).getTime()) {
+    return "SKIPPED";
   }
   const attempt = input.candidate.attemptCount + 1;
   const claimed = await input.store.claim(
@@ -1379,6 +1430,30 @@ export function isCurrentCompletedCandidate(
   const businessDate = parseLocalDate(day);
   return businessDate !== null &&
     compareLocalDates(businessDate, localDateAt(now, timeZone)) === 0;
+}
+
+export async function isCurrentlyPerformedCompletedCandidate(
+  candidate: Pick<CommunicationSendCandidate, "scenario" | "event">,
+  dataSource: CommunicationTemplateDataSource,
+  now: Date,
+  timeZone: string,
+): Promise<boolean> {
+  if (candidate.scenario !== CommunicationScenario.INSPECTION_COMPLETED) return true;
+  const snapshot = candidate.event.eventSnapshot;
+  const recordIds = typeof snapshot === "object" && snapshot !== null && !Array.isArray(snapshot)
+    ? (snapshot as Record<string, unknown>).linkedInspectionRecordIds
+    : null;
+  if (!Array.isArray(recordIds) || recordIds.length === 0 ||
+      recordIds.some((id) => typeof id !== "string" || !id.trim())) return false;
+  try {
+    const inspections = await dataSource.getInspections(recordIds as string[]);
+    if (inspections.length !== recordIds.length) return false;
+    const today = localDateAt(now, timeZone);
+    return inspections.every((inspection) => inspection.inspectionPerformedAt !== null &&
+      compareLocalDates(localDateAt(inspection.inspectionPerformedAt, timeZone), today) === 0);
+  } catch {
+    return false;
+  }
 }
 
 function isEmptyCompletedVariables(variables: Record<string, TemplateVariableValue>): boolean {

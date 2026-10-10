@@ -78,17 +78,27 @@ describe("loadApiConfig", () => {
 });
 
 describe("loadWorkerConfig", () => {
-  it("parses the production switch strictly after trim and lowercase", () => {
+  it("derives all worker mail flags from the single test-mode switch", () => {
     const common = workerEnvironment;
+    expect(loadWorkerConfig(common)).toMatchObject({
+      emmaMailTestMode: false,
+      emailMode: "PRODUCTION",
+      productionEmailsEnabled: true,
+      communicationEmailDebug: false,
+      communicationDigestCron: "0 6,14 * * *",
+    });
     expect(loadWorkerConfig({
       ...common,
-      PRODUCTION_EMAILS_ENABLED: "false",
-    }).productionEmailsEnabled).toBe(false);
-    expect(loadWorkerConfig({
-      ...common,
-      PRODUCTION_EMAILS_ENABLED: " TRUE ",
-    }).productionEmailsEnabled).toBe(true);
-    expect(loadWorkerConfig(common).productionEmailsEnabled).toBe(false);
+      EMMA_MAIL_TEST_MODE: " TRUE ",
+      TEST_EMAIL: "test@example.test",
+      EMAIL_FROM: "Tiemed <test@example.test>",
+    })).toMatchObject({
+      emmaMailTestMode: true,
+      emailMode: "TEST",
+      productionEmailsEnabled: false,
+      communicationEmailDebug: true,
+      communicationDigestCron: "* * * * *",
+    });
   });
 
   it("rejects a missing AIRTABLE_PAT", () => {
@@ -119,14 +129,16 @@ describe("loadWorkerConfig", () => {
       airtableInspectionReconcileSeconds: 86400,
       digestQuietMinutes: 1,
       timezone: "Europe/Warsaw",
-      emailMode: "TEST",
-      productionEmailsEnabled: false,
+      emailMode: "PRODUCTION",
+      productionEmailsEnabled: true,
       linkTtlDays: 30,
       publicBaseUrl: "https://notify.example.org",
       tiemedFallbackEmail: "fallback@example.test",
       communicationTimezone: "Europe/Warsaw",
       communicationDigestCron: "0 6,14 * * *",
       communicationEmailDebug: false,
+      emmaMailTestMode: false,
+      emmaMailTestCron: "* * * * *",
       communicationEmailsEnabled: false,
       communicationSendNotBefore: null,
       emailReplyTo: "serwis@tiemed.pl",
@@ -198,39 +210,49 @@ describe("loadWorkerConfig", () => {
     })).toThrow(/COMMUNICATION_TIMEZONE/);
   });
 
-  it("uses the production digest cron by default and accepts a ten-minute schedule", () => {
+  it("uses the fixed production schedule and the configurable common test schedule", () => {
     expect(loadWorkerConfig(workerEnvironment).communicationDigestCron).toBe("0 6,14 * * *");
     expect(loadWorkerConfig({
       ...workerEnvironment,
-      COMMUNICATION_DIGEST_CRON: "*/10 * * * *",
+      EMMA_MAIL_TEST_MODE: "true",
+      EMMA_MAIL_TEST_CRON: "*/10 * * * *",
+      TEST_EMAIL: "debug@example.test",
+      EMAIL_FROM: "Tiemed <debug@example.test>",
     }).communicationDigestCron).toBe("*/10 * * * *");
     expect(() => loadWorkerConfig({
       ...workerEnvironment,
-      COMMUNICATION_DIGEST_CRON: "not-a-cron",
-    })).toThrow(/COMMUNICATION_DIGEST_CRON/);
+      EMMA_MAIL_TEST_CRON: "not-a-cron",
+    })).toThrow(/EMMA_MAIL_TEST_CRON/);
   });
 
-  it("allows email diagnostics only in TEST mode with TEST_EMAIL", () => {
+  it("requires TEST_EMAIL and EMAIL_FROM whenever the master test mode is enabled", () => {
     expect(loadWorkerConfig({
       ...workerEnvironment,
-      COMMUNICATION_EMAIL_DEBUG: "true",
-      EMAIL_MODE: "TEST",
+      EMMA_MAIL_TEST_MODE: "true",
       TEST_EMAIL: "debug@example.test",
       EMAIL_FROM: "Tiemed <debug@example.test>",
     }).communicationEmailDebug).toBe(true);
     expect(() => loadWorkerConfig({
       ...workerEnvironment,
-      COMMUNICATION_EMAIL_DEBUG: "true",
-      EMAIL_MODE: "PRODUCTION",
-      TEST_EMAIL: "debug@example.test",
-      EMAIL_FROM: "Tiemed <debug@example.test>",
-    })).toThrow(/COMMUNICATION_EMAIL_DEBUG/);
-    expect(() => loadWorkerConfig({
-      ...workerEnvironment,
-      COMMUNICATION_EMAIL_DEBUG: "true",
-      EMAIL_MODE: "TEST",
+      EMMA_MAIL_TEST_MODE: "true",
       TEST_EMAIL: "",
-    })).toThrow(/COMMUNICATION_EMAIL_DEBUG/);
+    })).toThrow(/EMMA_MAIL_TEST_MODE/);
+  });
+
+  it("ignores contradictory legacy worker mail flags", () => {
+    expect(loadWorkerConfig({
+      ...workerEnvironment,
+      EMMA_MAIL_TEST_MODE: "false",
+      EMAIL_MODE: "TEST",
+      PRODUCTION_EMAILS_ENABLED: "false",
+      COMMUNICATION_EMAIL_DEBUG: "true",
+      COMMUNICATION_DIGEST_CRON: "*/1 * * * *",
+    })).toMatchObject({
+      emailMode: "PRODUCTION",
+      productionEmailsEnabled: true,
+      communicationEmailDebug: false,
+      communicationDigestCron: "0 6,14 * * *",
+    });
   });
 
   it("accepts an optional Tiemed fallback email", () => {
@@ -253,13 +275,13 @@ describe("loadWorkerConfig", () => {
         AIRTABLE_PAT: secretAirtablePat,
         ACCESS_LINK_SIGNING_SECRET: accessLinkSigningSecret,
         PUBLIC_BASE_URL: publicBaseUrl,
-        PRODUCTION_EMAILS_ENABLED: "invalid",
+        EMMA_MAIL_TEST_CRON: "contains-a-secret-invalid-cron",
       });
     } catch (error: unknown) {
       errorMessage = error instanceof Error ? error.message : String(error);
     }
 
-    expect(errorMessage).toContain("PRODUCTION_EMAILS_ENABLED");
+    expect(errorMessage).toContain("EMMA_MAIL_TEST_CRON");
     expect(errorMessage).not.toContain(secretDatabaseUrl);
     expect(errorMessage).not.toContain(secretAirtablePat);
   });

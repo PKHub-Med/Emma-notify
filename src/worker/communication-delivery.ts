@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { nextCronOccurrence } from "../scheduling/cron.js";
 import { Prisma, type PrismaClient } from "../generated/prisma/client.js";
 import {
   CommunicationDeliveryCancelReason,
@@ -54,6 +55,7 @@ export type DueReminder = {
   scenario: CommunicationScenario;
   eventSnapshot: unknown;
   scheduledFor: Date;
+  detectedAt?: Date;
 };
 
 export type CurrentTaskState = {
@@ -75,6 +77,8 @@ export interface CommunicationDeliveryStore {
     processedAt: Date,
   ): Promise<PlannedDelivery[]>;
   findDueReminders(now: Date, limit: number): Promise<DueReminder[]>;
+  findScheduledDeliveries?(limit: number): Promise<DueReminder[]>;
+  rescheduleScheduled?(deliveryId: string, scheduledFor: Date): Promise<boolean>;
   getCurrentTask(sourceRecordId: string): Promise<CurrentTaskState | null>;
   transitionReminder(
     deliveryId: string,
@@ -179,11 +183,6 @@ export class PrismaCommunicationDeliveryStore implements CommunicationDeliverySt
   async findDueReminders(now: Date, limit: number): Promise<DueReminder[]> {
     const deliveries = await this.prisma.communicationDelivery.findMany({
       where: {
-        scenario: { in: [
-          CommunicationScenario.INSPECTION_REMINDER,
-          CommunicationScenario.REPAIR_RECEIVED,
-          CommunicationScenario.REPAIR_COMPLETED,
-        ] },
         status: CommunicationDeliveryStatus.SCHEDULED,
         scheduledFor: { lte: now },
       },
@@ -198,6 +197,7 @@ export class PrismaCommunicationDeliveryStore implements CommunicationDeliverySt
           select: {
             sourceRecordId: true,
             eventSnapshot: true,
+            detectedAt: true,
           },
         },
       },
@@ -209,7 +209,42 @@ export class PrismaCommunicationDeliveryStore implements CommunicationDeliverySt
       scenario: delivery.scenario,
       eventSnapshot: delivery.communicationEvent.eventSnapshot,
       scheduledFor: delivery.scheduledFor,
+      detectedAt: delivery.communicationEvent.detectedAt,
     }));
+  }
+
+  async findScheduledDeliveries(limit: number): Promise<DueReminder[]> {
+    const deliveries = await this.prisma.communicationDelivery.findMany({
+      where: { status: CommunicationDeliveryStatus.SCHEDULED },
+      orderBy: { scheduledFor: "asc" },
+      take: limit,
+      select: {
+        id: true,
+        communicationEventId: true,
+        scenario: true,
+        scheduledFor: true,
+        communicationEvent: {
+          select: { sourceRecordId: true, eventSnapshot: true, detectedAt: true },
+        },
+      },
+    });
+    return deliveries.map((delivery) => ({
+      id: delivery.id,
+      eventId: delivery.communicationEventId,
+      sourceRecordId: delivery.communicationEvent.sourceRecordId,
+      scenario: delivery.scenario,
+      eventSnapshot: delivery.communicationEvent.eventSnapshot,
+      scheduledFor: delivery.scheduledFor,
+      detectedAt: delivery.communicationEvent.detectedAt,
+    }));
+  }
+
+  async rescheduleScheduled(deliveryId: string, scheduledFor: Date): Promise<boolean> {
+    const result = await this.prisma.communicationDelivery.updateMany({
+      where: { id: deliveryId, status: CommunicationDeliveryStatus.SCHEDULED },
+      data: { scheduledFor },
+    });
+    return result.count === 1;
   }
 
   async getCurrentTask(sourceRecordId: string): Promise<CurrentTaskState | null> {
@@ -246,6 +281,8 @@ export async function runCommunicationDeliveryPlanner(input: {
   store: CommunicationDeliveryStore;
   timeZone: string;
   digestCron?: string;
+  testMode?: boolean;
+  testCron?: string;
   now?: () => Date;
   log?: (message: string) => void;
 }): Promise<{ eventsPlanned: number; remindersTransitioned: number }> {
@@ -254,7 +291,15 @@ export async function runCommunicationDeliveryPlanner(input: {
   const events = await input.store.findEventsAwaitingDelivery(PLANNER_LIMIT);
   for (const event of events) {
     const plans = event.recipients.map((recipient) =>
-      createDeliveryPlan(event, recipient, planningNow, input.timeZone, input.digestCron));
+      createDeliveryPlan(
+        event,
+        recipient,
+        planningNow,
+        input.timeZone,
+        input.digestCron,
+        input.testMode,
+        input.testCron,
+      ));
     const created = await input.store.ensureDeliveries(event, plans, planningNow);
     for (const delivery of created) {
       if (delivery.status === CommunicationDeliveryStatus.CANCELLED) {
@@ -268,6 +313,22 @@ export async function runCommunicationDeliveryPlanner(input: {
           `status=${delivery.status} scheduleReason=${delivery.scheduleReason}`,
         );
       }
+    }
+  }
+
+  const scheduled = input.testMode && input.store.findScheduledDeliveries
+    ? await input.store.findScheduledDeliveries(PLANNER_LIMIT)
+    : [];
+  for (const delivery of scheduled) {
+    const desired = scheduledForCurrentMode(
+      delivery,
+      input.timeZone,
+      input.digestCron ?? "0 6,14 * * *",
+      input.testMode ?? false,
+      input.testCron ?? "* * * * *",
+    );
+    if (desired && desired.getTime() !== delivery.scheduledFor.getTime()) {
+      await input.store.rescheduleScheduled?.(delivery.id, desired);
     }
   }
 
@@ -324,6 +385,8 @@ export function createDeliveryPlan(
   now: Date,
   timeZone: string,
   digestCron = "0 6,14 * * *",
+  testMode = false,
+  testCron = "* * * * *",
 ): DeliveryPlan {
   const recipient = typeof recipientInput === "string"
     ? { id: recipientInput, normalizedEmail: null, email: null, recipientKey: recipientInput }
@@ -342,6 +405,19 @@ export function createDeliveryPlan(
         ? CommunicationDeliveryScheduleReason.REMINDER_0600
         : CommunicationDeliveryScheduleReason.EVENT_DRIVEN,
       cancelReason: CommunicationDeliveryCancelReason.MISSING_HOSPITAL_SCOPE,
+      logicalDigestKey,
+    };
+  }
+  if (testMode && event.scenario !== CommunicationScenario.INSPECTION_REMINDER) {
+    const scheduledFor = nextCronOccurrence(testCron, event.detectedAt, timeZone);
+    const ready = now.getTime() >= scheduledFor.getTime();
+    return {
+      recipientId,
+      status: ready ? CommunicationDeliveryStatus.READY : CommunicationDeliveryStatus.SCHEDULED,
+      scheduledFor,
+      readyAt: ready ? now : null,
+      scheduleReason: CommunicationDeliveryScheduleReason.EVENT_DRIVEN,
+      cancelReason: null,
       logicalDigestKey,
     };
   }
@@ -382,7 +458,10 @@ export function createDeliveryPlan(
       CommunicationDeliveryCancelReason.INVALID_REMINDER_DATE,
     );
   }
-  const scheduledFor = reminderScheduledFor(visitDate, timeZone);
+  const productionReminderBoundary = reminderScheduledFor(visitDate, timeZone);
+  const scheduledFor = testMode
+    ? nextCronOccurrence(testCron, productionReminderBoundary, timeZone)
+    : productionReminderBoundary;
   if (compareLocalDates(localDateAt(now, timeZone), visitDate) >= 0) {
     return cancelledPlan(
       recipientId,
@@ -451,6 +530,33 @@ function cancelledPlan(
     cancelReason,
     logicalDigestKey: null,
   };
+}
+
+function scheduledForCurrentMode(
+  delivery: DueReminder,
+  timeZone: string,
+  digestCron: string,
+  testMode: boolean,
+  testCron: string,
+): Date | null {
+  if (delivery.scenario === CommunicationScenario.INSPECTION_REMINDER) {
+    const visitDate = parseLocalDate(snapshotValue(delivery.eventSnapshot, "day"));
+    if (!visitDate) return null;
+    const boundary = reminderScheduledFor(visitDate, timeZone);
+    return testMode ? nextCronOccurrence(testCron, boundary, timeZone) : boundary;
+  }
+  const detectedAt = delivery.detectedAt;
+  if (!detectedAt) return delivery.scheduledFor;
+  if (testMode) return nextCronOccurrence(testCron, detectedAt, timeZone);
+  return isRepairScenario(delivery.scenario)
+    ? repairBatchScheduledFor(detectedAt, timeZone, digestCron)
+    : detectedAt;
+}
+
+function isRepairScenario(scenario: CommunicationScenario): boolean {
+  return scenario === CommunicationScenario.REPAIR_RECEIVED ||
+    scenario === CommunicationScenario.REPAIR_DELAYED_PARTS ||
+    scenario === CommunicationScenario.REPAIR_COMPLETED;
 }
 
 export function inspectionCompletedLogicalDigestKey(

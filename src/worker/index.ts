@@ -406,6 +406,7 @@ async function pollCommunicationEmail(): Promise<void> {
       unsubscribeGrants: communicationUnsubscribeGrants,
       dataSource: communicationTemplateDataSource,
       config: {
+        mailTestMode: config.emmaMailTestMode,
         communicationEmailsEnabled: config.communicationEmailsEnabled,
         communicationEmailDebug: config.communicationEmailDebug,
         communicationAssetsEnabled: config.communicationAssetsEnabled,
@@ -442,6 +443,8 @@ async function pollDeliveryPlanner(): Promise<void> {
       store: communicationDeliveryStore,
       timeZone: config.communicationTimezone,
       digestCron: config.communicationDigestCron,
+      testMode: config.emmaMailTestMode,
+      testCron: config.emmaMailTestCron,
       log: (message) => console.info(message),
     });
   } catch {
@@ -482,6 +485,7 @@ async function pollTasks(
       overlapSeconds: config.airtableSyncOverlapSeconds,
       requestedMode,
       timeZone: config.communicationTimezone,
+      mailTestMode: config.emmaMailTestMode,
       log: (message) => console.info(message),
     });
   } catch {

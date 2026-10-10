@@ -20,6 +20,11 @@ const strictBooleanString = z.preprocess(
 
 const workerEnvironmentSchema = z.object({
   ...baseEnvironmentShape,
+  // Legacy mail-mode flags remain accepted for backwards-compatible Railway
+  // environments, but the worker deliberately ignores their values. The two
+  // EMMA_MAIL_* variables below are the single source of truth.
+  EMAIL_MODE: z.string().optional(),
+  PRODUCTION_EMAILS_ENABLED: z.string().optional(),
   AIRTABLE_BASE_ID: z.string().min(1),
   AIRTABLE_PAT: z.string().min(1),
   AIRTABLE_POLL_SECONDS: z.coerce.number().int().positive().default(60),
@@ -47,11 +52,11 @@ const workerEnvironmentSchema = z.object({
     isIanaTimezone,
     "Invalid IANA timezone",
   ),
-  COMMUNICATION_DIGEST_CRON: z.string().trim().default("0 6,14 * * *").refine(
+  EMMA_MAIL_TEST_MODE: strictBooleanString,
+  EMMA_MAIL_TEST_CRON: z.string().trim().default("* * * * *").refine(
     isValidCronExpression,
     "Invalid five-field cron expression",
   ),
-  COMMUNICATION_EMAIL_DEBUG: strictBooleanString,
   COMMUNICATION_EMAILS_ENABLED: strictBooleanString,
   COMMUNICATION_SEND_NOT_BEFORE: z.string().default(""),
   ...assetEnvironmentShape,
@@ -63,12 +68,12 @@ const workerEnvironmentSchema = z.object({
       message: "TIEMED_FALLBACK_EMAIL is required when communication emails are enabled",
     });
   }
-  if (value.COMMUNICATION_EMAIL_DEBUG &&
-      (value.EMAIL_MODE !== "TEST" || !value.TEST_EMAIL.trim() || !value.EMAIL_FROM.trim())) {
+  if (value.EMMA_MAIL_TEST_MODE &&
+      (!value.TEST_EMAIL.trim() || !value.EMAIL_FROM.trim())) {
     context.addIssue({
       code: "custom",
-      path: ["COMMUNICATION_EMAIL_DEBUG"],
-      message: "COMMUNICATION_EMAIL_DEBUG requires EMAIL_MODE=TEST, TEST_EMAIL and EMAIL_FROM",
+      path: ["EMMA_MAIL_TEST_MODE"],
+      message: "EMMA_MAIL_TEST_MODE requires TEST_EMAIL and EMAIL_FROM",
     });
   }
 });
@@ -100,6 +105,8 @@ export type WorkerConfig = BaseConfig & AssetConfig & {
   communicationTimezone: string;
   communicationDigestCron: string;
   communicationEmailDebug: boolean;
+  emmaMailTestMode: boolean;
+  emmaMailTestCron: string;
   communicationEmailsEnabled: boolean;
   communicationSendNotBefore: Date | null;
 };
@@ -139,16 +146,20 @@ export function loadWorkerConfig(environment: NodeJS.ProcessEnv): WorkerConfig {
     publicBaseUrl: parsed.data.PUBLIC_BASE_URL,
     tiemedFallbackEmail: parsed.data.TIEMED_FALLBACK_EMAIL.trim() || null,
     communicationTimezone: parsed.data.COMMUNICATION_TIMEZONE,
-    communicationDigestCron: parsed.data.COMMUNICATION_DIGEST_CRON,
-    communicationEmailDebug: parsed.data.COMMUNICATION_EMAIL_DEBUG,
+    communicationDigestCron: parsed.data.EMMA_MAIL_TEST_MODE
+      ? parsed.data.EMMA_MAIL_TEST_CRON
+      : "0 6,14 * * *",
+    communicationEmailDebug: parsed.data.EMMA_MAIL_TEST_MODE,
+    emmaMailTestMode: parsed.data.EMMA_MAIL_TEST_MODE,
+    emmaMailTestCron: parsed.data.EMMA_MAIL_TEST_CRON,
     communicationEmailsEnabled: parsed.data.COMMUNICATION_EMAILS_ENABLED,
     communicationSendNotBefore: parseIsoTimestamp(
       parsed.data.COMMUNICATION_SEND_NOT_BEFORE,
     ),
     timezone: parsed.data.TIMEZONE,
-    emailMode: parsed.data.EMAIL_MODE,
+    emailMode: parsed.data.EMMA_MAIL_TEST_MODE ? "TEST" : "PRODUCTION",
     testEmail: parsed.data.TEST_EMAIL || null,
-    productionEmailsEnabled: parsed.data.PRODUCTION_EMAILS_ENABLED,
+    productionEmailsEnabled: !parsed.data.EMMA_MAIL_TEST_MODE,
     linkTtlDays: parsed.data.LINK_TTL_DAYS,
     serviceName: parsed.data.SERVICE_NAME,
   };

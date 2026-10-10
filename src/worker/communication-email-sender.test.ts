@@ -115,6 +115,23 @@ describe("communication email activation and recipient safety", () => {
     expect(fixture.store.emailMode).toBe("TEST");
   });
 
+  it("does not send a test-planned repair to a client before the production boundary", async () => {
+    const fixture = setup({ detectedAt: activation });
+    const production = {
+      mailTestMode: false,
+      mode: "PRODUCTION" as const,
+      productionEmailsEnabled: true,
+    };
+
+    await run(fixture, production, [], now);
+    expect(fixture.provider.requests).toHaveLength(0);
+    expect(fixture.candidate.status).toBe(CommunicationDeliveryStatus.READY);
+
+    await run(fixture, production, [], new Date("2026-08-15T12:00:00Z"));
+    expect(fixture.provider.requests).toHaveLength(1);
+    expect(fixture.provider.requests[0]?.to).toBe("client@example.com");
+  });
+
   it("keeps rendered content and provider routing unchanged when email debug is disabled", async () => {
     const fixture = setup();
     await run(fixture, { communicationEmailDebug: false });
@@ -191,6 +208,17 @@ describe("communication email activation and recipient safety", () => {
     await run(fixture, { communicationEmailDebug: true });
     expect(fixture.provider.requests).toHaveLength(0);
     expect(fixture.store.lastError).toBe("EMAIL_DEBUG_TRACE_MISSING");
+  });
+
+  it("keeps an already planned delivery unchanged when master test mode lacks its debug trace", async () => {
+    const fixture = setup();
+    await run(fixture, {
+      mailTestMode: true,
+      communicationEmailDebug: true,
+    });
+    expect(fixture.provider.requests).toHaveLength(0);
+    expect(fixture.candidate.status).toBe(CommunicationDeliveryStatus.READY);
+    expect(fixture.store.lastError).toBeNull();
   });
 
   it("sends one new scoped REPAIR_COMPLETED only to TEST_EMAIL", async () => {
@@ -604,6 +632,57 @@ describe("provider result and retry classification", () => {
       PASSED_COUNT: "1", CONDITIONAL_COUNT: "0", FAILED_COUNT: "0",
     });
     expect(fixture.candidate.status).toBe(CommunicationDeliveryStatus.SENT);
+  });
+
+  it("in master test mode accepts performedAt today even when TASK.day is later", async () => {
+    const fixture = setup({
+      scenario: CommunicationScenario.INSPECTION_COMPLETED,
+      eventSnapshot: {
+        ...reminderSnapshot({ day: "2026-08-20" }),
+        linkedInspectionRecordIds: ["inspectionA"],
+      },
+      event: {
+        detectedAt: activation,
+        sourceRecordId: "recTask",
+        eventSnapshot: {
+          ...reminderSnapshot({ day: "2026-08-20" }),
+          linkedInspectionRecordIds: ["inspectionA"],
+        },
+        recipientResolutionDebug: debugTrace("recTask", "client@example.com"),
+      },
+    });
+    fixture.dataSource.getInspections = async () => [{
+      ...inspectionFixture("inspectionA", "SPRAWNY"),
+      inspectionPerformedAt: new Date("2026-08-15T08:00:00Z"),
+    }];
+
+    await run(fixture, {
+      mailTestMode: true,
+      communicationEmailDebug: true,
+    });
+
+    expect(fixture.provider.requests).toHaveLength(1);
+    expect(fixture.provider.requests[0]?.to).toBe("test@example.test");
+    expect(fixture.provider.requests[0]?.html).toContain("DIAGNOSTYKA ODBIORCÓW");
+  });
+
+  it("in master test mode leaves historical performed inspections untouched", async () => {
+    const fixture = setup({
+      scenario: CommunicationScenario.INSPECTION_COMPLETED,
+      eventSnapshot: {
+        ...reminderSnapshot({ day: "2026-08-15" }),
+        linkedInspectionRecordIds: ["inspectionA"],
+      },
+    });
+    fixture.dataSource.getInspections = async () => [{
+      ...inspectionFixture("inspectionA", "SPRAWNY"),
+      inspectionPerformedAt: new Date("2026-08-14T08:00:00Z"),
+    }];
+
+    await run(fixture, { mailTestMode: true });
+
+    expect(fixture.provider.requests).toHaveLength(0);
+    expect(fixture.candidate.status).toBe(CommunicationDeliveryStatus.READY);
   });
 
   it("includes exhausted Airtable contact-read attempts in the fallback diagnostic", async () => {

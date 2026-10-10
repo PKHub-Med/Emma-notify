@@ -62,6 +62,58 @@ describe("event-driven communication delivery", () => {
     expect(plan.status).toBe(CommunicationDeliveryStatus.SCHEDULED);
   });
 
+  it.each([
+    CommunicationScenario.REPAIR_RECEIVED,
+    CommunicationScenario.REPAIR_DELAYED_PARTS,
+    CommunicationScenario.REPAIR_COMPLETED,
+    CommunicationScenario.INSPECTION_DATE_PROPOSED,
+    CommunicationScenario.INSPECTION_DATE_CONFIRMED,
+    CommunicationScenario.INSPECTION_COMPLETED,
+  ])("uses the common test cron for %s", (scenario) => {
+    const source = event(scenario, ["recipientA"]);
+    source.detectedAt = new Date("2026-08-13T08:01:15Z");
+    const plan = createDeliveryPlan(
+      source,
+      "recipientA",
+      new Date("2026-08-13T08:01:15Z"),
+      timeZone,
+      "0 6,14 * * *",
+      true,
+      "*/10 * * * *",
+    );
+    expect(plan.scheduledFor).toEqual(new Date("2026-08-13T08:10:00Z"));
+    expect(plan.status).toBe(CommunicationDeliveryStatus.SCHEDULED);
+  });
+
+  it.each([
+    CommunicationScenario.REPAIR_RECEIVED,
+    CommunicationScenario.REPAIR_DELAYED_PARTS,
+    CommunicationScenario.REPAIR_COMPLETED,
+    CommunicationScenario.INSPECTION_DATE_PROPOSED,
+    CommunicationScenario.INSPECTION_DATE_CONFIRMED,
+    CommunicationScenario.INSPECTION_COMPLETED,
+  ])("moves test-scheduled %s to READY at the common boundary", async (scenario) => {
+    const source = event(scenario, ["recipientA"]);
+    source.detectedAt = new Date("2026-08-13T07:01:15Z");
+    const store = new MemoryDeliveryStore([source]);
+    await runCommunicationDeliveryPlanner({
+      store,
+      timeZone,
+      testMode: true,
+      testCron: "*/10 * * * *",
+      now: () => new Date("2026-08-13T07:01:15Z"),
+    });
+    expect(store.deliveries[0]?.status).toBe(CommunicationDeliveryStatus.SCHEDULED);
+    await runCommunicationDeliveryPlanner({
+      store,
+      timeZone,
+      testMode: true,
+      testCron: "*/10 * * * *",
+      now: () => new Date("2026-08-13T07:10:00Z"),
+    });
+    expect(store.deliveries[0]?.status).toBe(CommunicationDeliveryStatus.READY);
+  });
+
   it("transitions a scheduled repair batch to READY at 14:00 Warsaw", async () => {
     const store = new MemoryDeliveryStore([event(CommunicationScenario.REPAIR_COMPLETED, ["recipientA"])]);
     await planner(store, new Date("2026-08-13T08:00:00Z"));
@@ -84,6 +136,40 @@ describe("event-driven communication delivery", () => {
 });
 
 describe("inspection reminder scheduling", () => {
+  it("applies the test cron no earlier than the normal reminder boundary", () => {
+    const plan = createDeliveryPlan(
+      reminderEvent(["recipientA"]),
+      "recipientA",
+      new Date("2026-08-13T08:00:00Z"),
+      timeZone,
+      "0 6,14 * * *",
+      true,
+      "*/10 * * * *",
+    );
+    expect(plan.scheduledFor).toEqual(new Date("2026-08-14T04:00:00Z"));
+    expect(plan.status).toBe(CommunicationDeliveryStatus.SCHEDULED);
+  });
+
+  it("replans an existing production delivery when switching to test mode", async () => {
+    const source = event(CommunicationScenario.REPAIR_COMPLETED, ["recipientA"]);
+    source.detectedAt = new Date("2026-08-13T08:01:15Z");
+    const store = new MemoryDeliveryStore([source]);
+    await planner(store, new Date("2026-08-13T08:02:00Z"));
+    expect(store.deliveries[0]?.scheduledFor).toEqual(new Date("2026-08-13T12:00:00Z"));
+
+    await runCommunicationDeliveryPlanner({
+      store,
+      timeZone,
+      testMode: true,
+      testCron: "*/10 * * * *",
+      now: () => new Date("2026-08-13T08:02:15Z"),
+    });
+
+    expect(store.deliveries[0]).toMatchObject({
+      status: CommunicationDeliveryStatus.SCHEDULED,
+      scheduledFor: new Date("2026-08-13T08:10:00Z"),
+    });
+  });
   it("schedules a 15 August visit for 14 August at 06:00 Warsaw", async () => {
     const store = reminderStore();
     await planner(store, new Date("2026-08-13T08:00:00Z"));
@@ -343,12 +429,7 @@ class MemoryDeliveryStore implements CommunicationDeliveryStore {
 
   async findDueReminders(now: Date): Promise<DueReminder[]> {
     return this.deliveries
-      .filter((item) => [
-        CommunicationScenario.INSPECTION_REMINDER,
-        CommunicationScenario.REPAIR_RECEIVED,
-        CommunicationScenario.REPAIR_COMPLETED,
-      ].includes(item.scenario) &&
-        item.status === CommunicationDeliveryStatus.SCHEDULED &&
+      .filter((item) => item.status === CommunicationDeliveryStatus.SCHEDULED &&
         item.scheduledFor.getTime() <= now.getTime())
       .map((item) => {
         const source = this.events.find((candidate) => candidate.id === item.eventId)!;
@@ -359,8 +440,33 @@ class MemoryDeliveryStore implements CommunicationDeliveryStore {
           scenario: item.scenario,
           eventSnapshot: source.eventSnapshot,
           scheduledFor: item.scheduledFor,
+          detectedAt: source.detectedAt,
         };
       });
+  }
+
+  async findScheduledDeliveries(): Promise<DueReminder[]> {
+    return this.deliveries
+      .filter((item) => item.status === CommunicationDeliveryStatus.SCHEDULED)
+      .map((item) => {
+        const source = this.events.find((candidate) => candidate.id === item.eventId)!;
+        return {
+          id: item.id,
+          eventId: item.eventId,
+          sourceRecordId: source.sourceRecordId,
+          scenario: item.scenario,
+          eventSnapshot: source.eventSnapshot,
+          scheduledFor: item.scheduledFor,
+          detectedAt: source.detectedAt,
+        };
+      });
+  }
+
+  async rescheduleScheduled(deliveryId: string, scheduledFor: Date) {
+    const delivery = this.deliveries.find((item) => item.id === deliveryId);
+    if (!delivery || delivery.status !== CommunicationDeliveryStatus.SCHEDULED) return false;
+    delivery.scheduledFor = scheduledFor;
+    return true;
   }
 
   async getCurrentTask() { return this.currentTask; }

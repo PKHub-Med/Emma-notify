@@ -1,6 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { describe, expect, it, vi } from "vitest";
-import { TASK_FIELDS } from "../airtable/field-ids.js";
+import { INSPECTION_FIELDS, TASK_FIELDS } from "../airtable/field-ids.js";
 import type { MappedTask } from "../airtable/task.js";
 import {
   CommunicationDeliveryStatus,
@@ -436,6 +436,58 @@ describe("task polling and communication events", () => {
     expect(fixture.communication.events[0]?.observation.scenario).toBe("INSPECTION_COMPLETED");
   });
 
+  it("in test mode uses performedAt instead of a later planned task day", async () => {
+    const fixture = taskFixture();
+    fixture.communication.baselineCompleted = true;
+    fixture.source.setCurrent(completedTaskRecord("recTask", "2026-10-15"));
+    fixture.source.recordsById.set("recInspectionA", inspectionRecord(
+      "recInspectionA",
+      "2026-10-10T08:30:00.000Z",
+    ));
+    fixture.source.recordsById.set("recInspectionB", inspectionRecord(
+      "recInspectionB",
+      "2026-10-10T09:00:00.000Z",
+    ));
+
+    await runTaskSync({
+      airtable: fixture.source,
+      store: fixture.store,
+      communicationStore: fixture.communication,
+      mailTestMode: true,
+      timeZone: "Europe/Warsaw",
+      now: () => new Date("2026-10-10T10:00:00.000Z"),
+    });
+
+    expect(fixture.communication.events).toHaveLength(1);
+    expect(fixture.communication.events[0]?.observation.scenario)
+      .toBe("INSPECTION_COMPLETED");
+  });
+
+  it("in test mode does not create completed events from historical performedAt", async () => {
+    const fixture = taskFixture();
+    fixture.communication.baselineCompleted = true;
+    fixture.source.setCurrent(completedTaskRecord("recTask", "2026-10-10"));
+    fixture.source.recordsById.set("recInspectionA", inspectionRecord(
+      "recInspectionA",
+      "2026-10-09T08:30:00.000Z",
+    ));
+    fixture.source.recordsById.set("recInspectionB", inspectionRecord(
+      "recInspectionB",
+      "2026-10-09T09:00:00.000Z",
+    ));
+
+    await runTaskSync({
+      airtable: fixture.source,
+      store: fixture.store,
+      communicationStore: fixture.communication,
+      mailTestMode: true,
+      timeZone: "Europe/Warsaw",
+      now: () => new Date("2026-10-10T10:00:00.000Z"),
+    });
+
+    expect(fixture.communication.events).toHaveLength(0);
+  });
+
   it("opens the completed circuit breaker at 20 events and suppresses the rest", async () => {
     const fixture = taskFixture();
     const logs: string[] = [];
@@ -751,5 +803,13 @@ function completedTaskRecord(id: string, day: string): AirtableRecord {
       [TASK_FIELDS.emmaMailTemplate]: "Przegląd-podsumowanie_wizyty",
     }),
     id,
+  };
+}
+
+function inspectionRecord(id: string, performedAt: string): AirtableRecord {
+  return {
+    id,
+    createdTime: "2026-10-10T07:00:00.000Z",
+    fields: { [INSPECTION_FIELDS.performedAt]: performedAt },
   };
 }

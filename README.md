@@ -106,9 +106,10 @@ Skopiuj `.env.example` do `.env` i ustaw:
 | `PORT` | Port API; Railway dostarcza go automatycznie |
 | `DIGEST_QUIET_MINUTES` | Czas oczekiwania bufora; domyślnie `1` |
 | `TIMEZONE` | Strefa czasowa; domyślnie `Europe/Warsaw` |
-| `EMAIL_MODE` | `TEST` albo `PRODUCTION`; obecnie tylko walidowane |
-| `TEST_EMAIL` | Adres testowy; obecnie tylko walidowany |
-| `PRODUCTION_EMAILS_ENABLED` | Flaga `true`/`false`; obecnie tylko walidowana |
+| `EMMA_MAIL_TEST_MODE` | Nadrzędny tryb poczty workera; domyślnie `false` (produkcja) |
+| `EMMA_MAIL_TEST_CRON` | Wspólny cron wszystkich scenariuszy w trybie testowym; domyślnie `* * * * *` |
+| `TEST_EMAIL` | Jedyny dozwolony odbiorca przy `EMMA_MAIL_TEST_MODE=true` |
+| `COMMUNICATION_EMAILS_ENABLED` | Operacyjny przełącznik całkowicie włączający/wyłączający wysyłkę |
 | `LINK_TTL_DAYS` | Ważność przyszłych linków w dniach; domyślnie `30` |
 | `PORTAL_UPGRADE_URL` | Opcjonalny bezpieczny link `https:` lub `mailto:` dla CTA pełnej wersji portalu; bez ENV używany jest kontakt mailowy Tiemed |
 
@@ -116,7 +117,12 @@ API wymaga tylko `DATABASE_URL`; `PORT` jest opcjonalny i domyślnie wynosi `300
 
 Worker wymaga `DATABASE_URL`, `AIRTABLE_BASE_ID` i `AIRTABLE_PAT`. Pozostałe ustawienia workera mają wartości domyślne podane powyżej.
 
-`EMAIL_MODE=TEST` **nie oznacza wysyłania maili**. W tej wersji nie ma konfiguracji dostawcy poczty ani kodu wysyłającego wiadomości.
+Worker wyprowadza `EMAIL_MODE`, diagnostykę, routing oraz produkcyjny przełącznik
+bezpośrednio z `EMMA_MAIL_TEST_MODE`. Stare zmienne `EMAIL_MODE`,
+`COMMUNICATION_EMAIL_DEBUG`, `COMMUNICATION_DIGEST_CRON` i
+`PRODUCTION_EMAILS_ENABLED` są przez worker ignorowane, aby ich pozostawione
+wartości nie mogły wejść w konflikt z trybem nadrzędnym. API zachowuje własną,
+wstecznie kompatybilną konfigurację bazową.
 
 ## Praca lokalna
 
