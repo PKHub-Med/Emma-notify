@@ -123,6 +123,7 @@ describe("loadWorkerConfig", () => {
       publicBaseUrl: "https://notify.example.org",
       tiemedFallbackEmail: "fallback@example.test",
       communicationTimezone: "Europe/Warsaw",
+      communicationDigestCron: "0 6,14 * * *",
       communicationEmailsEnabled: false,
       communicationSendNotBefore: null,
       emailReplyTo: "serwis@tiemed.pl",
@@ -192,6 +193,18 @@ describe("loadWorkerConfig", () => {
       ...workerEnvironment,
       COMMUNICATION_TIMEZONE: "UTC+2",
     })).toThrow(/COMMUNICATION_TIMEZONE/);
+  });
+
+  it("uses the production digest cron by default and accepts a ten-minute schedule", () => {
+    expect(loadWorkerConfig(workerEnvironment).communicationDigestCron).toBe("0 6,14 * * *");
+    expect(loadWorkerConfig({
+      ...workerEnvironment,
+      COMMUNICATION_DIGEST_CRON: "*/10 * * * *",
+    }).communicationDigestCron).toBe("*/10 * * * *");
+    expect(() => loadWorkerConfig({
+      ...workerEnvironment,
+      COMMUNICATION_DIGEST_CRON: "not-a-cron",
+    })).toThrow(/COMMUNICATION_DIGEST_CRON/);
   });
 
   it("accepts an optional Tiemed fallback email", () => {

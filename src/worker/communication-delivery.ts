@@ -245,6 +245,7 @@ export class PrismaCommunicationDeliveryStore implements CommunicationDeliverySt
 export async function runCommunicationDeliveryPlanner(input: {
   store: CommunicationDeliveryStore;
   timeZone: string;
+  digestCron?: string;
   now?: () => Date;
   log?: (message: string) => void;
 }): Promise<{ eventsPlanned: number; remindersTransitioned: number }> {
@@ -253,7 +254,7 @@ export async function runCommunicationDeliveryPlanner(input: {
   const events = await input.store.findEventsAwaitingDelivery(PLANNER_LIMIT);
   for (const event of events) {
     const plans = event.recipients.map((recipient) =>
-      createDeliveryPlan(event, recipient, planningNow, input.timeZone));
+      createDeliveryPlan(event, recipient, planningNow, input.timeZone, input.digestCron));
     const created = await input.store.ensureDeliveries(event, plans, planningNow);
     for (const delivery of created) {
       if (delivery.status === CommunicationDeliveryStatus.CANCELLED) {
@@ -322,6 +323,7 @@ export function createDeliveryPlan(
   recipientInput: DeliveryPlanningEvent["recipients"][number] | string,
   now: Date,
   timeZone: string,
+  digestCron = "0 6,14 * * *",
 ): DeliveryPlan {
   const recipient = typeof recipientInput === "string"
     ? { id: recipientInput, normalizedEmail: null, email: null, recipientKey: recipientInput }
@@ -346,7 +348,7 @@ export function createDeliveryPlan(
   if (event.scenario === CommunicationScenario.REPAIR_RECEIVED ||
       event.scenario === CommunicationScenario.REPAIR_DELAYED_PARTS ||
       event.scenario === CommunicationScenario.REPAIR_COMPLETED) {
-    const scheduledFor = repairBatchScheduledFor(event.detectedAt, timeZone);
+    const scheduledFor = repairBatchScheduledFor(event.detectedAt, timeZone, digestCron);
     const ready = now.getTime() >= scheduledFor.getTime();
     return {
       recipientId,

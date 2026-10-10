@@ -406,6 +406,7 @@ async function pollDeliveryPlanner(): Promise<void> {
     await runCommunicationDeliveryPlanner({
       store: communicationDeliveryStore,
       timeZone: config.communicationTimezone,
+      digestCron: config.communicationDigestCron,
       log: (message) => console.info(message),
     });
   } catch {

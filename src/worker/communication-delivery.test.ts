@@ -48,6 +48,20 @@ describe("event-driven communication delivery", () => {
     expect(recoveredAfterBoundary.status).toBe(CommunicationDeliveryStatus.READY);
   });
 
+  it("uses a configurable ten-minute repair digest boundary", () => {
+    const source = event(CommunicationScenario.REPAIR_RECEIVED, ["recipientA"]);
+    source.detectedAt = new Date("2026-08-13T08:01:15Z");
+    const plan = createDeliveryPlan(
+      source,
+      "recipientA",
+      new Date("2026-08-13T08:01:15Z"),
+      timeZone,
+      "*/10 * * * *",
+    );
+    expect(plan.scheduledFor).toEqual(new Date("2026-08-13T08:10:00Z"));
+    expect(plan.status).toBe(CommunicationDeliveryStatus.SCHEDULED);
+  });
+
   it("transitions a scheduled repair batch to READY at 14:00 Warsaw", async () => {
     const store = new MemoryDeliveryStore([event(CommunicationScenario.REPAIR_COMPLETED, ["recipientA"])]);
     await planner(store, new Date("2026-08-13T08:00:00Z"));
@@ -173,6 +187,15 @@ describe("Europe/Warsaw timezone", () => {
       .toBe("2026-08-13T12:00:00.000Z");
     expect(repairBatchScheduledFor(new Date("2026-01-13T14:30:00Z"), timeZone).toISOString())
       .toBe("2026-01-14T05:00:00.000Z");
+  });
+
+  it("keeps the configurable digest cron in Europe/Warsaw across DST", () => {
+    expect(repairBatchScheduledFor(
+      new Date("2026-01-13T04:01:00Z"), timeZone, "*/10 * * * *",
+    ).toISOString()).toBe("2026-01-13T04:10:00.000Z");
+    expect(repairBatchScheduledFor(
+      new Date("2026-08-13T04:01:00Z"), timeZone, "*/10 * * * *",
+    ).toISOString()).toBe("2026-08-13T04:10:00.000Z");
   });
 });
 

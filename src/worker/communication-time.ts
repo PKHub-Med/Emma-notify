@@ -1,3 +1,5 @@
+import { nextCronOccurrence } from "../scheduling/cron.js";
+
 export type LocalDate = { year: number; month: number; day: number };
 
 export function parseLocalDate(value: unknown): LocalDate | null {
@@ -99,47 +101,12 @@ function dateNumber(value: LocalDate): number {
 
 
 /**
- * Returns the next repair digest boundary in the configured timezone.
- * Local windows are (previous 14:00, 06:00] and (06:00, 14:00].
+ * Returns the next repair digest boundary for the configured cron and timezone.
  */
 export function repairBatchScheduledFor(
   detectedAt: Date,
   timeZone: string,
+  digestCron = "0 6,14 * * *",
 ): Date {
-  const local = zonedParts(detectedAt, timeZone);
-  const atOrBeforeSix = local.hour < 6 ||
-    (local.hour === 6 && local.minute === 0 && local.second === 0);
-  const atOrBeforeFourteen = local.hour < 14 ||
-    (local.hour === 14 && local.minute === 0 && local.second === 0);
-
-  if (atOrBeforeSix) {
-    return localDateTimeToUtc({
-      year: local.year,
-      month: local.month,
-      day: local.day,
-      hour: 6,
-      minute: 0,
-      second: 0,
-    }, timeZone);
-  }
-  if (atOrBeforeFourteen) {
-    return localDateTimeToUtc({
-      year: local.year,
-      month: local.month,
-      day: local.day,
-      hour: 14,
-      minute: 0,
-      second: 0,
-    }, timeZone);
-  }
-
-  const tomorrow = new Date(Date.UTC(local.year, local.month - 1, local.day + 1));
-  return localDateTimeToUtc({
-    year: tomorrow.getUTCFullYear(),
-    month: tomorrow.getUTCMonth() + 1,
-    day: tomorrow.getUTCDate(),
-    hour: 6,
-    minute: 0,
-    second: 0,
-  }, timeZone);
+  return nextCronOccurrence(digestCron, detectedAt, timeZone);
 }

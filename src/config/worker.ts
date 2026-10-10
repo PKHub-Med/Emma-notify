@@ -9,6 +9,7 @@ import {
   publicBaseUrlSchema,
 } from "./access-link.js";
 import { assetEnvironmentShape, mapAssetConfig, type AssetConfig } from "./assets.js";
+import { isValidCronExpression } from "../scheduling/cron.js";
 
 const strictBooleanString = z.preprocess(
   (value) => value === undefined
@@ -43,6 +44,10 @@ const workerEnvironmentSchema = z.object({
   COMMUNICATION_TIMEZONE: z.string().min(1).default("Europe/Warsaw").refine(
     isIanaTimezone,
     "Invalid IANA timezone",
+  ),
+  COMMUNICATION_DIGEST_CRON: z.string().trim().default("0 6,14 * * *").refine(
+    isValidCronExpression,
+    "Invalid five-field cron expression",
   ),
   COMMUNICATION_EMAILS_ENABLED: strictBooleanString,
   COMMUNICATION_SEND_NOT_BEFORE: z.string().default(""),
@@ -80,6 +85,7 @@ export type WorkerConfig = BaseConfig & AssetConfig & {
   publicBaseUrl: string;
   tiemedFallbackEmail: string | null;
   communicationTimezone: string;
+  communicationDigestCron: string;
   communicationEmailsEnabled: boolean;
   communicationSendNotBefore: Date | null;
 };
@@ -117,6 +123,7 @@ export function loadWorkerConfig(environment: NodeJS.ProcessEnv): WorkerConfig {
     publicBaseUrl: parsed.data.PUBLIC_BASE_URL,
     tiemedFallbackEmail: parsed.data.TIEMED_FALLBACK_EMAIL.trim() || null,
     communicationTimezone: parsed.data.COMMUNICATION_TIMEZONE,
+    communicationDigestCron: parsed.data.COMMUNICATION_DIGEST_CRON,
     communicationEmailsEnabled: parsed.data.COMMUNICATION_EMAILS_ENABLED,
     communicationSendNotBefore: parseIsoTimestamp(
       parsed.data.COMMUNICATION_SEND_NOT_BEFORE,
