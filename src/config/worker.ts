@@ -30,6 +30,8 @@ const workerEnvironmentSchema = z.object({
   AIRTABLE_HOSPITAL_POLL_SECONDS: z.coerce.number().int().positive().default(3_600),
   AIRTABLE_DEVICE_POLL_SECONDS: z.coerce.number().int().positive().default(600),
   AIRTABLE_DEVICE_RECONCILE_SECONDS: z.coerce.number().int().positive().default(21_600),
+  AIRTABLE_INSPECTION_RECONCILE_ENABLED: strictBooleanString,
+  AIRTABLE_INSPECTION_RECONCILE_SECONDS: z.coerce.number().int().positive().default(86_400),
   DIGEST_QUIET_MINUTES: z.coerce.number().int().nonnegative().default(1),
   RESEND_API_KEY: z.string().default(""),
   RESEND_CASE_DIGEST_TEMPLATE_ID: z.string().default(""),
@@ -82,6 +84,8 @@ export type WorkerConfig = BaseConfig & AssetConfig & {
   airtableHospitalPollSeconds: number;
   airtableDevicePollSeconds: number;
   airtableDeviceReconcileSeconds: number;
+  airtableInspectionReconcileEnabled: boolean;
+  airtableInspectionReconcileSeconds: number;
   digestQuietMinutes: number;
   resendApiKey: string | null;
   resendCaseDigestTemplateId: string | null;
@@ -120,6 +124,8 @@ export function loadWorkerConfig(environment: NodeJS.ProcessEnv): WorkerConfig {
     airtableHospitalPollSeconds: parsed.data.AIRTABLE_HOSPITAL_POLL_SECONDS,
     airtableDevicePollSeconds: parsed.data.AIRTABLE_DEVICE_POLL_SECONDS,
     airtableDeviceReconcileSeconds: parsed.data.AIRTABLE_DEVICE_RECONCILE_SECONDS,
+    airtableInspectionReconcileEnabled: parsed.data.AIRTABLE_INSPECTION_RECONCILE_ENABLED,
+    airtableInspectionReconcileSeconds: parsed.data.AIRTABLE_INSPECTION_RECONCILE_SECONDS,
     digestQuietMinutes: parsed.data.DIGEST_QUIET_MINUTES,
     resendApiKey: parsed.data.RESEND_API_KEY.trim() || null,
     resendCaseDigestTemplateId:

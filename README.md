@@ -39,6 +39,36 @@ Używane są wyłącznie Table IDs i Field IDs. Table IDs:
 
 Po potwierdzeniu zakończonego baseline worker rozpoczyna incremental polling. Dla zleceń serwisowych i przeglądów używa osobnych `SyncState.lastSuccessfulSyncAt`, odejmuje `AIRTABLE_SYNC_OVERLAP_SECONDS` i filtruje Airtable przez `filterByFormula` na odpowiednim Field ID `Last mod Emma`. Overlap może zwrócić rekord ponownie; fingerprint SHA-256 i constraints PostgreSQL zapewniają idempotency.
 
+### Okresowy reconcile przeglądów
+
+Pełny reconcile przeglądów naprawia historyczne lub pominięte wartości `TrackedCase`
+bez uruchamiania warstwy komunikacyjnej. Odczytuje Airtable sekwencyjnie po stronach,
+zapisuje offset i liczniki w `SyncState` pod typem `INSPECTION_RECONCILE`, a każdą
+stronę zatwierdza atomowo razem z jej offsetem. Lease w PostgreSQL chroni przed
+równoległym uruchomieniem na wielu replikach. Po awarii następny przebieg wznawia
+pracę od ostatniej zatwierdzonej strony.
+
+Harmonogram jest domyślnie wyłączony:
+
+- `AIRTABLE_INSPECTION_RECONCILE_ENABLED=false`
+- `AIRTABLE_INSPECTION_RECONCILE_SECONDS=86400` (zalecane raz na 24 godziny)
+
+Deploy nie uruchamia reconcile. Pierwszy przebieg musi być uruchomiony ręcznie po
+wdrożeniu migracji:
+
+```bash
+npm run reconcile:inspections -- --confirm-first-run=INSPECTION_RECONCILE
+```
+
+Dopiero po poprawnym pierwszym przebiegu można ustawić
+`AIRTABLE_INSPECTION_RECONCILE_ENABLED=true`. Reconcile modyfikuje wyłącznie
+bieżące dane `TrackedCase`, relacje `TrackedCaseDevice` oraz własny `SyncState`.
+Nie obserwuje komunikacji i nie zapisuje `CommunicationCursor`,
+`CommunicationEvent`, `CommunicationDelivery`, buforów ani digestów.
+Harmonogram dodatkowo wymaga istniejącego `lastSuccessfulSyncAt` dla
+`INSPECTION_RECONCILE`, więc samo przypadkowe włączenie ENV nie omija zatwierdzenia
+pierwszego uruchomienia.
+
 Na tym etapie monitorowana jest wyłącznie zmiana customer-facing statusu. Każda zmiana tworzy transakcyjnie `CaseEvent`, aktualizuje `TrackedCase`, korzysta z aktualnych eligible `CaseRecipient` i tworzy albo resetuje jeden aktywny `NotificationBuffer` na `normalizedEmail`. `BufferItem` pozostaje unikalny dla pary buffer–case.
 
 Każdy kolejny event ustawia `sendAfter = now + DIGEST_QUIET_MINUTES`. Nie istnieje maksymalny czas oczekiwania ani forced send. Watchdog co 15 sekund wykonuje warunkowy update PostgreSQL i ustawia `READY` wyłącznie dla bufferów nadal `OPEN`, których aktualne `sendAfter <= now`. Następnie czyści `activeRecipientKey`, dzięki czemu przyszły event może utworzyć nowy OPEN buffer. Osobny loop przetwarza `READY` buffery w digesty; żaden e-mail nie jest wysyłany.

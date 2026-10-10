@@ -27,6 +27,7 @@
     "backfill:inspection-performed-at": "npm run build && node dist/worker/inspection-performed-at-backfill.js",
     "backfill:inspection-duration": "npm run build && node dist/worker/inspection-duration-backfill.js",
     "backfill:inspection-portal-dates": "npm run build && node dist/worker/inspection-portal-dates-backfill.js",
+    "reconcile:inspections": "node dist/worker/inspection-reconcile-cli.js",
     "db:migrate:deploy": "prisma migrate deploy",
     "prisma:validate": "prisma validate",
     "prisma:generate": "prisma generate"

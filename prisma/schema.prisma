@@ -44,6 +44,7 @@ enum DigestStatus {
 enum SyncEntityType {
   SERVICE_ORDER
   INSPECTION
+  INSPECTION_RECONCILE
   CONTACT
   TASK
   HOSPITAL
@@ -710,11 +711,20 @@ model SyncState {
   lastSuccessfulSyncAt DateTime?
   baselineCompletedAt DateTime?
   lastError           String?
+  reconcileCursor     String?
+  leaseToken          String?
+  leaseExpiresAt      DateTime?
+  recordsRead         Int            @default(0)
+  recordsChanged      Int            @default(0)
+  recordsUnchanged    Int            @default(0)
+  recordsFailed       Int            @default(0)
+  pagesProcessed      Int            @default(0)
   createdAt           DateTime       @default(now())
   updatedAt           DateTime       @updatedAt
 
   @@unique([source, entityType])
   @@index([status, lastAttemptAt])
+  @@index([entityType, status, leaseExpiresAt])
 }
 
 model WorkerState {

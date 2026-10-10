@@ -13,6 +13,11 @@ export type AirtableListOptions = {
   filterByFormula?: string;
 };
 
+export type AirtablePageOptions = AirtableListOptions & {
+  offset?: string;
+  pageSize?: number;
+};
+
 export type AirtableRecordSource = {
   fetchAllRecords(
     tableId: string,
@@ -27,6 +32,14 @@ export type AirtableIncrementalSource = AirtableRecordSource & {
     recordId: string,
     fieldIds: readonly string[],
   ): Promise<AirtableRecord>;
+};
+
+export type AirtablePaginatedSource = {
+  fetchRecordsPage(
+    tableId: string,
+    fieldIds: readonly string[],
+    options?: AirtablePageOptions,
+  ): Promise<AirtablePage>;
 };
 
 export type AirtableRequestMetrics = {

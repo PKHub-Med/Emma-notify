@@ -113,6 +113,30 @@ describe("AirtableClient", () => {
     });
   });
 
+  it("fetches exactly one resumable page with an explicit offset and page size", async () => {
+    const fetchFunction = vi.fn<typeof fetch>().mockResolvedValue(response({
+      records: [airtableRecord("recPage")],
+      offset: "next-page",
+    }));
+    const client = new AirtableClient({
+      baseId: "appBase",
+      personalAccessToken: "secret-token",
+      fetchFunction,
+    });
+
+    const page = await client.fetchRecordsPage("tblInspections", ["fldDate"], {
+      offset: "resume-here",
+      pageSize: 50,
+    });
+
+    expect(page).toMatchObject({ offset: "next-page" });
+    expect(page.records.map((record) => record.id)).toEqual(["recPage"]);
+    const url = String(fetchFunction.mock.calls[0]?.[0]);
+    expect(url).toContain("pageSize=50");
+    expect(url).toContain("offset=resume-here");
+    expect(client.getRequestMetrics()).toEqual({ requestsMade: 1, pagesFetched: 1 });
+  });
+
   it("merges legacy field-id and V5 field-name projections", async () => {
     const fetchFunction = vi.fn<typeof fetch>()
       .mockResolvedValueOnce(response({ records: [{

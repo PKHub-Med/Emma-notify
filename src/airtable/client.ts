@@ -2,10 +2,12 @@ import type {
   AirtablePage,
   AirtableRecord,
   AirtableListOptions,
+  AirtablePageOptions,
   AirtableIncrementalSource,
   AirtableRecordSource,
   AirtableRequestMetrics,
   AirtableMetricsSource,
+  AirtablePaginatedSource,
 } from "./types.js";
 
 const RETRYABLE_STATUSES = new Set([429, 500, 502, 503, 504]);
@@ -46,7 +48,8 @@ export type AirtableClientOptions = {
   sleep?: (milliseconds: number) => Promise<void>;
 };
 
-export class AirtableClient implements AirtableRecordSource, AirtableIncrementalSource, AirtableMetricsSource {
+export class AirtableClient implements AirtableRecordSource, AirtableIncrementalSource,
+  AirtableMetricsSource, AirtablePaginatedSource {
   private readonly baseId: string;
   private readonly personalAccessToken: string;
   private readonly fetchFunction: FetchFunction;
@@ -149,6 +152,29 @@ export class AirtableClient implements AirtableRecordSource, AirtableIncremental
     return record;
   }
 
+  async fetchRecordsPage(
+    tableId: string,
+    fieldIds: readonly string[],
+    options: AirtablePageOptions = {},
+  ): Promise<AirtablePage> {
+    if (fieldIds.some((field) => !field.startsWith("fld"))) {
+      throw new Error("Paginated Airtable reads require field IDs");
+    }
+    const pageSize = options.pageSize ?? 100;
+    if (!Number.isInteger(pageSize) || pageSize < 1 || pageSize > 100) {
+      throw new Error("Airtable pageSize must be an integer between 1 and 100");
+    }
+    return this.fetchPage(
+      tableId,
+      fieldIds,
+      options,
+      options.offset,
+      undefined,
+      true,
+      pageSize,
+    );
+  }
+
   getRequestMetrics(): AirtableRequestMetrics {
     return { requestsMade: this.requestsMade, pagesFetched: this.pagesFetched };
   }
@@ -160,11 +186,12 @@ export class AirtableClient implements AirtableRecordSource, AirtableIncremental
     offset?: string,
     operationMetrics?: AirtableRequestMetrics,
     returnFieldsByFieldId = true,
+    pageSize = 100,
   ): Promise<AirtablePage> {
     const url = new URL(
       `https://api.airtable.com/v0/${encodeURIComponent(this.baseId)}/${encodeURIComponent(tableId)}`,
     );
-    url.searchParams.set("pageSize", "100");
+    url.searchParams.set("pageSize", String(pageSize));
     url.searchParams.set("returnFieldsByFieldId", String(returnFieldsByFieldId));
     for (const fieldId of fieldIds) url.searchParams.append("fields[]", fieldId);
     if (options.filterByFormula) {

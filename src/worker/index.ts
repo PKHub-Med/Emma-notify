@@ -63,6 +63,10 @@ import {
   PrismaPortalRefreshWorkerStore,
   runPortalRefreshWorkerOnce,
 } from "./portal-refresh.js";
+import {
+  PrismaInspectionReconcileStore,
+  runInspectionReconcile,
+} from "./inspection-reconcile.js";
 
 const HEARTBEAT_INTERVAL_MS = 30_000;
 const DELIVERY_PLANNER_INTERVAL_MS = 15_000;
@@ -88,6 +92,7 @@ const communicationDeliveryStore = new PrismaCommunicationDeliveryStore(prisma);
 const communicationDeliveryCleanupStore = new PrismaCommunicationDeliveryCleanupStore(prisma);
 const communicationEmailStore = new PrismaCommunicationEmailSendStore(prisma);
 const portalRefreshStore = new PrismaPortalRefreshWorkerStore(prisma);
+const inspectionReconcileStore = new PrismaInspectionReconcileStore(prisma);
 const communicationTemplateDataSource = new PrismaCommunicationTemplateDataSource(
   prisma,
   airtable,
@@ -143,6 +148,7 @@ let deliveryPlannerTimer: NodeJS.Timeout | undefined;
 let communicationEmailTimer: NodeJS.Timeout | undefined;
 let assetProcessorTimer: NodeJS.Timeout | undefined;
 let portalRefreshTimer: NodeJS.Timeout | undefined;
+let inspectionReconcileTimer: NodeJS.Timeout | undefined;
 let incrementalRunning = false;
 let taskRunning = false;
 let hospitalRunning = false;
@@ -152,6 +158,7 @@ let deliveryPlannerRunning = false;
 let communicationEmailRunning = false;
 let assetProcessorRunning = false;
 let portalRefreshRunning = false;
+let inspectionReconcileRunning = false;
 let shuttingDown = false;
 
 async function writeHeartbeat(): Promise<void> {
@@ -261,6 +268,13 @@ function startPollingLoops(): void {
   portalRefreshTimer = setInterval(() => {
     void pollPortalRefresh();
   }, PORTAL_REFRESH_INTERVAL_MS);
+  if (config.airtableInspectionReconcileEnabled) {
+    // Deliberately no immediate invocation. Production's first run must be
+    // explicitly approved and launched through reconcile:inspections.
+    inspectionReconcileTimer = setInterval(() => {
+      void pollInspectionReconcile();
+    }, config.airtableInspectionReconcileSeconds * 1_000);
+  }
   if (config.communicationAssetsEnabled) {
     assetProcessorTimer = setInterval(() => {
       void pollAssetProcessor();
@@ -277,8 +291,27 @@ function startPollingLoops(): void {
   void pollPortalRefresh();
 }
 
+async function pollInspectionReconcile(): Promise<void> {
+  if (inspectionReconcileRunning || incrementalRunning || portalRefreshRunning ||
+      shuttingDown) return;
+  inspectionReconcileRunning = true;
+  try {
+    await runInspectionReconcile({
+      airtable,
+      store: inspectionReconcileStore,
+      requirePriorSuccess: true,
+      log: (message) => console.info(message),
+    });
+  } catch {
+    // The reconcile writes its resumable cursor and a safe error code. A later
+    // scheduled or manual run resumes from the last committed Airtable page.
+  } finally {
+    inspectionReconcileRunning = false;
+  }
+}
+
 async function pollPortalRefresh(): Promise<void> {
-  if (portalRefreshRunning || incrementalRunning || taskRunning || deviceRunning ||
+  if (portalRefreshRunning || inspectionReconcileRunning || incrementalRunning || taskRunning || deviceRunning ||
     shuttingDown) return;
   portalRefreshRunning = true;
   try {
@@ -459,7 +492,7 @@ async function pollTasks(
 }
 
 async function pollIncremental(): Promise<void> {
-  if (incrementalRunning || portalRefreshRunning || shuttingDown) return;
+  if (incrementalRunning || inspectionReconcileRunning || portalRefreshRunning || shuttingDown) return;
   incrementalRunning = true;
   try {
     await runIncrementalSync({
@@ -498,6 +531,7 @@ async function shutdown(signal: NodeJS.Signals): Promise<void> {
   if (communicationEmailTimer) clearInterval(communicationEmailTimer);
   if (assetProcessorTimer) clearInterval(assetProcessorTimer);
   if (portalRefreshTimer) clearInterval(portalRefreshTimer);
+  if (inspectionReconcileTimer) clearInterval(inspectionReconcileTimer);
   await prisma.$disconnect();
   console.info("[worker] Shutdown complete");
 }

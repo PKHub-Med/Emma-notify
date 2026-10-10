@@ -115,6 +115,8 @@ describe("loadWorkerConfig", () => {
       airtableReminderCheckSeconds: 900,
       airtableDevicePollSeconds: 600,
       airtableDeviceReconcileSeconds: 21600,
+      airtableInspectionReconcileEnabled: false,
+      airtableInspectionReconcileSeconds: 86400,
       digestQuietMinutes: 1,
       timezone: "Europe/Warsaw",
       emailMode: "TEST",
