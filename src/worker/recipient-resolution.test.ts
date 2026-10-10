@@ -5,7 +5,14 @@ import {
   CommunicationScenario,
   CommunicationSourceEntityType,
 } from "../generated/prisma/enums.js";
-import { CONTACT_FIELDS, HOSPITAL_FIELDS, TASK_FIELDS } from "../airtable/field-ids.js";
+import {
+  AIRTABLE_TABLE_IDS,
+  CONTACT_FIELDS,
+  HOSPITAL_FIELDS,
+  SERVICE_ORDER_FIELDS,
+  TASK_FIELDS,
+} from "../airtable/field-ids.js";
+import { EMMA_COMMUNICATION_CONTRACT } from "../airtable/template-scenario.js";
 import type { AirtableIncrementalSource, AirtableRecord } from "../airtable/types.js";
 import {
   MAX_RECIPIENT_RESOLUTION_ATTEMPTS,
@@ -225,8 +232,59 @@ describe("SERVICE_ORDER recipient resolution", () => {
     expect(result.airtable.fetchRecord).not.toHaveBeenCalled();
   });
 
-  it("does not send or fall back when EMMA: mail DT is empty", async () => {
-    const result = await resolveService("   ");
+  it("refetches a delayed formula value and resolves it from Airtable", async () => {
+    const result = await resolveService(null, CommunicationScenario.REPAIR_RECEIVED, {}, {
+      currentRecord: serviceOrderRecord(
+        CommunicationScenario.REPAIR_RECEIVED,
+        [" delayed@hospital.pl "],
+      ),
+      debugEnabled: true,
+    });
+    expect(ready(result.store)).toMatchObject([{
+      email: "delayed@hospital.pl",
+      normalizedEmail: "delayed@hospital.pl",
+    }]);
+    expect(result.store.debugTrace?.repairRecipientResolution).toMatchObject({
+      source: "AIRTABLE_REFETCH",
+      airtableRefetched: true,
+    });
+    expect(result.store.debugTrace?.finalRecipients[0]?.source)
+      .toBe("AIRTABLE_REFETCH.SERVICE_ORDER_FIELDS.repairRecipientEmail");
+  });
+
+  it("applies opt-out to an address obtained by Airtable refetch", async () => {
+    const store = new MemoryStore();
+    store.optedOut.add("recHospital:opted-out@example.pl");
+    const airtable = airtableSource({
+      recService: serviceOrderRecord(
+        CommunicationScenario.REPAIR_RECEIVED,
+        ["opted-out@example.pl"],
+      ),
+    });
+    await resolveCommunicationEventRecipients({
+      event: {
+        id: "evtService",
+        sourceRecordId: "recService",
+        sourceEntityType: CommunicationSourceEntityType.SERVICE_ORDER,
+        scenario: CommunicationScenario.REPAIR_RECEIVED,
+        eventSnapshot: {
+          repairRecipientEmail: null,
+          sourceHospitalRecordId: "recHospital",
+        },
+      },
+      airtable,
+      store,
+      tiemedFallbackEmail: fallbackEmail,
+    });
+    expect(invalid(store)).toMatchObject([{ resolutionReason: "OPTED_OUT" }]);
+    expect(ready(store)).toHaveLength(0);
+  });
+
+  it("marks an empty EMMA: mail DT INVALID only after the final retry", async () => {
+    const result = await resolveService("   ", CommunicationScenario.REPAIR_RECEIVED, {}, {
+      currentRecord: serviceOrderRecord(CommunicationScenario.REPAIR_RECEIVED, []),
+      attemptCount: MAX_RECIPIENT_RESOLUTION_ATTEMPTS - 1,
+    });
     expect(ready(result.store)).toHaveLength(0);
     expect(fallback(result.store)).toHaveLength(0);
     expect(invalid(result.store)).toMatchObject([{
@@ -235,8 +293,11 @@ describe("SERVICE_ORDER recipient resolution", () => {
     expect(result.logs.join(" ")).toContain("reason=REPAIR_RECIPIENT_EMAIL_MISSING");
   });
 
-  it("does not send or fall back when EMMA: mail DT is invalid", async () => {
-    const result = await resolveService("not-an-email");
+  it("marks an invalid EMMA: mail DT INVALID only after the final retry", async () => {
+    const result = await resolveService("not-an-email", CommunicationScenario.REPAIR_RECEIVED, {}, {
+      currentRecord: serviceOrderRecord(CommunicationScenario.REPAIR_RECEIVED, ["still-invalid"]),
+      attemptCount: MAX_RECIPIENT_RESOLUTION_ATTEMPTS - 1,
+    });
     expect(ready(result.store)).toHaveLength(0);
     expect(fallback(result.store)).toHaveLength(0);
     expect(invalid(result.store)).toMatchObject([{
@@ -245,13 +306,64 @@ describe("SERVICE_ORDER recipient resolution", () => {
     expect(result.logs.join(" ")).toContain("reason=REPAIR_RECIPIENT_EMAIL_INVALID");
   });
 
-  it("never reads Imię i nazwisko when EMMA: mail DT is empty", async () => {
+  it("never reads contacts or uses fallback when EMMA: mail DT is empty", async () => {
     const result = await resolveService(null, CommunicationScenario.REPAIR_RECEIVED, {
       contactRecordIds: ["recExistingContact"],
+    }, {
+      currentRecord: serviceOrderRecord(CommunicationScenario.REPAIR_RECEIVED, []),
     });
     expect(ready(result.store)).toHaveLength(0);
     expect(fallback(result.store)).toHaveLength(0);
-    expect(result.airtable.fetchRecord).not.toHaveBeenCalled();
+    expect(result.store.failedReason).toBe("REPAIR_RECIPIENT_EMAIL_MISSING");
+    expect(result.airtable.fetchRecord).toHaveBeenCalledTimes(1);
+    expect(result.airtable.fetchRecord).toHaveBeenCalledWith(
+      AIRTABLE_TABLE_IDS.serviceOrders,
+      "recService",
+      expect.arrayContaining([SERVICE_ORDER_FIELDS.repairRecipientEmail]),
+    );
+    expect(result.airtable.fetchRecord).not.toHaveBeenCalledWith(
+      AIRTABLE_TABLE_IDS.contacts,
+      expect.anything(),
+      expect.anything(),
+    );
+  });
+
+  it("invalidates instead of using a recipient from a changed scenario", async () => {
+    const result = await resolveService(null, CommunicationScenario.REPAIR_RECEIVED, {}, {
+      currentRecord: serviceOrderRecord(
+        CommunicationScenario.REPAIR_COMPLETED,
+        ["wrong-scenario@hospital.pl"],
+      ),
+    });
+    expect(invalid(result.store)).toMatchObject([{
+      resolutionReason: "REPAIR_RECIPIENT_SCENARIO_CHANGED",
+    }]);
+    expect(ready(result.store)).toHaveLength(0);
+  });
+
+  it("invalidates instead of using a recipient from a changed hospital", async () => {
+    const result = await resolveService(null, CommunicationScenario.REPAIR_RECEIVED, {}, {
+      currentRecord: serviceOrderRecord(
+        CommunicationScenario.REPAIR_RECEIVED,
+        ["wrong-hospital@example.pl"],
+        "recOtherHospital",
+      ),
+    });
+    expect(invalid(result.store)).toMatchObject([{
+      resolutionReason: "REPAIR_RECIPIENT_HOSPITAL_CHANGED",
+    }]);
+    expect(ready(result.store)).toHaveLength(0);
+  });
+
+  it("retries an ambiguous live formula and never chooses the first address", async () => {
+    const result = await resolveService(null, CommunicationScenario.REPAIR_RECEIVED, {}, {
+      currentRecord: serviceOrderRecord(
+        CommunicationScenario.REPAIR_RECEIVED,
+        ["one@example.pl", "two@example.pl"],
+      ),
+    });
+    expect(result.store.failedReason).toBe("REPAIR_RECIPIENT_EMAIL_AMBIGUOUS");
+    expect(ready(result.store)).toHaveLength(0);
   });
 });
 
@@ -372,6 +484,62 @@ describe("recipient resolution idempotency and safety", () => {
 });
 
 describe("recipient resolution retry", () => {
+  it("backs off until a delayed repair address appears without creating another event", async () => {
+    const store = new RepairRetryStore();
+    let calls = 0;
+    const airtable = {
+      fetchAllRecords: vi.fn(async () => []),
+      fetchRecord: vi.fn(async () => {
+        calls += 1;
+        return serviceOrderRecord(
+          CommunicationScenario.REPAIR_RECEIVED,
+          calls === 1 ? [] : ["ready-after-retry@example.pl"],
+        );
+      }),
+    } satisfies AirtableIncrementalSource;
+    let clock = new Date("2026-08-13T10:00:00Z");
+    const run = () => resolvePendingCommunicationRecipients({
+      airtable, store, tiemedFallbackEmail: fallbackEmail, now: () => clock,
+    });
+
+    expect(await run()).toBe(1);
+    expect(store.resolvedAt).toBeNull();
+    expect(store.nextAt?.toISOString()).toBe("2026-08-13T10:00:15.000Z");
+    expect(store.attempts).toBe(1);
+    clock = store.nextAt!;
+    expect(await run()).toBe(1);
+    expect(ready(store)).toMatchObject([{
+      normalizedEmail: "ready-after-retry@example.pl",
+    }]);
+    expect(calls).toBe(2);
+    expect(await run()).toBe(0);
+  });
+
+  it("exhausts repair-address retries as INVALID without Tiemed fallback", async () => {
+    const store = new RepairRetryStore();
+    const airtable = airtableSource({
+      recService: serviceOrderRecord(CommunicationScenario.REPAIR_RECEIVED, []),
+    });
+    let clock = new Date("2026-08-13T10:00:00Z");
+    const run = () => resolvePendingCommunicationRecipients({
+      airtable, store, tiemedFallbackEmail: fallbackEmail, now: () => clock,
+    });
+
+    for (let attempt = 1; attempt < MAX_RECIPIENT_RESOLUTION_ATTEMPTS; attempt += 1) {
+      expect(await run()).toBe(1);
+      expect(store.resolvedAt).toBeNull();
+      expect(fallback(store)).toHaveLength(0);
+      clock = store.nextAt!;
+    }
+    expect(await run()).toBe(1);
+    expect(invalid(store)).toMatchObject([{
+      resolutionReason: "REPAIR_RECIPIENT_EMAIL_MISSING",
+    }]);
+    expect(fallback(store)).toHaveLength(0);
+    expect(airtable.fetchRecord).toHaveBeenCalledTimes(MAX_RECIPIENT_RESOLUTION_ATTEMPTS);
+    expect(await run()).toBe(0);
+  });
+
   it("backs off after Airtable failure and resolves when the retry succeeds", async () => {
     const store = new RetryStore();
     let calls = 0;
@@ -490,6 +658,23 @@ class RetryStore extends MemoryStore {
   }
 }
 
+class RepairRetryStore extends RetryStore {
+  override async findUnresolved(now: Date): Promise<RecipientResolutionEvent[]> {
+    if (this.resolvedAt || (this.nextAt && this.nextAt.getTime() > now.getTime())) return [];
+    return [{
+      id: "evtService",
+      sourceRecordId: "recService",
+      sourceEntityType: CommunicationSourceEntityType.SERVICE_ORDER,
+      scenario: CommunicationScenario.REPAIR_RECEIVED,
+      eventSnapshot: {
+        repairRecipientEmail: null,
+        sourceHospitalRecordId: "recHospital",
+      },
+      recipientResolutionAttemptCount: this.attempts,
+    }];
+  }
+}
+
 async function resolveTask(
   ids: string[], contacts: Record<string, AirtableRecord>, extraSnapshot = {},
   configuredFallback: string | null = fallbackEmail,
@@ -508,10 +693,16 @@ async function resolveService(
   repairRecipientEmail: string | null,
   scenario = CommunicationScenario.REPAIR_RECEIVED,
   extraSnapshot: Record<string, unknown> = {},
+  options: {
+    currentRecord?: AirtableRecord;
+    attemptCount?: number;
+    debugEnabled?: boolean;
+  } = {},
 ) {
   const store = new MemoryStore();
   const airtable = airtableSource({
     recExistingContact: contact("recExistingContact", "contact@hospital.pl"),
+    ...(options.currentRecord ? { recService: options.currentRecord } : {}),
   });
   const logs: string[] = [];
   await resolveCommunicationEventRecipients({
@@ -520,9 +711,17 @@ async function resolveService(
       sourceRecordId: "recService",
       sourceEntityType: CommunicationSourceEntityType.SERVICE_ORDER,
       scenario,
-      eventSnapshot: { repairRecipientEmail, ...extraSnapshot },
+      eventSnapshot: {
+        repairRecipientEmail,
+        sourceHospitalRecordId: "recHospital",
+        ...extraSnapshot,
+      },
+      ...(options.attemptCount === undefined
+        ? {}
+        : { recipientResolutionAttemptCount: options.attemptCount }),
     },
     airtable, store, tiemedFallbackEmail: fallbackEmail,
+    debugEnabled: options.debugEnabled,
     log: (message) => logs.push(message),
   });
   return { store, airtable, logs };
@@ -579,6 +778,32 @@ function hospital(id: string, contactIds: string[]): AirtableRecord {
     id,
     createdTime: "2026-08-11T08:00:00.000Z",
     fields: { [HOSPITAL_FIELDS.contactLinks]: contactIds },
+  };
+}
+
+function serviceOrderRecord(
+  scenario: CommunicationScenario,
+  repairRecipientEmail: unknown,
+  hospitalRecordId = "recHospital",
+): AirtableRecord {
+  const statusByScenario: Partial<Record<CommunicationScenario, string>> = {
+    [CommunicationScenario.REPAIR_RECEIVED]:
+      EMMA_COMMUNICATION_CONTRACT.repair.receivedState,
+    [CommunicationScenario.REPAIR_DELAYED_PARTS]:
+      EMMA_COMMUNICATION_CONTRACT.repair.delayedPartsState,
+    [CommunicationScenario.REPAIR_COMPLETED]:
+      EMMA_COMMUNICATION_CONTRACT.repair.completedState,
+  };
+  return {
+    id: "recService",
+    createdTime: "2026-08-11T08:00:00.000Z",
+    fields: {
+      [SERVICE_ORDER_FIELDS.repairRecipientEmail]: repairRecipientEmail,
+      [SERVICE_ORDER_FIELDS.emmaCustomerStatus]: statusByScenario[scenario],
+      [SERVICE_ORDER_FIELDS.emmaMailTemplate]:
+        EMMA_COMMUNICATION_CONTRACT.repair.template,
+      [SERVICE_ORDER_FIELDS.sourceHospitalLink]: [hospitalRecordId],
+    },
   };
 }
 

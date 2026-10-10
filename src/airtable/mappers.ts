@@ -102,7 +102,7 @@ export function mapServiceOrder(record: AirtableRecord): MappedCase {
     faultDescription: toOptionalString(
       record.fields[SERVICE_ORDER_FIELDS.faultDescription],
     ),
-    repairRecipientEmail: rawOptionalString(
+    repairRecipientEmail: parseRepairRecipientEmail(
       record.fields[SERVICE_ORDER_FIELDS.repairRecipientEmail],
     ),
     department: toOptionalString(record.fields[SERVICE_ORDER_FIELDS.department]),
@@ -311,8 +311,36 @@ export function toEstimatedDurationSeconds(value: unknown): number | null {
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
 }
 
-function rawOptionalString(value: unknown): string | null {
-  return typeof value === "string" && value.trim() ? value : null;
+export class AmbiguousRepairRecipientEmailError extends Error {
+  readonly code = "REPAIR_RECIPIENT_EMAIL_AMBIGUOUS";
+
+  constructor() {
+    super("REPAIR_RECIPIENT_EMAIL_AMBIGUOUS");
+    this.name = "AmbiguousRepairRecipientEmailError";
+  }
+}
+
+/**
+ * Parses only the `EMMA: mail DT` contract. Airtable may return this formula as
+ * either a scalar string or a multiple-lookup-style array. Other mapper fields
+ * deliberately keep their existing parsing semantics.
+ */
+export function parseRepairRecipientEmail(value: unknown): string | null {
+  if (typeof value === "string") return value.trim() ? value : null;
+  if (!Array.isArray(value)) return null;
+
+  const addresses = value.filter((item): item is string =>
+    typeof item === "string" && item.trim().length > 0);
+  const distinct = new Map<string, string>();
+  for (const address of addresses) {
+    const key = address.trim().toLowerCase();
+    if (!distinct.has(key)) distinct.set(key, address);
+  }
+  if (distinct.size === 0) return null;
+  if (distinct.size > 1) {
+    throw new AmbiguousRepairRecipientEmailError();
+  }
+  return distinct.values().next().value ?? null;
 }
 
 export function toSingleLookupString(value: unknown): string | null {

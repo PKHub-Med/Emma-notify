@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { CaseType } from "../generated/prisma/enums.js";
 import { INSPECTION_FIELDS, SERVICE_ORDER_FIELDS } from "./field-ids.js";
-import { mapInspection, mapServiceOrder } from "./mappers.js";
+import {
+  AmbiguousRepairRecipientEmailError,
+  mapInspection,
+  mapServiceOrder,
+  parseRepairRecipientEmail,
+} from "./mappers.js";
 import type { AirtableRecord } from "./types.js";
 import { toBusinessNumber } from "./values.js";
 
@@ -16,6 +21,27 @@ describe("toBusinessNumber", () => {
 });
 
 describe("case mappers", () => {
+  it.each([
+    [" Repair@Hospital.PL ", " Repair@Hospital.PL "],
+    [[" Repair@Hospital.PL "], " Repair@Hospital.PL "],
+    [null, null],
+    [undefined, null],
+    [[], null],
+    [["", "   "], null],
+  ])("parses EMMA: mail DT without changing other Airtable parsers (%j)", (input, expected) => {
+    expect(parseRepairRecipientEmail(input)).toBe(expected);
+  });
+
+  it("rejects multiple distinct EMMA: mail DT addresses as ambiguous", () => {
+    expect(() => parseRepairRecipientEmail(["one@example.pl", "two@example.pl"]))
+      .toThrow(AmbiguousRepairRecipientEmailError);
+  });
+
+  it("accepts duplicate representations of the same EMMA: mail DT address", () => {
+    expect(parseRepairRecipientEmail([" One@Example.PL ", "one@example.pl"]))
+      .toBe(" One@Example.PL ");
+  });
+
   it("maps a service order using customer-facing status and record IDs", () => {
     const mapped = mapServiceOrder(record("recService", {
       [SERVICE_ORDER_FIELDS.businessNumber]: 42,
@@ -68,6 +94,14 @@ describe("case mappers", () => {
     expect(mapped.completedAt?.toISOString()).toBe("2026-08-07T14:45:00.000Z");
     expect(mapped.sourceSnapshot.reportedAtRaw).toBe("2026-08-02T07:30:00.000Z");
     expect(mapped.sourceSnapshot.completedAt).toBe("2026-08-07T14:45:00.000Z");
+  });
+
+  it("maps a single-value EMMA: mail DT formula array", () => {
+    const mapped = mapServiceOrder(record("recService", {
+      [SERVICE_ORDER_FIELDS.repairRecipientEmail]: ["bartosz.lakomy@wp.pl"],
+    }));
+    expect(mapped.repairRecipientEmail).toBe("bartosz.lakomy@wp.pl");
+    expect(mapped.sourceSnapshot.repairRecipientEmail).toBe("bartosz.lakomy@wp.pl");
   });
 
   it("does not fall back to source or sync timestamps when reportedAt is absent", () => {

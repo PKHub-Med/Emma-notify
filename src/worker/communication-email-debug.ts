@@ -26,6 +26,11 @@ export type RecipientResolutionDebugTrace = {
   hospitalRecordId: string | null;
   hospitalName: string | null;
   sourceFields: RecipientDebugField[];
+  repairRecipientResolution?: {
+    source: "EVENT_SNAPSHOT" | "AIRTABLE_REFETCH";
+    airtableRefetched: boolean;
+    refetchedAt: string | null;
+  };
   contacts: RecipientDebugContact[];
   consideredAddresses: {
     address: string | null;

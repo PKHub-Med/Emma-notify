@@ -14,11 +14,17 @@ import {
   TASK_FIELDS,
 } from "../airtable/field-ids.js";
 import {
+  AmbiguousRepairRecipientEmailError,
+  parseRepairRecipientEmail,
+} from "../airtable/mappers.js";
+import {
   mapContact,
   resolveRecipient,
   resolveRepairEmailRecipient,
 } from "../airtable/recipient.js";
+import { resolveCommunicationScenario } from "../airtable/template-scenario.js";
 import type { AirtableIncrementalSource } from "../airtable/types.js";
+import { toLinkedRecordIds, toOptionalString } from "../airtable/values.js";
 import { normalizeEmail } from "../shared/normalize-email.js";
 import type {
   RecipientDebugContact,
@@ -28,6 +34,12 @@ import type {
 
 const RESOLUTION_LIMIT = 25;
 export const MAX_RECIPIENT_RESOLUTION_ATTEMPTS = 4;
+const REPAIR_RECIPIENT_REFRESH_FIELDS = [
+  SERVICE_ORDER_FIELDS.repairRecipientEmail,
+  SERVICE_ORDER_FIELDS.emmaCustomerStatus,
+  SERVICE_ORDER_FIELDS.emmaMailTemplate,
+  SERVICE_ORDER_FIELDS.sourceHospitalLink,
+] as const;
 
 export type RecipientResolutionEvent = {
   id: string;
@@ -435,6 +447,13 @@ function createDebugTrace(event: RecipientResolutionEvent): RecipientResolutionD
     hospitalRecordId: snapshotString(snapshot, "sourceHospitalRecordId"),
     hospitalName: snapshotString(snapshot, "hospitalName"),
     sourceFields,
+    ...(task ? {} : {
+      repairRecipientResolution: {
+        source: "EVENT_SNAPSHOT" as const,
+        airtableRefetched: false,
+        refetchedAt: null,
+      },
+    }),
     contacts: [],
     consideredAddresses: [],
     finalRecipients: [],
@@ -444,6 +463,7 @@ function createDebugTrace(event: RecipientResolutionEvent): RecipientResolutionD
 async function resolveRepairRecipient(
   input: {
     event: RecipientResolutionEvent;
+    airtable: AirtableIncrementalSource;
     store: RecipientResolutionStore;
     now?: () => Date;
     log?: (message: string) => void;
@@ -456,43 +476,121 @@ async function resolveRepairRecipient(
   const rawValue = isObject(input.event.eventSnapshot)
     ? input.event.eventSnapshot.repairRecipientEmail
     : null;
-  const resolved = resolveRepairEmailRecipient(
+  let resolved = resolveRepairEmailRecipient(
     typeof rawValue === "string" ? rawValue : null,
   );
+  let recipientSource = "SERVICE_ORDER_FIELDS.repairRecipientEmail";
+
+  if (resolved.eligibilityReason !== "ELIGIBLE") {
+    let currentRecord;
+    try {
+      currentRecord = await input.airtable.fetchRecord(
+        AIRTABLE_TABLE_IDS.serviceOrders,
+        input.event.sourceRecordId,
+        REPAIR_RECIPIENT_REFRESH_FIELDS,
+      );
+    } catch {
+      await retryOrInvalidateRepairRecipient(
+        input, recipients, debugTrace, "REPAIR_RECIPIENT_AIRTABLE_READ_FAILED",
+        null, "AIRTABLE_REFETCH", resolvedAt,
+      );
+      return;
+    }
+
+    const refetchedAt = resolvedAt.toISOString();
+    if (debugTrace) {
+      debugTrace.repairRecipientResolution = {
+        source: "AIRTABLE_REFETCH",
+        airtableRefetched: true,
+        refetchedAt,
+      };
+      debugTrace.sourceFields.push(
+        debugField(
+          "AIRTABLE_REFETCH.SERVICE_ORDER_FIELDS.repairRecipientEmail",
+          SERVICE_ORDER_FIELDS.repairRecipientEmail,
+          "EMMA: mail DT",
+          currentRecord.fields[SERVICE_ORDER_FIELDS.repairRecipientEmail],
+        ),
+        debugField(
+          "AIRTABLE_REFETCH.SERVICE_ORDER_FIELDS.emmaCustomerStatus",
+          SERVICE_ORDER_FIELDS.emmaCustomerStatus,
+          null,
+          currentRecord.fields[SERVICE_ORDER_FIELDS.emmaCustomerStatus],
+        ),
+        debugField(
+          "AIRTABLE_REFETCH.SERVICE_ORDER_FIELDS.emmaMailTemplate",
+          SERVICE_ORDER_FIELDS.emmaMailTemplate,
+          null,
+          currentRecord.fields[SERVICE_ORDER_FIELDS.emmaMailTemplate],
+        ),
+        debugField(
+          "AIRTABLE_REFETCH.SERVICE_ORDER_FIELDS.sourceHospitalLink",
+          SERVICE_ORDER_FIELDS.sourceHospitalLink,
+          null,
+          currentRecord.fields[SERVICE_ORDER_FIELDS.sourceHospitalLink],
+        ),
+      );
+    }
+
+    const currentScenario = resolveCommunicationScenario({
+      sourceEntityType: "SERVICE_ORDER",
+      emmaCustomerStatus: toOptionalString(
+        currentRecord.fields[SERVICE_ORDER_FIELDS.emmaCustomerStatus],
+      ),
+      emmaMailTemplate: toOptionalString(
+        currentRecord.fields[SERVICE_ORDER_FIELDS.emmaMailTemplate],
+      ),
+    });
+    if (currentScenario !== input.event.scenario) {
+      await invalidateRepairRecipient(
+        input, recipients, debugTrace, "REPAIR_RECIPIENT_SCENARIO_CHANGED",
+        null, "AIRTABLE_REFETCH", resolvedAt,
+      );
+      return;
+    }
+
+    const currentHospitalRecordIds = toLinkedRecordIds(
+      currentRecord.fields[SERVICE_ORDER_FIELDS.sourceHospitalLink],
+    );
+    if (currentHospitalRecordIds.length > 1 ||
+        (currentHospitalRecordIds[0] ?? null) !== sourceHospitalRecordId) {
+      await invalidateRepairRecipient(
+        input, recipients, debugTrace, "REPAIR_RECIPIENT_HOSPITAL_CHANGED",
+        null, "AIRTABLE_REFETCH", resolvedAt,
+      );
+      return;
+    }
+
+    let currentEmail: string | null;
+    try {
+      currentEmail = parseRepairRecipientEmail(
+        currentRecord.fields[SERVICE_ORDER_FIELDS.repairRecipientEmail],
+      );
+    } catch (error) {
+      const reason = error instanceof AmbiguousRepairRecipientEmailError
+        ? "REPAIR_RECIPIENT_EMAIL_AMBIGUOUS"
+        : "REPAIR_RECIPIENT_EMAIL_INVALID";
+      await retryOrInvalidateRepairRecipient(
+        input, recipients, debugTrace, reason, null, "AIRTABLE_REFETCH", resolvedAt,
+      );
+      return;
+    }
+    resolved = resolveRepairEmailRecipient(currentEmail);
+    recipientSource = "AIRTABLE_REFETCH.SERVICE_ORDER_FIELDS.repairRecipientEmail";
+    if (resolved.eligibilityReason !== "ELIGIBLE") {
+      const reason = resolved.eligibilityReason === "MISSING_EMAIL"
+        ? "REPAIR_RECIPIENT_EMAIL_MISSING"
+        : "REPAIR_RECIPIENT_EMAIL_INVALID";
+      await retryOrInvalidateRepairRecipient(
+        input, recipients, debugTrace, reason, resolved.email,
+        recipientSource, resolvedAt,
+      );
+      return;
+    }
+  }
+
   const trimmedEmail = resolved.email ?? "";
   const normalizedEmail = resolved.normalizedEmail;
-  let reason: "REPAIR_RECIPIENT_EMAIL_MISSING" | "REPAIR_RECIPIENT_EMAIL_INVALID" | null = null;
-
-  if (resolved.eligibilityReason === "MISSING_EMAIL") {
-    reason = "REPAIR_RECIPIENT_EMAIL_MISSING";
-  } else if (resolved.eligibilityReason === "INVALID_EMAIL") {
-    reason = "REPAIR_RECIPIENT_EMAIL_INVALID";
-  }
-
-  if (reason) {
-    recipients.push({
-      recipientType: CommunicationRecipientType.CLIENT,
-      sourceContactRecordId: null,
-      email: trimmedEmail || null,
-      normalizedEmail: null,
-      recipientKey: `INVALID:${reason}`,
-      resolutionStatus: CommunicationRecipientResolutionStatus.INVALID,
-      resolutionReason: reason,
-    });
-    debugTrace?.consideredAddresses.push({
-      address: trimmedEmail || null,
-      normalizedAddress: null,
-      source: "SERVICE_ORDER_FIELDS.repairRecipientEmail",
-      decision: "REJECTED",
-      reason,
-    });
-    await input.store.markResolved(input.event.id, recipients, resolvedAt, debugTrace);
-    input.log?.(
-      `COMMUNICATION_REPAIR_RECIPIENT_REJECTED eventId=${input.event.id} ` +
-      `scenario=${input.event.scenario} reason=${reason}`,
-    );
-    return;
-  }
 
   if (sourceHospitalRecordId && normalizedEmail &&
       await input.store.isOptedOut(sourceHospitalRecordId, normalizedEmail)) {
@@ -508,7 +606,7 @@ async function resolveRepairRecipient(
     debugTrace?.consideredAddresses.push({
       address: trimmedEmail,
       normalizedAddress: normalizedEmail,
-      source: "SERVICE_ORDER_FIELDS.repairRecipientEmail",
+      source: recipientSource,
       decision: "REJECTED",
       reason: "OPTED_OUT",
     });
@@ -533,13 +631,13 @@ async function resolveRepairRecipient(
     debugTrace.consideredAddresses.push({
       address: trimmedEmail,
       normalizedAddress: normalizedEmail,
-      source: "SERVICE_ORDER_FIELDS.repairRecipientEmail",
+      source: recipientSource,
       decision: "ACCEPTED",
       reason: "ELIGIBLE",
     });
     debugTrace.finalRecipients = [{
       address: normalizedEmail!,
-      source: "SERVICE_ORDER_FIELDS.repairRecipientEmail",
+      source: recipientSource,
       status: CommunicationRecipientResolutionStatus.READY,
       reason: null,
     }];
@@ -548,6 +646,76 @@ async function resolveRepairRecipient(
   input.log?.(
     `COMMUNICATION_RECIPIENTS_RESOLVED eventId=${input.event.id} ` +
     `scenario=${input.event.scenario} recipientCount=1 fallback=false`,
+  );
+}
+
+async function retryOrInvalidateRepairRecipient(
+  input: {
+    event: RecipientResolutionEvent;
+    store: RecipientResolutionStore;
+    now?: () => Date;
+    log?: (message: string) => void;
+  },
+  recipients: CommunicationEventRecipientInput[],
+  debugTrace: RecipientResolutionDebugTrace | undefined,
+  reason: string,
+  email: string | null,
+  source: string,
+  failedAt: Date,
+): Promise<void> {
+  const failedAttempts = (input.event.recipientResolutionAttemptCount ?? 0) + 1;
+  if (failedAttempts < MAX_RECIPIENT_RESOLUTION_ATTEMPTS) {
+    await input.store.markFailed(
+      input.event.id,
+      CommunicationRecipientType.CLIENT,
+      null,
+      reason,
+      failedAt,
+    );
+    input.log?.(
+      `COMMUNICATION_RECIPIENT_RESOLUTION_FAILED eventId=${input.event.id} ` +
+      `reason=${reason} failedAttempts=${failedAttempts}`,
+    );
+    return;
+  }
+  await invalidateRepairRecipient(
+    input, recipients, debugTrace, reason, email, source, failedAt,
+  );
+}
+
+async function invalidateRepairRecipient(
+  input: {
+    event: RecipientResolutionEvent;
+    store: RecipientResolutionStore;
+    log?: (message: string) => void;
+  },
+  recipients: CommunicationEventRecipientInput[],
+  debugTrace: RecipientResolutionDebugTrace | undefined,
+  reason: string,
+  email: string | null,
+  source: string,
+  resolvedAt: Date,
+): Promise<void> {
+  recipients.push({
+    recipientType: CommunicationRecipientType.CLIENT,
+    sourceContactRecordId: null,
+    email,
+    normalizedEmail: null,
+    recipientKey: `INVALID:${reason}`,
+    resolutionStatus: CommunicationRecipientResolutionStatus.INVALID,
+    resolutionReason: reason,
+  });
+  debugTrace?.consideredAddresses.push({
+    address: email,
+    normalizedAddress: null,
+    source,
+    decision: "REJECTED",
+    reason,
+  });
+  await input.store.markResolved(input.event.id, recipients, resolvedAt, debugTrace);
+  input.log?.(
+    `COMMUNICATION_REPAIR_RECIPIENT_REJECTED eventId=${input.event.id} ` +
+    `scenario=${input.event.scenario} reason=${reason}`,
   );
 }
 
