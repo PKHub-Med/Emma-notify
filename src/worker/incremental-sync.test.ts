@@ -232,7 +232,7 @@ describe("incremental status sync", () => {
     source.serviceOrders = [serviceRecord("recService", "B", ["recContact"] )];
     store.seedCase(CaseType.SERVICE_ORDER, "recService", "A");
     await run(source, store, date(0));
-    expect(source.fetchedRecordTables).toEqual([AIRTABLE_TABLE_IDS.contacts]);
+    expect(source.fetchedRecordTables).toEqual([]);
     expect(source.fetchedRecordTables).not.toContain(AIRTABLE_TABLE_IDS.devices);
   });
 
@@ -577,13 +577,14 @@ describe("incremental status sync", () => {
     expect(buffer.sendAfter.getTime()).toBeGreaterThan(firstSendAfter.getTime());
   });
 
-  it("H. creates two independent buffers for two eligible recipients", async () => {
+  it("H. creates one buffer from EMMA: mail DT even when two contacts are linked", async () => {
     const fixture = serviceFixture("A", "B", [
       eligibleContact("recOne", "one@example.com"),
       eligibleContact("recTwo", "two@example.com"),
     ]);
     await fixture.run();
-    expect(fixture.store.buffers).toHaveLength(2);
+    expect(fixture.store.buffers).toHaveLength(1);
+    expect(fixture.store.buffers[0]?.normalizedEmail).toBe("one@example.com");
   });
 
   it("I. persists an event without creating a buffer when no recipient is eligible", async () => {
@@ -676,7 +677,9 @@ function serviceRecord(
 ): AirtableRecord {
   return record(id, {
     [SERVICE_ORDER_FIELDS.customerStatus]: status,
-    [SERVICE_ORDER_FIELDS.contactLinks]: contactIds,
+    ...(contactIds.length > 0
+      ? { [SERVICE_ORDER_FIELDS.repairRecipientEmail]: "one@example.com" }
+      : {}),
     [SERVICE_ORDER_FIELDS.sourceModifiedAt]: modifiedAt.toISOString(),
     ...extraFields,
   });

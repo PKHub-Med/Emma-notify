@@ -210,21 +210,48 @@ describe("TASK recipient resolution", () => {
 });
 
 describe("SERVICE_ORDER recipient resolution", () => {
-  it("resolves one assigned contact as CLIENT", async () => {
-    const result = await resolveService(["recA"], { recA: contact("recA", "a@x.pl") });
-    expect(ready(result.store)).toHaveLength(1);
+  it.each([
+    CommunicationScenario.REPAIR_RECEIVED,
+    CommunicationScenario.REPAIR_DELAYED_PARTS,
+    CommunicationScenario.REPAIR_COMPLETED,
+  ])("uses trimmed EMMA: mail DT directly for %s", async (scenario) => {
+    const result = await resolveService(" Repair@Hospital.PL ", scenario);
+    expect(ready(result.store)).toMatchObject([{
+      sourceContactRecordId: null,
+      email: "Repair@Hospital.PL",
+      normalizedEmail: "repair@hospital.pl",
+    }]);
+    expect(fallback(result.store)).toHaveLength(0);
+    expect(result.airtable.fetchRecord).not.toHaveBeenCalled();
   });
 
-  it("preserves multiple valid assigned contacts", async () => {
-    const result = await resolveService(["recA", "recB"], {
-      recA: contact("recA", "a@x.pl"), recB: contact("recB", "b@x.pl"),
+  it("does not send or fall back when EMMA: mail DT is empty", async () => {
+    const result = await resolveService("   ");
+    expect(ready(result.store)).toHaveLength(0);
+    expect(fallback(result.store)).toHaveLength(0);
+    expect(invalid(result.store)).toMatchObject([{
+      resolutionReason: "REPAIR_RECIPIENT_EMAIL_MISSING",
+    }]);
+    expect(result.logs.join(" ")).toContain("reason=REPAIR_RECIPIENT_EMAIL_MISSING");
+  });
+
+  it("does not send or fall back when EMMA: mail DT is invalid", async () => {
+    const result = await resolveService("not-an-email");
+    expect(ready(result.store)).toHaveLength(0);
+    expect(fallback(result.store)).toHaveLength(0);
+    expect(invalid(result.store)).toMatchObject([{
+      resolutionReason: "REPAIR_RECIPIENT_EMAIL_INVALID",
+    }]);
+    expect(result.logs.join(" ")).toContain("reason=REPAIR_RECIPIENT_EMAIL_INVALID");
+  });
+
+  it("never reads Imię i nazwisko when EMMA: mail DT is empty", async () => {
+    const result = await resolveService(null, CommunicationScenario.REPAIR_RECEIVED, {
+      contactRecordIds: ["recExistingContact"],
     });
-    expect(ready(result.store)).toHaveLength(2);
-  });
-
-  it("uses fallback when no assigned contact has a valid email", async () => {
-    const result = await resolveService(["recA"], { recA: contact("recA", null) });
-    expect(fallback(result.store)).toHaveLength(1);
+    expect(ready(result.store)).toHaveLength(0);
+    expect(fallback(result.store)).toHaveLength(0);
+    expect(result.airtable.fetchRecord).not.toHaveBeenCalled();
   });
 });
 
@@ -477,20 +504,28 @@ async function resolveTask(
   return { store, airtable, logs };
 }
 
-async function resolveService(ids: string[], contacts: Record<string, AirtableRecord>) {
+async function resolveService(
+  repairRecipientEmail: string | null,
+  scenario = CommunicationScenario.REPAIR_RECEIVED,
+  extraSnapshot: Record<string, unknown> = {},
+) {
   const store = new MemoryStore();
-  const airtable = airtableSource(contacts);
+  const airtable = airtableSource({
+    recExistingContact: contact("recExistingContact", "contact@hospital.pl"),
+  });
+  const logs: string[] = [];
   await resolveCommunicationEventRecipients({
     event: {
       id: "evtService",
       sourceRecordId: "recService",
       sourceEntityType: CommunicationSourceEntityType.SERVICE_ORDER,
-      scenario: CommunicationScenario.REPAIR_RECEIVED,
-      eventSnapshot: { contactRecordIds: ids },
+      scenario,
+      eventSnapshot: { repairRecipientEmail, ...extraSnapshot },
     },
     airtable, store, tiemedFallbackEmail: fallbackEmail,
+    log: (message) => logs.push(message),
   });
-  return { store, airtable };
+  return { store, airtable, logs };
 }
 
 async function resolveInspection(

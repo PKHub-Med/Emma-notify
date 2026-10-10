@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { resolveRecipient, type Contact } from "./recipient.js";
+import {
+  resolveRecipient,
+  resolveRepairEmailRecipient,
+  type Contact,
+} from "./recipient.js";
 
 function contact(contactableValue: string, email: string | null): Contact {
   return {
@@ -42,6 +46,34 @@ describe("resolveRecipient", () => {
     expect(resolveRecipient("recContact", contact("TAK", "invalid"))).toMatchObject({
       eligible: false,
       eligibilityReason: "INVALID_EMAIL",
+    });
+  });
+});
+
+describe("resolveRepairEmailRecipient", () => {
+  it("trims and validates EMMA: mail DT without a contact lookup", () => {
+    expect(resolveRepairEmailRecipient(" Repair@Hospital.PL ")).toMatchObject({
+      airtableContactRecordId: "EMMA_MAIL_DT",
+      email: "Repair@Hospital.PL",
+      normalizedEmail: "repair@hospital.pl",
+      eligible: true,
+      resolutionSource: "EMMA_MAIL_DT",
+    });
+  });
+
+  it("rejects an empty value", () => {
+    expect(resolveRepairEmailRecipient("   ")).toMatchObject({
+      eligible: false,
+      eligibilityReason: "MISSING_EMAIL",
+      normalizedEmail: null,
+    });
+  });
+
+  it("rejects an invalid value", () => {
+    expect(resolveRepairEmailRecipient("not-an-email")).toMatchObject({
+      eligible: false,
+      eligibilityReason: "INVALID_EMAIL",
+      normalizedEmail: null,
     });
   });
 });

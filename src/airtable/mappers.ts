@@ -34,6 +34,7 @@ export type MappedCase = {
   inventoryNumber: string | null;
   currentStatus: string | null;
   faultDescription: string | null;
+  repairRecipientEmail: string | null;
   sourceCreatedAt: Date | null;
   reportedAt: Date | null;
   completedAt: Date | null;
@@ -101,6 +102,9 @@ export function mapServiceOrder(record: AirtableRecord): MappedCase {
     faultDescription: toOptionalString(
       record.fields[SERVICE_ORDER_FIELDS.faultDescription],
     ),
+    repairRecipientEmail: rawOptionalString(
+      record.fields[SERVICE_ORDER_FIELDS.repairRecipientEmail],
+    ),
     department: toOptionalString(record.fields[SERVICE_ORDER_FIELDS.department]),
     repairHeroLabel: toOptionalString(record.fields[SERVICE_ORDER_FIELDS.repairHeroLabel]),
     repairHeroDescription: toOptionalString(record.fields[SERVICE_ORDER_FIELDS.repairHeroDescription]),
@@ -165,9 +169,8 @@ export function mapServiceOrder(record: AirtableRecord): MappedCase {
     repairOfferNumber: values.repairOfferNumber,
     repairDescription: values.repairDescription,
     sourceSnapshot: { ...values },
-    contactRecordIds: toLinkedRecordIds(
-      record.fields[SERVICE_ORDER_FIELDS.contactLinks],
-    ),
+    // Repair communication resolves its recipient directly from EMMA: mail DT.
+    contactRecordIds: [],
     invalidDueDate: false,
   };
 }
@@ -241,6 +244,7 @@ export function mapInspection(record: AirtableRecord): MappedCase {
     inventoryNumber: values.inventoryNumber,
     currentStatus: values.currentStatus,
     faultDescription: null,
+    repairRecipientEmail: null,
     sourceCreatedAt: parseAirtableDate(record.createdTime),
     reportedAt: null,
     completedAt: null,
@@ -305,6 +309,10 @@ export function toEstimatedDurationSeconds(value: unknown): number | null {
   if (typeof value !== "string" || !value.trim()) return null;
   const parsed = Number(value.trim().replace(",", "."));
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+}
+
+function rawOptionalString(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value : null;
 }
 
 export function toSingleLookupString(value: unknown): string | null {

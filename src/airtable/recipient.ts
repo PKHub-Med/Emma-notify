@@ -24,8 +24,34 @@ export type ResolvedRecipient = {
   normalizedEmail: string | null;
   eligible: boolean;
   eligibilityReason: EligibilityReason;
-  resolutionSource: "CONTACT_LINK";
+  resolutionSource: "CONTACT_LINK" | "EMMA_MAIL_DT";
 };
+
+export function resolveRepairEmailRecipient(email: string | null): ResolvedRecipient {
+  const trimmedEmail = email?.trim() || null;
+  if (!trimmedEmail) {
+    return {
+      airtableContactRecordId: "EMMA_MAIL_DT",
+      name: null,
+      email: null,
+      normalizedEmail: null,
+      eligible: false,
+      eligibilityReason: "MISSING_EMAIL",
+      resolutionSource: "EMMA_MAIL_DT",
+    };
+  }
+  const normalizedEmail = normalizeEmail(trimmedEmail);
+  const eligible = z.email().safeParse(trimmedEmail).success;
+  return {
+    airtableContactRecordId: "EMMA_MAIL_DT",
+    name: null,
+    email: trimmedEmail,
+    normalizedEmail: eligible ? normalizedEmail : null,
+    eligible,
+    eligibilityReason: eligible ? "ELIGIBLE" : "INVALID_EMAIL",
+    resolutionSource: "EMMA_MAIL_DT",
+  };
+}
 
 export function mapContact(record: AirtableRecord): Contact {
   return {

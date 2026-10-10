@@ -1090,10 +1090,10 @@ function debugTrace(sourceRecordId: string, email: string): RecipientResolutionD
     hospitalRecordId: "recHospital",
     hospitalName: "Szpital Testowy",
     sourceFields: [{
-      codeName: "SERVICE_ORDER_FIELDS.contactLinks",
-      airtableFieldId: "fldv7yrcmRzlfnoqQ",
-      airtableDisplayName: null,
-      value: ["recContact"],
+      codeName: "SERVICE_ORDER_FIELDS.repairRecipientEmail",
+      airtableFieldId: "fldxOwG5iUCg6ig8p",
+      airtableDisplayName: "EMMA: mail DT",
+      value: email,
     }],
     contacts: [{
       recordId: "recContact",

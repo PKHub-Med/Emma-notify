@@ -252,7 +252,7 @@ export function buildServiceOrderObservation(
       serviceOrderType: serviceOrder.serviceOrderType,
       hospitalName: serviceOrder.hospitalName,
       sourceHospitalRecordId: serviceOrder.sourceHospitalRecordId,
-      contactRecordIds: serviceOrder.contactRecordIds,
+      repairRecipientEmail: serviceOrder.repairRecipientEmail,
       device: {
         airtableRecordId: serviceOrder.deviceAirtableIds.length === 1
           ? serviceOrder.deviceAirtableIds[0]!

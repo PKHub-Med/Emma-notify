@@ -65,7 +65,8 @@ export const SERVICE_ORDER_FIELDS = {
   serialNumber: "fldGWu215LqWbr60f",
   inventoryNumber: "fld7OR6obSjRXgrrx",
   faultDescription: "fldLup2XatqzfVk0T",
-  contactLinks: "fldv7yrcmRzlfnoqQ",
+  // Airtable: "EMMA: mail DT" — final repair recipient address.
+  repairRecipientEmail: "fldxOwG5iUCg6ig8p",
   sourceModifiedAt: "fldNWAcmc0wkX2M9M",
   // Legacy "Stan dla klienta" used by the current production worker.
   customerStatus: "fldN0dGXaGv40EHsk",

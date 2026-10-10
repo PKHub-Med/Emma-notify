@@ -9,6 +9,7 @@ import { mapInspection, mapServiceOrder, type MappedCase } from "../airtable/map
 import {
   mapContact,
   resolveRecipient,
+  resolveRepairEmailRecipient,
   type Contact,
 } from "../airtable/recipient.js";
 import type { AirtableRecordSource } from "../airtable/types.js";
@@ -92,7 +93,7 @@ export async function runBaseline(
         startedAt,
       );
       stats.serviceOrdersStored += 1;
-      stats.caseRecipientsStored += mappedCase.contactRecordIds.length;
+      stats.caseRecipientsStored += 1;
       if (!hasEligibleRecipient) stats.serviceOrdersWithoutEligibleRecipient += 1;
     }
 
@@ -140,8 +141,10 @@ async function storeCase(
   seenAt: Date,
 ): Promise<boolean> {
   const trackedCaseId = await store.upsertCase(mappedCase, seenAt);
-  const recipients = mappedCase.contactRecordIds.map((contactRecordId) =>
-    resolveRecipient(contactRecordId, contacts.get(contactRecordId)));
+  const recipients = mappedCase.caseType === "SERVICE_ORDER"
+    ? [resolveRepairEmailRecipient(mappedCase.repairRecipientEmail)]
+    : mappedCase.contactRecordIds.map((contactRecordId) =>
+        resolveRecipient(contactRecordId, contacts.get(contactRecordId)));
   await store.syncRecipients(trackedCaseId, recipients, seenAt);
   return recipients.some((recipient) => recipient.eligible);
 }

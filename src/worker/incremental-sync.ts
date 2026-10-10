@@ -18,6 +18,7 @@ import {
 import {
   mapContact,
   resolveRecipient,
+  resolveRepairEmailRecipient,
   type Contact,
 } from "../airtable/recipient.js";
 import type {
@@ -271,7 +272,7 @@ async function processRecord(
   const mappedCase = await atIncrementalStage(entityStage, async () =>
     definition.map(record));
   const recipients = await atIncrementalStage(entityStage, () =>
-    resolveCurrentRecipients(mappedCase.contactRecordIds, airtable, contactCache));
+    resolveCurrentRecipients(mappedCase, airtable, contactCache));
   const storedCase = await atIncrementalStage("DB", () => store.findCase(mappedCase));
 
   if (!storedCase || !legacyNotificationsEnabled) {
@@ -338,10 +339,14 @@ async function processRecord(
 }
 
 async function resolveCurrentRecipients(
-  contactRecordIds: readonly string[],
+  mappedCase: MappedCase,
   airtable: AirtableIncrementalSource,
   cache: Map<string, Contact>,
 ) {
+  if (mappedCase.caseType === "SERVICE_ORDER") {
+    return [resolveRepairEmailRecipient(mappedCase.repairRecipientEmail)];
+  }
+  const contactRecordIds = mappedCase.contactRecordIds;
   for (const contactRecordId of contactRecordIds) {
     if (!cache.has(contactRecordId)) {
       const record = await airtable.fetchRecord(

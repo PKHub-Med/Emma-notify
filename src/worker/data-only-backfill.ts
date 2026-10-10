@@ -3,7 +3,11 @@ import { AIRTABLE_TABLE_IDS, CONTACT_FIELD_IDS, DEVICE_FIELD_IDS, HOSPITAL_FIELD
   INSPECTION_FIELD_IDS, SERVICE_ORDER_FIELD_IDS, TASK_FIELD_IDS } from "../airtable/field-ids.js";
 import { AirtableClient } from "../airtable/client.js";
 import { mapInspection, mapServiceOrder } from "../airtable/mappers.js";
-import { mapContact, resolveRecipient } from "../airtable/recipient.js";
+import {
+  mapContact,
+  resolveRecipient,
+  resolveRepairEmailRecipient,
+} from "../airtable/recipient.js";
 import { mapDevice } from "../airtable/device.js";
 import { mapHospital } from "../airtable/hospital.js";
 import { mapTask } from "../airtable/task.js";
@@ -119,8 +123,10 @@ export async function runDataOnlyBackfill(input: DataOnlyBackfillInput) {
   const baselineStore = input.stores?.baseline ?? new PrismaBaselineStore(prisma);
   for (const item of [...serviceOrders, ...inspections]) {
     const trackedCaseId = await baselineStore.upsertCase(item, now);
-    await baselineStore.syncRecipients(trackedCaseId, item.contactRecordIds.map((id) =>
-      resolveRecipient(id, contacts.get(id))), now);
+    const recipients = item.caseType === CaseType.SERVICE_ORDER
+      ? [resolveRepairEmailRecipient(item.repairRecipientEmail)]
+      : item.contactRecordIds.map((id) => resolveRecipient(id, contacts.get(id)));
+    await baselineStore.syncRecipients(trackedCaseId, recipients, now);
   }
   await prisma.trackedCase.updateMany({
     where: { caseType: CaseType.SERVICE_ORDER,
@@ -378,11 +384,10 @@ async function runScopedDataOnlyBackfill(input: DataOnlyBackfillInput) {
     const baselineStore = input.stores?.baseline ?? new PrismaBaselineStore(prisma);
     for (const item of expectedCases) {
       const trackedCaseId = await baselineStore.upsertCase(item, now);
-      await baselineStore.syncRecipients(
-        trackedCaseId,
-        item.contactRecordIds.map((id) => resolveRecipient(id, contacts.get(id))),
-        now,
-      );
+      const recipients = item.caseType === CaseType.SERVICE_ORDER
+        ? [resolveRepairEmailRecipient(item.repairRecipientEmail)]
+        : item.contactRecordIds.map((id) => resolveRecipient(id, contacts.get(id)));
+      await baselineStore.syncRecipients(trackedCaseId, recipients, now);
     }
     const hospitalStore = input.stores?.hospital ?? new PrismaHospitalSyncStore(prisma);
     await hospitalStore.upsert(hospital, now);

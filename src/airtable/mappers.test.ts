@@ -22,7 +22,7 @@ describe("case mappers", () => {
       [SERVICE_ORDER_FIELDS.clientOrderNumber]: "CLIENT-7",
       [SERVICE_ORDER_FIELDS.hospitalName]: ["Hospital"],
       [SERVICE_ORDER_FIELDS.deviceLink]: ["recDevice"],
-      [SERVICE_ORDER_FIELDS.contactLinks]: ["recContactA", "recContactB"],
+      [SERVICE_ORDER_FIELDS.repairRecipientEmail]: " Repair@Hospital.PL ",
       [SERVICE_ORDER_FIELDS.customerStatus]: "W naprawie",
       [SERVICE_ORDER_FIELDS.emmaCustomerStatus]: "Naprawa rozpoczęta",
       [SERVICE_ORDER_FIELDS.emmaMailTemplate]: "Naprawa-zmiana_stanu",
@@ -52,7 +52,8 @@ describe("case mappers", () => {
       emmaMailTemplate: "Naprawa-zmiana_stanu",
       serviceOrderType: "NAPRAWA",
       faultDescription: "Usterka",
-      contactRecordIds: ["recContactA", "recContactB"],
+      repairRecipientEmail: " Repair@Hospital.PL ",
+      contactRecordIds: [],
       sourceHospitalRecordId: "recHospital",
       repairHeroLabel: "DIAGNOSTYKA",
       repairHeroDescription: "Urządzenie jest w diagnostyce.",
@@ -62,6 +63,7 @@ describe("case mappers", () => {
       repairDescription: "Wymieniono moduł.",
     });
     expect(mapped.sourceSnapshot).not.toHaveProperty("contactRecordIds");
+    expect(mapped.sourceSnapshot.repairRecipientEmail).toBe(" Repair@Hospital.PL ");
     expect(mapped.reportedAt?.toISOString()).toBe("2026-08-02T07:30:00.000Z");
     expect(mapped.completedAt?.toISOString()).toBe("2026-08-07T14:45:00.000Z");
     expect(mapped.sourceSnapshot.reportedAtRaw).toBe("2026-08-02T07:30:00.000Z");

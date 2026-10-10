@@ -13,7 +13,11 @@ import {
   SERVICE_ORDER_FIELDS,
   TASK_FIELDS,
 } from "../airtable/field-ids.js";
-import { mapContact, resolveRecipient } from "../airtable/recipient.js";
+import {
+  mapContact,
+  resolveRecipient,
+  resolveRepairEmailRecipient,
+} from "../airtable/recipient.js";
 import type { AirtableIncrementalSource } from "../airtable/types.js";
 import { normalizeEmail } from "../shared/normalize-email.js";
 import type {
@@ -201,10 +205,16 @@ export async function resolveCommunicationEventRecipients(input: {
   now?: () => Date;
   log?: (message: string) => void;
 }): Promise<void> {
-  const primaryContactRecordIds = primaryContactIdsFromSnapshot(input.event);
   const recipients: CommunicationEventRecipientInput[] = [];
   const sourceHospitalRecordId = snapshotString(input.event.eventSnapshot, "sourceHospitalRecordId");
   const debugTrace = input.debugEnabled ? createDebugTrace(input.event) : undefined;
+
+  if (input.event.sourceEntityType === CommunicationSourceEntityType.SERVICE_ORDER) {
+    await resolveRepairRecipient(input, sourceHospitalRecordId, recipients, debugTrace);
+    return;
+  }
+
+  const primaryContactRecordIds = primaryContactIdsFromSnapshot(input.event);
   let validClientEmailCount = 0;
 
   const resolveContactGroup = async (
@@ -410,8 +420,9 @@ function createDebugTrace(event: RecipientResolutionEvent): RecipientResolutionD
           null, snapshot.sourceHospitalRecordId),
       ]
     : [
-        debugField("SERVICE_ORDER_FIELDS.contactLinks", SERVICE_ORDER_FIELDS.contactLinks,
-          null, snapshot.contactRecordIds),
+        debugField("SERVICE_ORDER_FIELDS.repairRecipientEmail",
+          SERVICE_ORDER_FIELDS.repairRecipientEmail, "EMMA: mail DT",
+          snapshot.repairRecipientEmail),
         debugField("SERVICE_ORDER_FIELDS.sourceHospitalLink",
           SERVICE_ORDER_FIELDS.sourceHospitalLink, null, snapshot.sourceHospitalRecordId),
         debugField("SERVICE_ORDER_FIELDS.hospitalName", SERVICE_ORDER_FIELDS.hospitalName,
@@ -428,6 +439,116 @@ function createDebugTrace(event: RecipientResolutionEvent): RecipientResolutionD
     consideredAddresses: [],
     finalRecipients: [],
   };
+}
+
+async function resolveRepairRecipient(
+  input: {
+    event: RecipientResolutionEvent;
+    store: RecipientResolutionStore;
+    now?: () => Date;
+    log?: (message: string) => void;
+  },
+  sourceHospitalRecordId: string | null,
+  recipients: CommunicationEventRecipientInput[],
+  debugTrace?: RecipientResolutionDebugTrace,
+): Promise<void> {
+  const resolvedAt = (input.now ?? (() => new Date()))();
+  const rawValue = isObject(input.event.eventSnapshot)
+    ? input.event.eventSnapshot.repairRecipientEmail
+    : null;
+  const resolved = resolveRepairEmailRecipient(
+    typeof rawValue === "string" ? rawValue : null,
+  );
+  const trimmedEmail = resolved.email ?? "";
+  const normalizedEmail = resolved.normalizedEmail;
+  let reason: "REPAIR_RECIPIENT_EMAIL_MISSING" | "REPAIR_RECIPIENT_EMAIL_INVALID" | null = null;
+
+  if (resolved.eligibilityReason === "MISSING_EMAIL") {
+    reason = "REPAIR_RECIPIENT_EMAIL_MISSING";
+  } else if (resolved.eligibilityReason === "INVALID_EMAIL") {
+    reason = "REPAIR_RECIPIENT_EMAIL_INVALID";
+  }
+
+  if (reason) {
+    recipients.push({
+      recipientType: CommunicationRecipientType.CLIENT,
+      sourceContactRecordId: null,
+      email: trimmedEmail || null,
+      normalizedEmail: null,
+      recipientKey: `INVALID:${reason}`,
+      resolutionStatus: CommunicationRecipientResolutionStatus.INVALID,
+      resolutionReason: reason,
+    });
+    debugTrace?.consideredAddresses.push({
+      address: trimmedEmail || null,
+      normalizedAddress: null,
+      source: "SERVICE_ORDER_FIELDS.repairRecipientEmail",
+      decision: "REJECTED",
+      reason,
+    });
+    await input.store.markResolved(input.event.id, recipients, resolvedAt, debugTrace);
+    input.log?.(
+      `COMMUNICATION_REPAIR_RECIPIENT_REJECTED eventId=${input.event.id} ` +
+      `scenario=${input.event.scenario} reason=${reason}`,
+    );
+    return;
+  }
+
+  if (sourceHospitalRecordId && normalizedEmail &&
+      await input.store.isOptedOut(sourceHospitalRecordId, normalizedEmail)) {
+    recipients.push({
+      recipientType: CommunicationRecipientType.CLIENT,
+      sourceContactRecordId: null,
+      email: trimmedEmail,
+      normalizedEmail,
+      recipientKey: `OPTED_OUT:${normalizedEmail}`,
+      resolutionStatus: CommunicationRecipientResolutionStatus.INVALID,
+      resolutionReason: "OPTED_OUT",
+    });
+    debugTrace?.consideredAddresses.push({
+      address: trimmedEmail,
+      normalizedAddress: normalizedEmail,
+      source: "SERVICE_ORDER_FIELDS.repairRecipientEmail",
+      decision: "REJECTED",
+      reason: "OPTED_OUT",
+    });
+    await input.store.markResolved(input.event.id, recipients, resolvedAt, debugTrace);
+    input.log?.(
+      `COMMUNICATION_REPAIR_RECIPIENT_REJECTED eventId=${input.event.id} ` +
+      `scenario=${input.event.scenario} reason=OPTED_OUT`,
+    );
+    return;
+  }
+
+  recipients.push({
+    recipientType: CommunicationRecipientType.CLIENT,
+    sourceContactRecordId: null,
+    email: trimmedEmail,
+    normalizedEmail,
+    recipientKey: normalizedEmail!,
+    resolutionStatus: CommunicationRecipientResolutionStatus.READY,
+    resolutionReason: null,
+  });
+  if (debugTrace) {
+    debugTrace.consideredAddresses.push({
+      address: trimmedEmail,
+      normalizedAddress: normalizedEmail,
+      source: "SERVICE_ORDER_FIELDS.repairRecipientEmail",
+      decision: "ACCEPTED",
+      reason: "ELIGIBLE",
+    });
+    debugTrace.finalRecipients = [{
+      address: normalizedEmail!,
+      source: "SERVICE_ORDER_FIELDS.repairRecipientEmail",
+      status: CommunicationRecipientResolutionStatus.READY,
+      reason: null,
+    }];
+  }
+  await input.store.markResolved(input.event.id, recipients, resolvedAt, debugTrace);
+  input.log?.(
+    `COMMUNICATION_RECIPIENTS_RESOLVED eventId=${input.event.id} ` +
+    `scenario=${input.event.scenario} recipientCount=1 fallback=false`,
+  );
 }
 
 function addContactDebug(

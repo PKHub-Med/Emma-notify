@@ -65,13 +65,14 @@ describe("communication event diagnostics and snapshots", () => {
       serviceOrderType: "NAPRAWA",
       hospitalName: "Szpital Testowy",
       sourceHospitalRecordId: "recHospital",
-      contactRecordIds: ["recContact"],
+      repairRecipientEmail: "repair@hospital.pl",
       device: {
         airtableRecordId: "recDevice",
         serialNumber: "SN-1",
       },
       detectedAt: detectedAt.toISOString(),
     });
+    expect(observation.eventSnapshot).not.toHaveProperty("contactRecordIds");
   });
 
   it("builds the required task event snapshot without resolving emails", () => {
@@ -153,6 +154,7 @@ function mappedServiceOrder(): MappedCase {
     inventoryNumber: "INV-1",
     currentStatus: "Legacy",
     faultDescription: "Usterka",
+    repairRecipientEmail: "repair@hospital.pl",
     sourceCreatedAt: null,
     reportedAt: null,
     completedAt: null,

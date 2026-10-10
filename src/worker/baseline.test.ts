@@ -28,7 +28,7 @@ class FakeAirtable implements AirtableRecordSource {
     if (tableId === AIRTABLE_TABLE_IDS.serviceOrders) {
       return [record("recService", {
         [SERVICE_ORDER_FIELDS.businessNumber]: "SO-1",
-        [SERVICE_ORDER_FIELDS.contactLinks]: ["recContact"],
+        [SERVICE_ORDER_FIELDS.repairRecipientEmail]: " customer@example.com ",
       })];
     }
     return [];
@@ -102,6 +102,7 @@ describe("runBaseline", () => {
     expect(store.cases).toHaveLength(1);
     expect(store.recipients).toHaveLength(1);
     expect(store.recipients[0]?.eligible).toBe(true);
+    expect(store.recipients[0]?.resolutionSource).toBe("EMMA_MAIL_DT");
     expect(store.completed).toBe(true);
     expect(store.lastSyncAt).toEqual(times[1]);
   });
