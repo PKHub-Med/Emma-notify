@@ -862,10 +862,19 @@ export async function sendCommunicationDelivery(input: {
         input.now,
         input.config.timeZone,
       )) {
-    input.log?.(
-      `COMMUNICATION_EMAIL_BARRIER_BLOCKED deliveryId=${input.candidate.id} ` +
-      `scenario=INSPECTION_COMPLETED reason=HISTORICAL_PERFORMED_INSPECTION`,
+    const cancelled = await input.store.cancel(
+      input.candidate.id,
+      CommunicationDeliveryCancelReason.HISTORICAL_COMPLETED,
+      input.now,
     );
+    if (cancelled) {
+      input.log?.(
+        `COMMUNICATION_EMAIL_BARRIER_BLOCKED deliveryId=${input.candidate.id} ` +
+        `scenario=INSPECTION_COMPLETED reason=HISTORICAL_PERFORMED_INSPECTION ` +
+        `status=CANCELLED cancelReason=HISTORICAL_COMPLETED`,
+      );
+      return "CANCELLED";
+    }
     return "SKIPPED";
   }
   if (input.candidate.scenario === CommunicationScenario.INSPECTION_COMPLETED &&

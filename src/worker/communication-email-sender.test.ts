@@ -684,8 +684,43 @@ describe("provider result and retry classification", () => {
     expect(fixture.provider.requests[0]?.html).toContain("DIAGNOSTYKA ODBIORCÓW");
   });
 
-  it("in master test mode leaves historical performed inspections untouched", async () => {
+  it("in master test mode finalizes a historical performed inspection exactly once", async () => {
+    const logs: string[] = [];
     const fixture = setup({
+      scenario: CommunicationScenario.INSPECTION_COMPLETED,
+      eventSnapshot: {
+        ...reminderSnapshot({ day: "2026-08-15" }),
+        linkedInspectionRecordIds: ["inspectionA"],
+      },
+    });
+    fixture.dataSource.getInspections = async () => [{
+      ...inspectionFixture("inspectionA", "SPRAWNY"),
+      inspectionPerformedAt: new Date("2026-08-14T08:00:00Z"),
+    }];
+
+    const first = await run(fixture, { mailTestMode: true }, logs);
+    const second = await run(fixture, { mailTestMode: true }, logs);
+
+    expect(fixture.provider.requests).toHaveLength(0);
+    expect(first.cancelled).toBe(1);
+    expect(second.candidates).toBe(0);
+    expect(fixture.candidate.status).toBe(CommunicationDeliveryStatus.CANCELLED);
+    expect(fixture.store.cancelReason).toBe(
+      CommunicationDeliveryCancelReason.HISTORICAL_COMPLETED,
+    );
+    expect(fixture.candidate.nextRetryAt).toBeNull();
+    expect(fixture.candidate.attemptCount).toBe(0);
+    expect(logs.filter((entry) => entry.includes(
+      "reason=HISTORICAL_PERFORMED_INSPECTION",
+    ))).toHaveLength(1);
+  });
+
+  it("finalizes a stale SENDING historical inspection instead of retrying it", async () => {
+    const fixture = setup({
+      status: CommunicationDeliveryStatus.SENDING,
+      attemptCount: 1,
+      sendingStartedAt: new Date(now.getTime() - 6 * 60_000),
+      nextRetryAt: new Date(now.getTime() - 1),
       scenario: CommunicationScenario.INSPECTION_COMPLETED,
       eventSnapshot: {
         ...reminderSnapshot({ day: "2026-08-15" }),
@@ -699,8 +734,10 @@ describe("provider result and retry classification", () => {
 
     await run(fixture, { mailTestMode: true });
 
+    expect(fixture.candidate.status).toBe(CommunicationDeliveryStatus.CANCELLED);
+    expect(fixture.candidate.nextRetryAt).toBeNull();
+    expect(fixture.candidate.attemptCount).toBe(1);
     expect(fixture.provider.requests).toHaveLength(0);
-    expect(fixture.candidate.status).toBe(CommunicationDeliveryStatus.READY);
   });
 
   it("includes exhausted Airtable contact-read attempts in the fallback diagnostic", async () => {
@@ -901,8 +938,13 @@ class MemorySendStore implements CommunicationEmailSendStore {
   async findCandidates(at: Date) {
     this.findCalls += 1;
     if (this.candidate.status === CommunicationDeliveryStatus.READY ||
-      this.candidate.status === CommunicationDeliveryStatus.FAILED &&
-      this.candidate.nextRetryAt && this.candidate.nextRetryAt <= at) return [this.candidate];
+      (this.candidate.status === CommunicationDeliveryStatus.FAILED &&
+        this.candidate.nextRetryAt && this.candidate.nextRetryAt <= at) ||
+      (this.candidate.status === CommunicationDeliveryStatus.SENDING &&
+        this.candidate.sendingStartedAt &&
+        this.candidate.sendingStartedAt <= new Date(at.getTime() - 5 * 60_000))) {
+      return [this.candidate];
+    }
     return [];
   }
   async claim(candidate: CommunicationSendCandidate, _at: Date, mode: string, actual: string) {
@@ -940,8 +982,18 @@ class MemorySendStore implements CommunicationEmailSendStore {
     this.candidate.nextRetryAt = next;
     this.lastError = reason;
   }
-  async cancel(_id: string, reason: CommunicationDeliveryCancelReason) {
+  async cancel(
+    _id: string,
+    reason: CommunicationDeliveryCancelReason,
+    cancelledAt: Date,
+  ) {
+    if (this.candidate.status !== CommunicationDeliveryStatus.READY &&
+      this.candidate.status !== CommunicationDeliveryStatus.FAILED &&
+      this.candidate.status !== CommunicationDeliveryStatus.SENDING) return false;
     this.candidate.status = CommunicationDeliveryStatus.CANCELLED;
+    this.candidate.sendingStartedAt = cancelledAt;
+    this.candidate.nextRetryAt = null;
+    this.lastError = null;
     this.cancelReason = reason;
     return true;
   }
