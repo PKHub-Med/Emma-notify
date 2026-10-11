@@ -336,10 +336,10 @@ describe("claim, JIT grant and deterministic retry", () => {
 
     await run(fixture);
     expect(fixture.provider.requests).toHaveLength(0);
-    expect(fixture.candidate.nextRetryAt).toEqual(new Date(now.getTime() + 2 * 60_000));
+    expect(fixture.candidate.nextRetryAt).toEqual(new Date(now.getTime() + 5 * 60_000));
 
     currentDeviceName = "Aparat USG";
-    await run(fixture, {}, [], new Date(now.getTime() + 2 * 60_000));
+    await run(fixture, {}, [], new Date(now.getTime() + 5 * 60_000));
 
     expect(fixture.provider.requests).toHaveLength(1);
     expect(fixture.provider.requests[0]!.template.variables).toMatchObject({
@@ -352,7 +352,7 @@ describe("claim, JIT grant and deterministic retry", () => {
       .not.toContain("Brak danych");
   });
 
-  it("retries #24903 for 10 minutes before using the final missing-device fallback", async () => {
+  it("uses the global bounded backoff before the final missing-device fallback", async () => {
     const fixture = setup({
       eventSnapshot: {
         ...repairSnapshot(),
@@ -374,23 +374,28 @@ describe("claim, JIT grant and deterministic retry", () => {
     await run(fixture, {}, [], now);
     expect(fixture.provider.requests).toHaveLength(0);
     expect(fixture.store.lastError).toBe("REPAIR_DEVICE_DATA_PENDING");
-    expect(fixture.candidate.nextRetryAt).toEqual(new Date(now.getTime() + 2 * 60_000));
-
-    const retryOneAt = new Date(now.getTime() + 2 * 60_000);
-    await run(fixture, {}, [], retryOneAt);
-    expect(fixture.provider.requests).toHaveLength(0);
     expect(fixture.candidate.nextRetryAt).toEqual(new Date(now.getTime() + 5 * 60_000));
 
-    const retryTwoAt = new Date(now.getTime() + 5 * 60_000);
+    const retryOneAt = new Date(now.getTime() + 5 * 60_000);
+    await run(fixture, {}, [], retryOneAt);
+    expect(fixture.provider.requests).toHaveLength(0);
+    expect(fixture.candidate.nextRetryAt).toEqual(new Date(now.getTime() + 15 * 60_000));
+
+    const retryTwoAt = new Date(now.getTime() + 15 * 60_000);
     await run(fixture, {}, [], retryTwoAt);
     expect(fixture.provider.requests).toHaveLength(0);
-    expect(fixture.candidate.nextRetryAt).toEqual(new Date(now.getTime() + 10 * 60_000));
+    expect(fixture.candidate.nextRetryAt).toEqual(new Date(now.getTime() + 35 * 60_000));
 
-    await run(fixture, {}, [], new Date(now.getTime() + 10 * 60_000));
+    const retryThreeAt = new Date(now.getTime() + 35 * 60_000);
+    await run(fixture, {}, [], retryThreeAt);
+    expect(fixture.provider.requests).toHaveLength(0);
+    expect(fixture.candidate.nextRetryAt).toEqual(new Date(now.getTime() + 75 * 60_000));
+
+    await run(fixture, {}, [], new Date(now.getTime() + 75 * 60_000));
     expect(fixture.provider.requests).toHaveLength(1);
     expect(fixture.provider.requests[0]!.template.variables.DEVICE_NAME).toBe("Brak danych");
     expect(fixture.candidate.status).toBe(CommunicationDeliveryStatus.SENT);
-    expect(fixture.candidate.attemptCount).toBe(4);
+    expect(fixture.candidate.attemptCount).toBe(5);
   });
 
   it("normalizes a legacy numeric-string DEVICE_COUNT before the Resend request", async () => {
@@ -473,7 +478,7 @@ describe("claim, JIT grant and deterministic retry", () => {
     ]);
     await run(fixture);
     const firstRequest = structuredClone(fixture.provider.requests[0]);
-    await run(fixture, {}, [], new Date(now.getTime() + 60_000));
+    await run(fixture, {}, [], new Date(now.getTime() + 5 * 60_000));
     expect(fixture.grants.publicIds).toEqual(["grant-public-id", "grant-public-id"]);
     expect(fixture.unsubscribeGrants.publicIds).toEqual(["unsubscribe-public-id", "unsubscribe-public-id"]);
     expect(fixture.provider.requests[1]).toEqual(firstRequest);
@@ -564,7 +569,20 @@ describe("provider result and retry classification", () => {
     const fixture = setup({}, [{ ok: false, error }]);
     await run(fixture);
     expect(fixture.candidate.status).toBe(CommunicationDeliveryStatus.FAILED);
-    expect(fixture.candidate.nextRetryAt).toEqual(new Date(now.getTime() + 60_000));
+    expect(fixture.candidate.nextRetryAt).toEqual(new Date(now.getTime() + 5 * 60_000));
+  });
+
+  it("schedules the same retry policy for a provider timeout", async () => {
+    const fixture = setup();
+    fixture.provider.send = vi.fn(async () => {
+      throw new Error("ETIMEDOUT");
+    });
+
+    await run(fixture);
+
+    expect(fixture.candidate.status).toBe(CommunicationDeliveryStatus.FAILED);
+    expect(fixture.store.lastError).toBe("EMAIL_NETWORK_ERROR");
+    expect(fixture.candidate.nextRetryAt).toEqual(new Date(now.getTime() + 5 * 60_000));
   });
 
   it("marks permanent provider validation rejection without retry", async () => {
@@ -604,7 +622,7 @@ describe("provider result and retry classification", () => {
     fixture.dataSource.getInspections = async () => [inspectionFixture("inspectionA", "SPRAWNY")];
 
     await run(fixture);
-    await run(fixture, {}, [], new Date(now.getTime() + 60_000));
+    await run(fixture, {}, [], new Date(now.getTime() + 5 * 60_000));
 
     expect(fixture.provider.requests).toHaveLength(2);
     expect(fixture.provider.requests.map((request) => request.idempotencyKey)).toEqual([
@@ -715,7 +733,7 @@ describe("provider result and retry classification", () => {
   it.each([
     ["INSPECTION_HOSPITAL_SCOPE_MISMATCH", ["inspectionA"], "otherHospital"],
     ["INSPECTION_SET_INCOMPLETE", ["inspectionA", "inspectionMissing"], "recHospital"],
-  ])("routes blocked client communication to Tiemed for %s", async (code, linkedIds, hospital) => {
+  ])("schedules a global retry for transient %s", async (code, linkedIds, hospital) => {
     const fixture = setup({
       scenario: CommunicationScenario.INSPECTION_DATE_CONFIRMED,
       eventSnapshot: { ...reminderSnapshot(), linkedInspectionRecordIds: linkedIds },
@@ -728,14 +746,13 @@ describe("provider result and retry classification", () => {
       inventoryNumber: null, estimatedDurationSeconds: 1200,
     }];
     await run(fixture);
-    expect(fixture.provider.requests).toHaveLength(1);
-    expect(fixture.provider.requests[0]!.to).toBe("test@example.test");
-    expect(fixture.provider.requests[0]!.template.variables.BLOCKED_NOTICE).toContain(code);
-    expect(fixture.candidate.status).toBe(CommunicationDeliveryStatus.SENT);
-    expect(fixture.store.lastError).toBe(`BLOCKED_CLIENT:${code}`);
+    expect(fixture.provider.requests).toHaveLength(0);
+    expect(fixture.candidate.status).toBe(CommunicationDeliveryStatus.FAILED);
+    expect(fixture.candidate.nextRetryAt).toEqual(new Date(now.getTime() + 5 * 60_000));
+    expect(fixture.store.lastError).toBe(code);
   });
 
-  it("sends no partial inspection summary when one result is null", async () => {
+  it("retries instead of sending a partial inspection summary when one result is null", async () => {
     const fixture = setup({
       scenario: CommunicationScenario.INSPECTION_COMPLETED,
       eventSnapshot: { ...reminderSnapshot({ day: "2026-08-15" }), linkedInspectionRecordIds: ["good", "bad", "missing"] },
@@ -745,11 +762,69 @@ describe("provider result and retry classification", () => {
       { ...inspectionFixture("missing", "ZAKOŃCZONY"), inspectionResult: null },
     ].filter((inspection) => recordIds.includes(inspection.airtableRecordId));
     await run(fixture);
+    expect(fixture.provider.requests).toHaveLength(0);
+    expect(fixture.candidate.status).toBe(CommunicationDeliveryStatus.FAILED);
+    expect(fixture.candidate.nextRetryAt).toEqual(new Date(now.getTime() + 5 * 60_000));
+    expect(fixture.store.lastError).toBe("INSPECTION_RESULT_INCOMPLETE");
+  });
+
+  it("recovers from transient inspection state inconsistency and sends exactly once", async () => {
+    const fixture = setup({
+      scenario: CommunicationScenario.INSPECTION_COMPLETED,
+      eventSnapshot: {
+        ...reminderSnapshot({ day: "2026-08-15" }),
+        linkedInspectionRecordIds: ["inspectionA"],
+      },
+    });
+    let currentStatus = "PLANOWANY";
+    fixture.dataSource.getInspections = async () => [{
+      ...inspectionFixture("inspectionA", "SPRAWNY"),
+      currentStatus,
+      inspectionPerformedAt: new Date("2026-08-15T08:00:00Z"),
+    }];
+
+    await run(fixture);
+    expect(fixture.provider.requests).toHaveLength(0);
+    expect(fixture.store.lastError).toBe("INSPECTION_STATE_INCONSISTENT");
+    expect(fixture.candidate.nextRetryAt).toEqual(new Date(now.getTime() + 5 * 60_000));
+
+    currentStatus = "ZAKOŃCZONY";
+    await run(fixture, {}, [], new Date(now.getTime() + 5 * 60_000));
+    await run(fixture, {}, [], new Date(now.getTime() + 15 * 60_000));
+
     expect(fixture.provider.requests).toHaveLength(1);
-    expect(fixture.provider.requests[0]!.to).toBe("test@example.test");
-    expect(fixture.provider.requests[0]!.template.variables.BLOCKED_NOTICE)
-      .toContain("INSPECTION_RESULT_INCOMPLETE");
-    expect(fixture.store.lastError).toBe("BLOCKED_CLIENT:INSPECTION_RESULT_INCOMPLETE");
+    expect(fixture.candidate.status).toBe(CommunicationDeliveryStatus.SENT);
+    expect(fixture.candidate.attemptCount).toBe(2);
+  });
+
+  it("ends transient template failure after four retries without EMPTY_COMPLETED", async () => {
+    const logs: string[] = [];
+    const fixture = setup({
+      scenario: CommunicationScenario.INSPECTION_COMPLETED,
+      eventSnapshot: {
+        ...reminderSnapshot({ day: "2026-08-15" }),
+        linkedInspectionRecordIds: ["inspectionA"],
+      },
+    });
+    fixture.dataSource.getInspections = async () => [{
+      ...inspectionFixture("inspectionA", "SPRAWNY"),
+      currentStatus: "PLANOWANY",
+      inspectionPerformedAt: new Date("2026-08-15T08:00:00Z"),
+    }];
+
+    for (const minutes of [0, 5, 15, 35, 75]) {
+      await run(fixture, {}, logs, new Date(now.getTime() + minutes * 60_000));
+    }
+
+    expect(fixture.provider.requests).toHaveLength(0);
+    expect(fixture.candidate.status).toBe(CommunicationDeliveryStatus.FAILED);
+    expect(fixture.candidate.attemptCount).toBe(5);
+    expect(fixture.candidate.nextRetryAt).toBeNull();
+    expect(fixture.store.lastError).toBe("INSPECTION_STATE_INCONSISTENT");
+    expect(fixture.store.cancelReason).toBeNull();
+    expect(logs.join(" ")).not.toContain("errorCode=EMPTY_COMPLETED");
+    expect(logs.at(-1)).toContain("errorCategory=TRANSIENT");
+    expect(logs.at(-1)).toContain("attempt=5");
   });
 
   it("suppresses an empty completed summary without calling the provider", async () => {
@@ -768,7 +843,8 @@ describe("provider result and retry classification", () => {
     expect(fixture.provider.requests).toHaveLength(0);
     expect(fixture.candidate.status).toBe(CommunicationDeliveryStatus.CANCELLED);
     expect(fixture.store.cancelReason).toBe(CommunicationDeliveryCancelReason.EMPTY_COMPLETED);
-    expect(logs.join(" ")).toContain("reason=EMPTY_COMPLETED");
+    expect(logs.join(" ")).toContain("errorCategory=SUPPRESSED");
+    expect(logs.join(" ")).toContain("errorCode=EMPTY_COMPLETED");
   });
 
   it("suppresses a historical completed event even when detected today", async () => {
@@ -1024,7 +1100,7 @@ function communicationCandidate(
     sendingStartedAt: null,
     nextRetryAt: null,
     sendSnapshot: null,
-    event: { detectedAt, sourceRecordId: "recService", eventSnapshot },
+    event: { id: "event-1", detectedAt, sourceRecordId: "recService", eventSnapshot },
     recipient: { recipientType, email: "client@example.com", normalizedEmail: "client@example.com" },
     ...overrides,
   };

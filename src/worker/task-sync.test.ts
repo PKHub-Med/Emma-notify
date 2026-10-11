@@ -275,6 +275,66 @@ describe("task polling and communication events", () => {
     );
   });
 
+  it.each([
+    ["INSPECTION_DATE_CONFIRMED", "2026-10-11"],
+    ["INSPECTION_DATE_PROPOSED", "2026-10-11"],
+  ] as const)("allows %s when the visit is today in Warsaw", async (scenario, day) => {
+    const fixture = taskFixture();
+    fixture.communication.baselineCompleted = true;
+    fixture.source.setCurrent(inspectionDateTaskRecord(scenario, day));
+
+    await runTaskSync({
+      airtable: fixture.source,
+      store: fixture.store,
+      communicationStore: fixture.communication,
+      timeZone: "Europe/Warsaw",
+      now: () => new Date("2026-10-10T22:30:00.000Z"),
+    });
+
+    expect(fixture.communication.events).toHaveLength(1);
+    expect(fixture.communication.events[0]?.observation.scenario).toBe(scenario);
+    expect(fixture.communication.events[0]?.observation.eventSnapshot.day).toBe(day);
+  });
+
+  it.each([
+    ["INSPECTION_DATE_CONFIRMED", "2026-10-12"],
+    ["INSPECTION_DATE_PROPOSED", "2026-10-20"],
+  ] as const)("keeps future %s eligible", async (scenario, day) => {
+    const fixture = taskFixture();
+    fixture.communication.baselineCompleted = true;
+    fixture.source.setCurrent(inspectionDateTaskRecord(scenario, day));
+
+    await runTaskSync({
+      airtable: fixture.source,
+      store: fixture.store,
+      communicationStore: fixture.communication,
+      timeZone: "Europe/Warsaw",
+      now: () => new Date("2026-10-11T10:00:00.000Z"),
+    });
+
+    expect(fixture.communication.events).toHaveLength(1);
+    expect(fixture.communication.events[0]?.observation.scenario).toBe(scenario);
+  });
+
+  it.each([
+    "INSPECTION_DATE_CONFIRMED",
+    "INSPECTION_DATE_PROPOSED",
+  ] as const)("does not extend %s eligibility into the past", async (scenario) => {
+    const fixture = taskFixture();
+    fixture.communication.baselineCompleted = true;
+    fixture.source.setCurrent(inspectionDateTaskRecord(scenario, "2026-10-10"));
+
+    await runTaskSync({
+      airtable: fixture.source,
+      store: fixture.store,
+      communicationStore: fixture.communication,
+      timeZone: "Europe/Warsaw",
+      now: () => new Date("2026-10-11T10:00:00.000Z"),
+    });
+
+    expect(fixture.communication.events).toHaveLength(0);
+  });
+
   it("keeps exactly one event across 100 identical post-baseline polls", async () => {
     const fixture = taskFixture();
     fixture.communication.baselineCompleted = true;
@@ -768,6 +828,20 @@ function reminderTaskRecord(day: string): AirtableRecord {
     [TASK_FIELDS.sourceHospitalLink]: ["recHospital"],
     [TASK_FIELDS.emmaCustomerStatus]: "Przypomnienie o wizycie",
     [TASK_FIELDS.emmaMailTemplate]: "Przegląd-przypomnienie_o_wizycie",
+  });
+}
+
+function inspectionDateTaskRecord(
+  scenario: "INSPECTION_DATE_CONFIRMED" | "INSPECTION_DATE_PROPOSED",
+  day: string,
+): AirtableRecord {
+  return taskRecord({
+    [TASK_FIELDS.day]: day,
+    [TASK_FIELDS.emmaCustomerStatus]: scenario === "INSPECTION_DATE_CONFIRMED"
+      ? "Ustalono termin wizyty" : "Poinformowano o wizycie",
+    [TASK_FIELDS.emmaMailTemplate]: scenario === "INSPECTION_DATE_CONFIRMED"
+      ? "Przegląd-informacja_o_umówionej_wizycie"
+      : "Przegląd-informacja_o_nadchodzącej_wizycie",
   });
 }
 

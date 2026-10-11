@@ -53,11 +53,27 @@ import {
 } from "./communication-email-debug.js";
 import { normalizeEmail } from "../shared/normalize-email.js";
 
-const MAX_ATTEMPTS = 4;
+const MAX_ATTEMPTS = 5;
 const STALE_SENDING_MS = 5 * 60_000;
-const RETRY_DELAYS_MS = [60_000, 5 * 60_000, 15 * 60_000, 15 * 60_000] as const;
-const REPAIR_DEVICE_RETRY_DELAYS_MS = [2 * 60_000, 3 * 60_000, 5 * 60_000] as const;
+const RETRY_DELAYS_MS = [5 * 60_000, 10 * 60_000, 20 * 60_000, 40 * 60_000] as const;
 const CANDIDATE_LIMIT = 1000;
+
+export type DeliveryErrorCategory = "TRANSIENT" | "PERMANENT" | "SUPPRESSED";
+
+export type DeliveryErrorClassification = {
+  category: DeliveryErrorCategory;
+  code: string;
+  retryable: boolean;
+};
+
+export type DeliveryErrorInput =
+  | { source: "TEMPLATE_DATA"; error: unknown }
+  | { source: "PORTAL_GRANT"; error: unknown }
+  | { source: "PROVIDER"; response: Extract<ProviderEmailResult, { ok: false }> }
+  | { source: "RECIPIENT"; error: unknown }
+  | { source: "TRANSIENT"; code: string }
+  | { source: "PERMANENT"; code: string }
+  | { source: "SUPPRESSED"; code: string };
 
 export type PersistedCommunicationSendSnapshot = {
   templateId: string;
@@ -78,6 +94,7 @@ export type CommunicationSendCandidate = {
   sendSnapshot: PersistedCommunicationSendSnapshot | null;
   logicalDigestKey?: string | null;
   event: {
+    id?: string;
     detectedAt: Date;
     sourceRecordId: string;
     eventSnapshot: unknown;
@@ -197,6 +214,7 @@ export class PrismaCommunicationEmailSendStore implements CommunicationEmailSend
         logicalDigestKey: true,
         communicationEvent: {
           select: {
+            id: true,
             detectedAt: true,
             sourceRecordId: true,
             eventSnapshot: true,
@@ -621,15 +639,15 @@ export async function sendCommunicationRepairBatch(input: {
     });
     assertEmailDebugSafety(input.config, actualRecipientEmail, eligible);
   } catch (error: unknown) {
-    const reason = recipientErrorCode(error);
-    if (reason === "EMAIL_DEBUG_TRACE_MISSING" && input.config.mailTestMode) {
+    const failure = classifyDeliveryError({ source: "RECIPIENT", error });
+    if (failure.code === "EMAIL_DEBUG_TRACE_MISSING" && input.config.mailTestMode) {
       input.log?.("COMMUNICATION_EMAIL_BARRIER_BLOCKED reason=EMAIL_DEBUG_TRACE_MISSING");
       return result;
     }
     for (const candidate of eligible) {
       const claimed = await input.store.claim(candidate, input.now, input.config.mode, "");
       if (claimed) {
-        await input.store.markFailed(candidate.id, reason, input.now, null);
+        await persistFailure(input, candidate, failure, claimedAttempt(candidate), true);
         result.failed += 1;
       }
     }
@@ -651,7 +669,9 @@ export async function sendCommunicationRepairBatch(input: {
   }
 
   if (!input.config.resendApiKey) {
-    await failRepairBatch(input, claimed, "RESEND_API_KEY_MISSING", false);
+    await failRepairBatch(input, claimed, classifyDeliveryError({
+      source: "PERMANENT", code: "RESEND_API_KEY_MISSING",
+    }));
     result.failed += claimed.length;
     return result;
   }
@@ -664,14 +684,14 @@ export async function sendCommunicationRepairBatch(input: {
   try {
     grantResult = await input.grants.getOrCreatePortalAccessGrant(owner.id, input.now);
   } catch (error: unknown) {
-    const failure = portalGrantFailure(error);
+    const failure = classifyDeliveryError({ source: "PORTAL_GRANT", error });
     if (!failure.retryable && input.config.tiemedFallbackEmail) {
       const fallbackOutcome = await sendBlockedRepairBatch(input, claimed, owner,
         { url: "" }, { url: "" },
         new CommunicationTemplateDataError(failure.code, false, { code: failure.code }));
       if (fallbackOutcome === "SENT") { result.sent += claimed.length; return result; }
     }
-    await failRepairBatch(input, claimed, failure.code, failure.retryable);
+    await failRepairBatch(input, claimed, failure);
     result.failed += claimed.length;
     return result;
   }
@@ -680,14 +700,14 @@ export async function sendCommunicationRepairBatch(input: {
   try {
     unsubscribeResult = await input.unsubscribeGrants.getOrCreateUnsubscribeGrant(owner.id, input.now);
   } catch (error: unknown) {
-    const failure = portalGrantFailure(error);
+    const failure = classifyDeliveryError({ source: "PORTAL_GRANT", error });
     if (!failure.retryable && input.config.tiemedFallbackEmail) {
       const fallbackOutcome = await sendBlockedRepairBatch(input, claimed, owner,
         grantResult, { url: "" },
         new CommunicationTemplateDataError(failure.code, false, { code: failure.code }));
       if (fallbackOutcome === "SENT") { result.sent += claimed.length; return result; }
     }
-    await failRepairBatch(input, claimed, failure.code, failure.retryable);
+    await failRepairBatch(input, claimed, failure);
     result.failed += claimed.length;
     return result;
   }
@@ -733,27 +753,32 @@ export async function sendCommunicationRepairBatch(input: {
       }
       snapshot ??= prepared;
     } catch (error: unknown) {
-      if (error instanceof CommunicationTemplateDataError && !error.retryable &&
+      const failure = classifyDeliveryError({ source: "TEMPLATE_DATA", error });
+      if (failure.category === "PERMANENT" &&
+          error instanceof CommunicationTemplateDataError &&
           input.config.tiemedFallbackEmail) {
         const fallbackOutcome = await sendBlockedRepairBatch(input, claimed, owner, grantResult,
           unsubscribeResult, error);
         if (fallbackOutcome === "SENT") { result.sent += claimed.length; return result; }
         result.failed += claimed.length; return result;
       }
-      const failure = templateFailure(error);
-      await failRepairBatch(input, claimed, failure.code, failure.retryable);
+      await failRepairBatch(input, claimed, failure);
       result.failed += claimed.length;
       return result;
     }
   }
 
   if (snapshot.portalGrantPublicId !== grantResult.grant.publicId) {
-    await failRepairBatch(input, claimed, "SEND_SNAPSHOT_GRANT_MISMATCH", false);
+    await failRepairBatch(input, claimed, classifyDeliveryError({
+      source: "PERMANENT", code: "SEND_SNAPSHOT_GRANT_MISMATCH",
+    }));
     result.failed += claimed.length;
     return result;
   }
   if (snapshot.unsubscribeGrantPublicId !== unsubscribeResult.grant.publicId) {
-    await failRepairBatch(input, claimed, "SEND_SNAPSHOT_UNSUBSCRIBE_GRANT_MISMATCH", false);
+    await failRepairBatch(input, claimed, classifyDeliveryError({
+      source: "PERMANENT", code: "SEND_SNAPSHOT_UNSUBSCRIBE_GRANT_MISMATCH",
+    }));
     result.failed += claimed.length;
     return result;
   }
@@ -776,7 +801,9 @@ export async function sendCommunicationRepairBatch(input: {
       EMMA_UNSUBSCRIBE_URL: buildUnsubscribeHtml(unsubscribeResult.url),
     });
   } catch {
-    await failRepairBatch(input, claimed, "TEMPLATE_VARIABLES_INVALID", false);
+    await failRepairBatch(input, claimed, classifyDeliveryError({
+      source: "PERMANENT", code: "TEMPLATE_VARIABLES_INVALID",
+    }));
     result.failed += claimed.length;
     return result;
   }
@@ -792,8 +819,8 @@ export async function sendCommunicationRepairBatch(input: {
       idempotencyKey: communicationBatchIdempotencyKey(claimed.map((item) => item.id)),
     });
     if (!response.ok) {
-      const failure = classifyProviderFailure(response);
-      await failRepairBatch(input, claimed, failure.code, failure.retryable);
+      const failure = classifyDeliveryError({ source: "PROVIDER", response });
+      await failRepairBatch(input, claimed, failure);
       result.failed += claimed.length;
       return result;
     }
@@ -805,7 +832,9 @@ export async function sendCommunicationRepairBatch(input: {
     );
     return result;
   } catch {
-    await failRepairBatch(input, claimed, "EMAIL_NETWORK_ERROR", true);
+    await failRepairBatch(input, claimed, classifyDeliveryError({
+      source: "TRANSIENT", code: "EMAIL_NETWORK_ERROR",
+    }));
     result.failed += claimed.length;
     return result;
   }
@@ -933,7 +962,9 @@ export async function sendCommunicationDelivery(input: {
         input.candidate.event.sourceRecordId,
       );
     } catch {
-      return fail(input, "REMINDER_VALIDATION_ERROR", true, attempt);
+      return fail(input, classifyDeliveryError({
+        source: "TRANSIENT", code: "REMINDER_VALIDATION_ERROR",
+      }), attempt);
     }
     const cancelReason = reminderCancellationReason(
       input.candidate.event.eventSnapshot,
@@ -950,7 +981,9 @@ export async function sendCommunicationDelivery(input: {
     }
   }
 
-  if (!input.config.resendApiKey) return fail(input, "RESEND_API_KEY_MISSING", false, attempt);
+  if (!input.config.resendApiKey) return fail(input, classifyDeliveryError({
+    source: "PERMANENT", code: "RESEND_API_KEY_MISSING",
+  }), attempt);
 
   let grantResult: Awaited<ReturnType<CommunicationPortalGrantProvider["getOrCreatePortalAccessGrant"]>>;
   try {
@@ -959,12 +992,12 @@ export async function sendCommunicationDelivery(input: {
       input.now,
     );
   } catch (error: unknown) {
-    const failure = portalGrantFailure(error);
+    const failure = classifyDeliveryError({ source: "PORTAL_GRANT", error });
     if (!failure.retryable && input.config.tiemedFallbackEmail) {
       return sendBlockedDelivery(input, { url: "" }, { url: "" },
         new CommunicationTemplateDataError(failure.code, false, { code: failure.code }), attempt);
     }
-    return fail(input, failure.code, failure.retryable, attempt);
+    return fail(input, failure, attempt);
   }
 
   let unsubscribeResult: Awaited<ReturnType<CommunicationUnsubscribeGrantProvider["getOrCreateUnsubscribeGrant"]>>;
@@ -974,12 +1007,12 @@ export async function sendCommunicationDelivery(input: {
       input.now,
     );
   } catch (error: unknown) {
-    const failure = portalGrantFailure(error);
+    const failure = classifyDeliveryError({ source: "PORTAL_GRANT", error });
     if (!failure.retryable && input.config.tiemedFallbackEmail) {
       return sendBlockedDelivery(input, grantResult, { url: "" },
         new CommunicationTemplateDataError(failure.code, false, { code: failure.code }), attempt);
     }
-    return fail(input, failure.code, failure.retryable, attempt);
+    return fail(input, failure, attempt);
   }
 
   let snapshot = input.candidate.sendSnapshot;
@@ -1009,24 +1042,24 @@ export async function sendCommunicationDelivery(input: {
         preparedAt: input.now.toISOString(),
       }, input.now);
     } catch (error: unknown) {
-      if (input.candidate.scenario === CommunicationScenario.INSPECTION_COMPLETED &&
+      const failure = classifyDeliveryError({ source: "TEMPLATE_DATA", error });
+      if (failure.category === "PERMANENT" &&
           error instanceof CommunicationTemplateDataError &&
-          error.code === "NO_COMPLETED_INSPECTIONS") {
-        return suppressEmptyCompleted(input);
-      }
-      if (error instanceof CommunicationTemplateDataError && !error.retryable &&
           input.config.tiemedFallbackEmail) {
         return sendBlockedDelivery(input, grantResult, unsubscribeResult, error, attempt);
       }
-      const failure = templateFailure(error);
-      return fail(input, failure.code, failure.retryable, attempt);
+      return fail(input, failure, attempt);
     }
   }
   if (snapshot.portalGrantPublicId !== grantResult.grant.publicId) {
-    return fail(input, "SEND_SNAPSHOT_GRANT_MISMATCH", false, attempt);
+    return fail(input, classifyDeliveryError({
+      source: "PERMANENT", code: "SEND_SNAPSHOT_GRANT_MISMATCH",
+    }), attempt);
   }
   if (snapshot.unsubscribeGrantPublicId !== unsubscribeResult.grant.publicId) {
-    return fail(input, "SEND_SNAPSHOT_UNSUBSCRIBE_GRANT_MISMATCH", false, attempt);
+    return fail(input, classifyDeliveryError({
+      source: "PERMANENT", code: "SEND_SNAPSHOT_UNSUBSCRIBE_GRANT_MISMATCH",
+    }), attempt);
   }
 
   if (input.config.communicationAssetsEnabled && input.assetPreflight) {
@@ -1045,7 +1078,9 @@ export async function sendCommunicationDelivery(input: {
       EMMA_UNSUBSCRIBE_URL: buildUnsubscribeHtml(unsubscribeResult.url),
     });
   } catch {
-    return fail(input, "TEMPLATE_VARIABLES_INVALID", false, attempt);
+    return fail(input, classifyDeliveryError({
+      source: "PERMANENT", code: "TEMPLATE_VARIABLES_INVALID",
+    }), attempt);
   }
 
   if (input.candidate.scenario === CommunicationScenario.INSPECTION_COMPLETED &&
@@ -1071,8 +1106,8 @@ export async function sendCommunicationDelivery(input: {
       ),
     });
     if (!response.ok) {
-      const failure = classifyProviderFailure(response);
-      return fail(input, failure.code, failure.retryable, attempt);
+      const failure = classifyDeliveryError({ source: "PROVIDER", response });
+      return fail(input, failure, attempt);
     }
     await input.store.markSent(input.candidate.id, response.id, input.now);
     input.log?.(
@@ -1080,7 +1115,9 @@ export async function sendCommunicationDelivery(input: {
     );
     return "SENT";
   } catch {
-    return fail(input, "EMAIL_NETWORK_ERROR", true, attempt);
+    return fail(input, classifyDeliveryError({
+      source: "TRANSIENT", code: "EMAIL_NETWORK_ERROR",
+    }), attempt);
   }
 }
 
@@ -1166,18 +1203,6 @@ async function sendUnscopedFallback(
   try { assertEmailDebugSafety(input.config, actualFallback, [candidate]); } catch { return null; }
   const claimed = await input.store.claim(candidate, input.now, input.config.mode, actualFallback);
   if (!claimed) return null;
-  if (candidate.scenario === CommunicationScenario.INSPECTION_COMPLETED) {
-    await input.store.cancel(
-      candidate.id,
-      CommunicationDeliveryCancelReason.EMPTY_COMPLETED,
-      input.now,
-    );
-    input.log?.(
-      `COMMUNICATION_EMAIL_SUPPRESSED deliveryId=${candidate.id} ` +
-      `scenario=INSPECTION_COMPLETED reason=EMPTY_COMPLETED`,
-    );
-    return null;
-  }
   const error = new CommunicationTemplateDataError("MISSING_HOSPITAL_SCOPE", false, {
     code: "MISSING_HOSPITAL_SCOPE", expected: "one hospital", found: null,
     recordIds: [candidate.event.sourceRecordId], safeRecordIds: [],
@@ -1203,17 +1228,14 @@ async function sendUnscopedFallback(
       idempotencyKey: `emma-communication-blocked-unscoped/${candidate.id}`,
     });
   } catch {
-    const retryAt = candidate.attemptCount < MAX_ATTEMPTS
-      ? new Date(input.now.getTime() + RETRY_DELAYS_MS[Math.max(0, candidate.attemptCount - 1)]!) : null;
-    await input.store.markFailed(candidate.id, "EMAIL_NETWORK_ERROR", input.now, retryAt);
+    await persistFailure(input, candidate, classifyDeliveryError({
+      source: "TRANSIENT", code: "EMAIL_NETWORK_ERROR",
+    }), claimedAttempt(candidate));
     return "FAILED";
   }
   if (!response.ok) {
-    const failure = classifyProviderFailure(response);
-    const attempt = candidate.attemptCount;
-    const retryAt = failure.retryable && attempt < MAX_ATTEMPTS
-      ? new Date(input.now.getTime() + RETRY_DELAYS_MS[Math.max(0, attempt - 1)]!) : null;
-    await input.store.markFailed(candidate.id, failure.code, input.now, retryAt);
+    const failure = classifyDeliveryError({ source: "PROVIDER", response });
+    await persistFailure(input, candidate, failure, claimedAttempt(candidate));
     return "FAILED";
   }
   await input.store.markSent(candidate.id, response.id, input.now);
@@ -1295,10 +1317,6 @@ async function sendBlockedDelivery(
   }
   const actualFallback = resolveFallbackRecipient(input.config, fallback);
   const variables = normalizeCommunicationTemplateVariables(payload.templateId, payload.variables);
-  if (input.candidate.scenario === CommunicationScenario.INSPECTION_COMPLETED &&
-      isEmptyCompletedVariables(variables)) {
-    return suppressEmptyCompleted(input);
-  }
   await input.store.rerouteToFallback([input.candidate.id], fallback, actualFallback, error.code);
   let response: ProviderEmailResult;
   try {
@@ -1311,12 +1329,14 @@ async function sendBlockedDelivery(
       idempotencyKey: `emma-communication-blocked/${input.candidate.event.sourceRecordId}/${input.candidate.scenario}`,
     });
   } catch {
-    await fail(input, "EMAIL_NETWORK_ERROR", true, attempt);
+    await fail(input, classifyDeliveryError({
+      source: "TRANSIENT", code: "EMAIL_NETWORK_ERROR",
+    }), attempt);
     return "FAILED";
   }
   if (!response.ok) {
-    const failure = classifyProviderFailure(response);
-    await fail(input, failure.code, failure.retryable, attempt);
+    const failure = classifyDeliveryError({ source: "PROVIDER", response });
+    await fail(input, failure, attempt);
     return "FAILED";
   }
   await input.store.markSent(input.candidate.id, response.id, input.now);
@@ -1357,12 +1377,14 @@ async function sendBlockedRepairBatch(
       idempotencyKey: `${communicationBatchIdempotencyKey(ids)}-blocked`,
     });
   } catch {
-    await failRepairBatch(input, candidates, "EMAIL_NETWORK_ERROR", true);
+    await failRepairBatch(input, candidates, classifyDeliveryError({
+      source: "TRANSIENT", code: "EMAIL_NETWORK_ERROR",
+    }));
     return "FAILED";
   }
   if (!response.ok) {
-    const failure = classifyProviderFailure(response);
-    await failRepairBatch(input, candidates, failure.code, failure.retryable);
+    const failure = classifyDeliveryError({ source: "PROVIDER", response });
+    await failRepairBatch(input, candidates, failure);
     return "FAILED";
   }
   await input.store.markBatchSent(ids, response.id, input.now);
@@ -1393,23 +1415,14 @@ export function communicationBatchIdempotencyKey(deliveryIds: readonly string[])
 async function failRepairBatch(
   input: Parameters<typeof sendCommunicationRepairBatch>[0],
   candidates: readonly CommunicationSendCandidate[],
-  reason: string,
-  retryable: boolean,
+  failure: DeliveryErrorClassification,
 ): Promise<void> {
   for (const candidate of candidates) {
     // Prisma claims increment the persisted attempt count without mutating the
     // fetched candidate object, while in-memory/test stores may mutate it.
     // Support both semantics so the selected retry policy receives the real attempt number.
     const attempt = claimedAttempt(candidate);
-    const nextRetryAt = retryable && attempt < MAX_ATTEMPTS
-      ? new Date(input.now.getTime() + retryDelayMs(reason, attempt))
-      : null;
-    await input.store.markFailed(candidate.id, reason, input.now, nextRetryAt);
-    input.log?.(
-      nextRetryAt
-        ? `COMMUNICATION_EMAIL_RETRY deliveryId=${candidate.id} attempt=${attempt} reason=${reason} batch=true`
-        : `COMMUNICATION_EMAIL_FAILED deliveryId=${candidate.id} reason=${reason} batch=true`,
-    );
+    await persistFailure(input, candidate, failure, attempt, true);
   }
 }
 
@@ -1464,6 +1477,7 @@ function isEmptyCompletedVariables(variables: Record<string, TemplateVariableVal
 async function suppressEmptyCompleted(
   input: Parameters<typeof sendCommunicationDelivery>[0],
 ): Promise<"CANCELLED"> {
+  const failure = classifyDeliveryError({ source: "SUPPRESSED", code: "EMPTY_COMPLETED" });
   await input.store.cancel(
     input.candidate.id,
     CommunicationDeliveryCancelReason.EMPTY_COMPLETED,
@@ -1471,7 +1485,8 @@ async function suppressEmptyCompleted(
   );
   input.log?.(
     `COMMUNICATION_EMAIL_SUPPRESSED deliveryId=${input.candidate.id} ` +
-    `scenario=INSPECTION_COMPLETED reason=EMPTY_COMPLETED`,
+    `scenario=INSPECTION_COMPLETED errorCategory=${failure.category} ` +
+    `errorCode=${failure.code} reason=${failure.code} ${deliveryDiagnosticFields(input.candidate)}`,
   );
   return "CANCELLED";
 }
@@ -1490,20 +1505,32 @@ function snapshotString(snapshot: unknown, key: string): string | null {
 
 async function fail(
   input: Parameters<typeof sendCommunicationDelivery>[0],
-  reason: string,
-  retryable: boolean,
+  failure: DeliveryErrorClassification,
   attempt: number,
 ): Promise<"FAILED"> {
-  const nextRetryAt = retryable && attempt < MAX_ATTEMPTS
-    ? new Date(input.now.getTime() + retryDelayMs(reason, attempt))
-    : null;
-  await input.store.markFailed(input.candidate.id, reason, input.now, nextRetryAt);
-  input.log?.(
-    nextRetryAt
-      ? `COMMUNICATION_EMAIL_RETRY deliveryId=${input.candidate.id} attempt=${attempt} reason=${reason}`
-      : `COMMUNICATION_EMAIL_FAILED deliveryId=${input.candidate.id} reason=${reason}`,
-  );
+  await persistFailure(input, input.candidate, failure, attempt);
   return "FAILED";
+}
+
+async function persistFailure(
+  input: Pick<Parameters<typeof sendCommunicationDelivery>[0], "store" | "now" | "log">,
+  candidate: CommunicationSendCandidate,
+  failure: DeliveryErrorClassification,
+  attempt: number,
+  batch = false,
+): Promise<void> {
+  const nextRetryAt = failure.category === "TRANSIENT" && attempt < MAX_ATTEMPTS
+    ? new Date(input.now.getTime() + retryDelayMs(attempt))
+    : null;
+  await input.store.markFailed(candidate.id, failure.code, input.now, nextRetryAt);
+  const event = nextRetryAt ? "COMMUNICATION_EMAIL_RETRY" : "COMMUNICATION_EMAIL_FAILED";
+  input.log?.(
+    `${event} scenario=${candidate.scenario} communicationEventId=${candidate.event.id ?? "unknown"} ` +
+    `deliveryId=${candidate.id} sourceRecordId=${candidate.event.sourceRecordId} ` +
+    `errorCategory=${failure.category} errorCode=${failure.code} attempt=${attempt} ` +
+    `maxAttempts=${MAX_ATTEMPTS} nextAttemptAt=${nextRetryAt?.toISOString() ?? "none"} ` +
+    `${deliveryDiagnosticFields(candidate)}${batch ? " batch=true" : ""}`,
+  );
 }
 
 function claimedAttempt(candidate: CommunicationSendCandidate): number {
@@ -1514,12 +1541,8 @@ function claimedAttempt(candidate: CommunicationSendCandidate): number {
     : candidate.attemptCount + 1;
 }
 
-function retryDelayMs(reason: string, attempt: number): number {
-  if (reason === "REPAIR_DEVICE_DATA_PENDING") {
-    return REPAIR_DEVICE_RETRY_DELAYS_MS[attempt - 1] ??
-      REPAIR_DEVICE_RETRY_DELAYS_MS[REPAIR_DEVICE_RETRY_DELAYS_MS.length - 1]!;
-  }
-  return RETRY_DELAYS_MS[attempt - 1]!;
+function retryDelayMs(attempt: number): number {
+  return RETRY_DELAYS_MS[attempt - 1] ?? RETRY_DELAYS_MS[RETRY_DELAYS_MS.length - 1]!;
 }
 
 async function failUnclaimed(
@@ -1532,49 +1555,91 @@ async function failUnclaimed(
     input.config.mode,
     "",
   );
-  if (claimed) await input.store.markFailed(input.candidate.id, reason, input.now, null);
-  input.log?.(`COMMUNICATION_EMAIL_FAILED deliveryId=${input.candidate.id} reason=${reason}`);
+  if (claimed) {
+    await persistFailure(input, input.candidate, classifyDeliveryError({
+      source: "PERMANENT", code: reason,
+    }), claimedAttempt(input.candidate));
+  }
   return "FAILED";
 }
 
 function recipientErrorCode(error: unknown): string {
-  return error instanceof RecipientSafetyError ? error.code : "INVALID_RECIPIENT";
+  return classifyDeliveryError({ source: "RECIPIENT", error }).code;
 }
 
-function templateFailure(error: unknown): { code: string; retryable: boolean } {
-  return error instanceof CommunicationTemplateDataError
-    ? { code: error.code, retryable: error.retryable }
-    : { code: "TEMPLATE_DATA_SOURCE_ERROR", retryable: true };
-}
-
-function portalGrantFailure(error: unknown): { code: string; retryable: boolean } {
-  const code = error instanceof Error ? error.message : "PORTAL_ACCESS_GRANT_FAILED";
-  if (new Set([
-    "MISSING_HOSPITAL_SCOPE",
-    "COMMUNICATION_DELIVERY_NOT_FOUND",
-    "COMMUNICATION_DELIVERY_NOT_READY",
-  ]).has(code)) return { code, retryable: false };
-  return { code: "PORTAL_ACCESS_GRANT_FAILED", retryable: true };
-}
-
-function classifyProviderFailure(
-  response: Extract<ProviderEmailResult, { ok: false }>,
-): { code: string; retryable: boolean } {
-  const status = response.error.statusCode;
-  const retryableNames = new Set([
-    "rate_limit_exceeded",
-    "concurrent_idempotent_requests",
-    "application_error",
-    "internal_server_error",
-  ]);
-  if (status === 429 || (status !== null && status >= 500) ||
-      retryableNames.has(response.error.name)) {
-    return {
-      code: status === 429 ? "RESEND_RATE_LIMITED" : "RESEND_TRANSIENT_ERROR",
-      retryable: true,
-    };
+export function classifyDeliveryError(input: DeliveryErrorInput): DeliveryErrorClassification {
+  if (input.source === "TRANSIENT") {
+    return { category: "TRANSIENT", code: input.code, retryable: true };
   }
-  return { code: "RESEND_REQUEST_REJECTED", retryable: false };
+  if (input.source === "PERMANENT") {
+    return { category: "PERMANENT", code: input.code, retryable: false };
+  }
+  if (input.source === "SUPPRESSED") {
+    return { category: "SUPPRESSED", code: input.code, retryable: false };
+  }
+  if (input.source === "RECIPIENT") {
+    const code = input.error instanceof RecipientSafetyError
+      ? input.error.code : "INVALID_RECIPIENT";
+    return { category: "PERMANENT", code, retryable: false };
+  }
+  if (input.source === "PORTAL_GRANT") {
+    const code = input.error instanceof Error
+      ? input.error.message : "PORTAL_ACCESS_GRANT_FAILED";
+    if (new Set([
+      "MISSING_HOSPITAL_SCOPE",
+      "COMMUNICATION_DELIVERY_NOT_FOUND",
+      "COMMUNICATION_DELIVERY_NOT_READY",
+    ]).has(code)) return { category: "PERMANENT", code, retryable: false };
+    return { category: "TRANSIENT", code: "PORTAL_ACCESS_GRANT_FAILED", retryable: true };
+  }
+  if (input.source === "PROVIDER") {
+    const status = input.response.error.statusCode;
+    const retryableNames = new Set([
+      "rate_limit_exceeded",
+      "concurrent_idempotent_requests",
+      "application_error",
+      "internal_server_error",
+    ]);
+    if (status === 429 || (status !== null && status >= 500) ||
+        retryableNames.has(input.response.error.name)) {
+      return {
+        category: "TRANSIENT",
+        code: status === 429 ? "RESEND_RATE_LIMITED" : "RESEND_TRANSIENT_ERROR",
+        retryable: true,
+      };
+    }
+    return { category: "PERMANENT", code: "RESEND_REQUEST_REJECTED", retryable: false };
+  }
+
+  if (!(input.error instanceof CommunicationTemplateDataError)) {
+    return { category: "TRANSIENT", code: "TEMPLATE_DATA_SOURCE_ERROR", retryable: true };
+  }
+  const transientTemplateCodes = new Set([
+    "TEMPLATE_DATA_SOURCE_ERROR",
+    "INSPECTION_SET_INCOMPLETE",
+    "INSPECTION_HOSPITAL_SCOPE_MISMATCH",
+    "INSPECTION_STATE_INCONSISTENT",
+    "INSPECTION_RESULT_INCOMPLETE",
+    "NO_COMPLETED_INSPECTIONS",
+    "REPAIR_DEVICE_DATA_PENDING",
+  ]);
+  const transient = input.error.retryable || transientTemplateCodes.has(input.error.code);
+  return {
+    category: transient ? "TRANSIENT" : "PERMANENT",
+    code: input.error.code,
+    retryable: transient,
+  };
+}
+
+function deliveryDiagnosticFields(candidate: CommunicationSendCandidate): string {
+  const snapshot = candidate.event.eventSnapshot;
+  const linkedIds = typeof snapshot === "object" && snapshot !== null && !Array.isArray(snapshot) &&
+      Array.isArray((snapshot as Record<string, unknown>).linkedInspectionRecordIds)
+    ? (snapshot as Record<string, unknown>).linkedInspectionRecordIds as unknown[] : [];
+  const safeLinkedIds = linkedIds.filter((value): value is string =>
+    typeof value === "string" && value.trim().length > 0);
+  return `linkedInspectionRecordIds=${JSON.stringify(safeLinkedIds)} ` +
+    `sourceHospitalRecordId=${snapshotString(snapshot, "sourceHospitalRecordId") ?? "none"}`;
 }
 
 function parseSendSnapshot(value: unknown): PersistedCommunicationSendSnapshot | null {

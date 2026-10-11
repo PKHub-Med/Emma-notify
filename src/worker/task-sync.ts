@@ -165,9 +165,15 @@ export async function runTaskSync(dependencies: {
       const task = mapTask(record);
       const observation = buildTaskObservation(task, detectedAt);
       const timeZone = dependencies.timeZone ?? "Europe/Warsaw";
+      const visitDateEligible = isCurrentVisitDateObservation(
+        observation,
+        detectedAt,
+        timeZone,
+      );
       const automaticEventAllowed = mode === "REMINDER_ELIGIBILITY"
         ? isCurrentReminderObservation(observation, detectedAt, timeZone)
         : mode === "INCREMENTAL" &&
+          visitDateEligible &&
           (dependencies.mailTestMode
             ? await isCurrentlyPerformedCompletedTask(
                 task,
@@ -261,6 +267,18 @@ export function isCurrentCompletedObservation(
   const businessDate = parseLocalDate(observation.eventSnapshot.day);
   return businessDate !== null &&
     compareLocalDates(businessDate, localDateAt(now, timeZone)) === 0;
+}
+
+export function isCurrentVisitDateObservation(
+  observation: CommunicationObservation,
+  now: Date,
+  timeZone: string,
+): boolean {
+  if (observation.scenario !== "INSPECTION_DATE_CONFIRMED" &&
+      observation.scenario !== "INSPECTION_DATE_PROPOSED") return true;
+  const visitDate = parseLocalDate(observation.eventSnapshot.day);
+  return visitDate !== null &&
+    compareLocalDates(visitDate, localDateAt(now, timeZone)) >= 0;
 }
 
 export async function isCurrentlyPerformedCompletedTask(
