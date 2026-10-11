@@ -1549,8 +1549,10 @@ const REPAIR_DEVICE_STATUSES = new Set([
 ]);
 
 export function repairDeviceStatus(value: string | null | undefined): string | null {
-  const normalized = value?.trim().toLocaleUpperCase("pl-PL") ?? "";
-  return REPAIR_DEVICE_STATUSES.has(normalized) ? normalized : null;
+  const current = value?.trim() ?? "";
+  if (!current) return null;
+  const normalized = current.toLocaleUpperCase("pl-PL");
+  return REPAIR_DEVICE_STATUSES.has(normalized) ? normalized : current;
 }
 
 function snapshotText(snapshot: unknown, key: string): string | null {

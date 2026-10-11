@@ -502,6 +502,7 @@ async function pollIncremental(): Promise<void> {
     await runIncrementalSync({
       airtable,
       store: incrementalStore,
+      deviceStore: deviceSyncStore,
       communicationStore,
       options: {
         overlapSeconds: config.airtableSyncOverlapSeconds,

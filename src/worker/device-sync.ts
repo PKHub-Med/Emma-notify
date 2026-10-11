@@ -185,6 +185,29 @@ export function syncSingleDeviceRecord(input: {
   return input.store.upsert(mapDevice(input.record), input.seenAt);
 }
 
+export async function fetchDeviceByRecordId(
+  airtable: AirtableIncrementalSource,
+  deviceRecordId: string,
+): Promise<MappedDevice> {
+  const record = await airtable.fetchRecord(
+    AIRTABLE_TABLE_IDS.devices,
+    deviceRecordId,
+    DEVICE_FIELD_IDS,
+  );
+  return mapDevice(record);
+}
+
+export async function refreshDeviceByRecordId(input: {
+  airtable: AirtableIncrementalSource;
+  store: Pick<DeviceSyncStore, "upsert">;
+  deviceRecordId: string;
+  seenAt: Date;
+}): Promise<MappedDevice> {
+  const device = await fetchDeviceByRecordId(input.airtable, input.deviceRecordId);
+  await input.store.upsert(device, input.seenAt);
+  return device;
+}
+
 export const DEVICE_EDITABLE_FIELD_IDS = [
   DEVICE_FIELDS.name,
   DEVICE_FIELDS.manufacturer,

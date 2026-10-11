@@ -671,7 +671,7 @@ describe("paginated hospital portal", () => {
         if (rawCalls === 2) return keys.slice(0, 30).map((key) => ({ airtableRecordId: key.sourceRecordId }));
         if (rawCalls === 3) return [{
           deviceAirtableId: "device-0", inspectionPerformedAt: oldInspection,
-          inspectionResult: "SPRAWNE", inspectionValidUntil: new Date("2026-01-15T00:00:00Z"),
+          inspectionResult: "NIESPRAWNY", inspectionValidUntil: new Date("2026-01-15T00:00:00Z"),
         }];
         return [];
       },
@@ -708,7 +708,8 @@ describe("paginated hospital portal", () => {
     expect(rawCalls).toBe(3);
     expect(page.items[0]).toMatchObject({
       department: "Laboratorium", inspectionPerformedAt: oldInspection,
-      status: "SPRAWNY", productionYear: "2021", repairEpc: "EPC-123",
+      inspectionResult: "NIESPRAWNY", status: "SPRAWNY",
+      productionYear: "2021", repairEpc: "EPC-123",
     });
     expect(page.items[0]).not.toHaveProperty("currentStatus");
     expect(page.items[0]).not.toHaveProperty("deviceStatus");

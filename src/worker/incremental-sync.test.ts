@@ -9,9 +9,11 @@ import {
 import {
   AIRTABLE_TABLE_IDS,
   CONTACT_FIELDS,
+  DEVICE_FIELDS,
   INSPECTION_FIELDS,
   SERVICE_ORDER_FIELDS,
 } from "../airtable/field-ids.js";
+import { mapDevice, type MappedDevice } from "../airtable/device.js";
 import type { MappedCase } from "../airtable/mappers.js";
 import type { ResolvedRecipient } from "../airtable/recipient.js";
 import type {
@@ -58,6 +60,7 @@ class FakeAirtable implements AirtableIncrementalSource {
   serviceOrders: AirtableRecord[] = [];
   inspections: AirtableRecord[] = [];
   contacts = new Map<string, AirtableRecord>();
+  devices = new Map<string, AirtableRecord>();
   fetchedRecordTables: string[] = [];
 
   async fetchAllRecords(
@@ -75,9 +78,24 @@ class FakeAirtable implements AirtableIncrementalSource {
     recordId: string,
   ): Promise<AirtableRecord> {
     this.fetchedRecordTables.push(tableId);
+    if (tableId === AIRTABLE_TABLE_IDS.devices) {
+      const device = this.devices.get(recordId);
+      if (!device) throw new Error("Missing fake device");
+      return device;
+    }
     const contact = this.contacts.get(recordId);
     if (!contact) throw new Error("Missing fake contact");
     return contact;
+  }
+}
+
+class MemoryDeviceStore {
+  readonly devices = new Map<string, MappedDevice>();
+  readonly upsertCalls: string[] = [];
+
+  async upsert(device: MappedDevice): Promise<void> {
+    this.devices.set(device.airtableRecordId, device);
+    this.upsertCalls.push(device.airtableRecordId);
   }
 }
 
@@ -225,15 +243,139 @@ class RecordingCommunicationStore implements CommunicationEventStore {
 }
 
 describe("incremental status sync", () => {
-  it("never fetches Devices per Service Order", async () => {
+  it("target-refreshes the linked Device after a Service Order", async () => {
     const source = new FakeAirtable();
     const store = new MemoryStore();
+    const deviceStore = new MemoryDeviceStore();
+    deviceStore.devices.set(
+      "recDevice",
+      mapDevice(deviceRecord("recDevice", "NIESPRAWNY")),
+    );
     source.contacts.set("recContact", eligibleContact("recContact", "one@example.com"));
-    source.serviceOrders = [serviceRecord("recService", "B", ["recContact"] )];
+    source.devices.set("recDevice", deviceRecord("recDevice", "SPRAWNY"));
+    source.serviceOrders = [serviceRecord("recService", "B", ["recContact"], date(0), {
+      [SERVICE_ORDER_FIELDS.deviceLink]: ["recDevice"],
+    })];
     store.seedCase(CaseType.SERVICE_ORDER, "recService", "A");
-    await run(source, store, date(0));
-    expect(source.fetchedRecordTables).toEqual([]);
-    expect(source.fetchedRecordTables).not.toContain(AIRTABLE_TABLE_IDS.devices);
+    await run(source, store, date(0), deviceStore);
+    expect(source.fetchedRecordTables).toContain(AIRTABLE_TABLE_IDS.devices);
+    expect(deviceStore.devices.get("recDevice")?.emmaDeviceStatus).toBe("SPRAWNY");
+  });
+
+  it("target-refreshes the linked Device after an Inspection in the same run", async () => {
+    const source = new FakeAirtable();
+    const store = new MemoryStore();
+    const deviceStore = new MemoryDeviceStore();
+    deviceStore.devices.set(
+      "recDevice",
+      mapDevice(deviceRecord("recDevice", "NIESPRAWNY")),
+    );
+    source.devices.set("recDevice", deviceRecord("recDevice", "SPRAWNY"));
+    source.inspections = [inspectionRecord("recInspection", "Wykonany", [], ["recDevice"])];
+
+    await run(source, store, date(0), deviceStore);
+
+    expect(deviceStore.devices.get("recDevice")?.emmaDeviceStatus).toBe("SPRAWNY");
+  });
+
+  it("refreshes a formula-only Device change even when DEVICE incremental returns no row", async () => {
+    const source = new FakeAirtable();
+    const store = new MemoryStore();
+    const deviceStore = new MemoryDeviceStore();
+    source.devices.set("recDevice", deviceRecord("recDevice", "SPRAWNY"));
+    source.inspections = [inspectionRecord("recInspection", "Wykonany", [], ["recDevice"])];
+    const fetchAll = vi.spyOn(source, "fetchAllRecords");
+
+    await run(source, store, date(0), deviceStore);
+
+    expect(fetchAll).not.toHaveBeenCalledWith(
+      AIRTABLE_TABLE_IDS.devices,
+      expect.anything(),
+      expect.anything(),
+    );
+    expect(deviceStore.devices.get("recDevice")?.emmaDeviceStatus).toBe("SPRAWNY");
+  });
+
+  it("fetches one Device once when three changed cases link to it", async () => {
+    const source = new FakeAirtable();
+    const store = new MemoryStore();
+    const deviceStore = new MemoryDeviceStore();
+    source.devices.set("recDevice", deviceRecord("recDevice", "SPRAWNY"));
+    source.serviceOrders = [
+      serviceRecord("recServiceA", "A", [], date(0), {
+        [SERVICE_ORDER_FIELDS.deviceLink]: ["recDevice"],
+      }),
+      serviceRecord("recServiceB", "B", [], date(0), {
+        [SERVICE_ORDER_FIELDS.deviceLink]: ["recDevice"],
+      }),
+    ];
+    source.inspections = [inspectionRecord(
+      "recInspection",
+      "Wykonany",
+      [],
+      ["recDevice"],
+    )];
+
+    await run(source, store, date(0), deviceStore);
+
+    expect(source.fetchedRecordTables.filter((tableId) =>
+      tableId === AIRTABLE_TABLE_IDS.devices)).toHaveLength(1);
+    expect(deviceStore.upsertCalls).toEqual(["recDevice"]);
+  });
+
+  it("logs a controlled warning and continues when a case has no Device link", async () => {
+    const source = new FakeAirtable();
+    const store = new MemoryStore();
+    const logs: string[] = [];
+    source.serviceOrders = [serviceRecord("recService", "A")];
+
+    await runIncrementalSync({
+      airtable: source,
+      store,
+      deviceStore: new MemoryDeviceStore(),
+      options: { overlapSeconds: 120, quietMinutes: 1, legacyNotificationsEnabled: false },
+      now: () => date(0),
+      log: (message) => logs.push(message),
+    });
+
+    expect(logs).toContain(
+      "DEVICE_TARGETED_REFRESH_SKIPPED reason=DEVICE_RECORD_ID_MISSING " +
+      "sourceEntityType=SERVICE_ORDER sourceRecordId=recService",
+    );
+  });
+
+  it("preserves the old Device status and checkpoint when targeted Airtable fetch fails", async () => {
+    const source = new FakeAirtable();
+    const store = new MemoryStore();
+    const deviceStore = new MemoryDeviceStore();
+    const logs: string[] = [];
+    deviceStore.devices.set(
+      "recDevice",
+      mapDevice(deviceRecord("recDevice", "NIESPRAWNY")),
+    );
+    source.serviceOrders = [serviceRecord("recService", "A", [], date(0), {
+      [SERVICE_ORDER_FIELDS.deviceLink]: ["recDevice"],
+    })];
+    vi.spyOn(source, "fetchRecord").mockRejectedValue(new Error("timeout"));
+
+    await expect(runIncrementalSync({
+      airtable: source,
+      store,
+      deviceStore,
+      options: { overlapSeconds: 120, quietMinutes: 1, legacyNotificationsEnabled: false },
+      now: () => date(0),
+      log: (message) => logs.push(message),
+    })).rejects.toThrow("Incremental synchronization stage failed");
+
+    expect(deviceStore.devices.get("recDevice")?.emmaDeviceStatus).toBe("NIESPRAWNY");
+    expect(deviceStore.upsertCalls).toHaveLength(0);
+    expect(store.checkpoints.get(SyncEntityType.SERVICE_ORDER)).toEqual(CHECKPOINT);
+    expect(logs).toContain(
+      "DEVICE_TARGETED_REFRESH_FAILED sourceEntityType=SERVICE_ORDER " +
+      "deviceRecordId=recDevice",
+    );
+    expect(logs.some((message) => message.includes("INCREMENTAL_SYNC_FAILED stage=DEVICE")))
+      .toBe(true);
   });
 
   it("logs SERVICE_ORDER Airtable metadata and allows the following poll to succeed", async () => {
@@ -252,6 +394,7 @@ describe("incremental status sync", () => {
     const poll = () => runIncrementalSync({
       airtable: source,
       store,
+      deviceStore: new MemoryDeviceStore(),
       options: { overlapSeconds: 120, quietMinutes: 1, legacyNotificationsEnabled: false },
       now: () => date(0),
       log: (message) => logs.push(message),
@@ -279,6 +422,7 @@ describe("incremental status sync", () => {
       logs: inspectionLogs,
       run: () => runIncrementalSync({
         airtable: inspectionSource, store: inspectionStore,
+        deviceStore: new MemoryDeviceStore(),
         options: { overlapSeconds: 120, quietMinutes: 1, legacyNotificationsEnabled: false },
         now: () => date(0), log: (message) => inspectionLogs.push(message),
       }),
@@ -295,6 +439,7 @@ describe("incremental status sync", () => {
       logs: dbLogs,
       run: () => runIncrementalSync({
         airtable: dbSource, store: dbStore,
+        deviceStore: new MemoryDeviceStore(),
         options: { overlapSeconds: 120, quietMinutes: 1, legacyNotificationsEnabled: false },
         now: () => date(0), log: (message) => dbLogs.push(message),
       }),
@@ -310,6 +455,7 @@ describe("incremental status sync", () => {
       logs: communicationLogs,
       run: () => runIncrementalSync({
         airtable: communicationSource, store: new MemoryStore(), communicationStore,
+        deviceStore: new MemoryDeviceStore(),
         options: { overlapSeconds: 120, quietMinutes: 1, legacyNotificationsEnabled: false },
         now: () => date(0), log: (message) => communicationLogs.push(message),
       }),
@@ -337,6 +483,7 @@ describe("incremental status sync", () => {
     await expect(runIncrementalSync({
       airtable: new FakeAirtable(),
       store,
+      deviceStore: new MemoryDeviceStore(),
       options: { overlapSeconds: 120, quietMinutes: 1, legacyNotificationsEnabled: false },
       now: () => date(0),
       log: (message) => logs.push(message),
@@ -361,6 +508,7 @@ describe("incremental status sync", () => {
     const stats = await runIncrementalSync({
       airtable: fixture.source,
       store: fixture.store,
+      deviceStore: new MemoryDeviceStore(),
       options: {
         overlapSeconds: 120,
         quietMinutes: 1,
@@ -394,6 +542,7 @@ describe("incremental status sync", () => {
     const stats = await runIncrementalSync({
       airtable: source,
       store,
+      deviceStore: new MemoryDeviceStore(),
       communicationStore,
       options: {
         overlapSeconds: 120,
@@ -655,10 +804,16 @@ function serviceFixture(
   };
 }
 
-function run(source: FakeAirtable, store: MemoryStore, now: Date) {
+function run(
+  source: FakeAirtable,
+  store: MemoryStore,
+  now: Date,
+  deviceStore = new MemoryDeviceStore(),
+) {
   return runIncrementalSync({
     airtable: source,
     store,
+    deviceStore,
     options: {
       overlapSeconds: 120,
       quietMinutes: 1,
@@ -689,11 +844,20 @@ function inspectionRecord(
   id: string,
   status: string,
   contactIds: string[] = [],
+  deviceIds: string[] = [],
 ): AirtableRecord {
   return record(id, {
     [INSPECTION_FIELDS.emmaStatus]: status,
     [INSPECTION_FIELDS.contactLinks]: contactIds,
+    [INSPECTION_FIELDS.deviceLink]: deviceIds,
     [INSPECTION_FIELDS.sourceModifiedAt]: date(0).toISOString(),
+  });
+}
+
+function deviceRecord(id: string, emmaDeviceStatus: string): AirtableRecord {
+  return record(id, {
+    [DEVICE_FIELDS.emmaDeviceStatus]: emmaDeviceStatus,
+    [DEVICE_FIELDS.sourceModifiedAt]: date(0).toISOString(),
   });
 }
 

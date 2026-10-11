@@ -142,11 +142,22 @@ describe("public API", () => {
       [`devices/${deviceItem.sourceRecordId}`, deviceDetail],
       ["documents", { items: [documentItem], nextCursor: null }],
     ];
+    let listDeviceStatus: string | null | undefined;
+    let detailDeviceStatus: string | null | undefined;
     for (const [path, expectedBody] of expectedRequests) {
       const response = await fetch(dataUrl(path));
       expect(response.status, path).toBe(200);
-      expect(await response.json(), path).toEqual(JSON.parse(JSON.stringify(expectedBody)));
+      const payload = await response.json();
+      expect(payload, path).toEqual(JSON.parse(JSON.stringify(expectedBody)));
+      if (path === "devices") {
+        listDeviceStatus = (payload as { items: PortalDevice[] }).items[0]?.status;
+      }
+      if (path === `devices/${deviceItem.sourceRecordId}`) {
+        detailDeviceStatus = (payload as PortalDeviceDetail).status;
+      }
     }
+    expect(listDeviceStatus).toBe("SPRAWNY");
+    expect(detailDeviceStatus).toBe(listDeviceStatus);
 
     const refresh = await fetch(dataUrl("refresh"), { method: "POST" });
     expect(refresh.status).toBe(202);

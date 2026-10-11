@@ -77,10 +77,10 @@ describe("RepairDetails", () => {
     ["SKASOWANY", "SKASOWANY"],
     [null, null],
     ["", null],
-    ["brak formuly", null],
-    ["brak formuły", null],
-    ["INNY STATUS", null],
-  ])("allowlists repair device status %j", (input, expected) => {
+    ["brak formuly", "brak formuly"],
+    ["brak formuły", "brak formuły"],
+    ["INNY STATUS", "INNY STATUS"],
+  ])("normalizes known Device status and preserves unknown value %j", (input, expected) => {
     expect(repairDeviceStatus(input)).toBe(expected);
   });
 

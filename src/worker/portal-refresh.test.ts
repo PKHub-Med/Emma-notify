@@ -158,6 +158,11 @@ describe("portal refresh worker", () => {
       "service-A",
       expect.any(Array),
     );
+    expect(fetchRecord).toHaveBeenCalledWith(
+      AIRTABLE_TABLE_IDS.devices,
+      "recDeviceA",
+      expect.arrayContaining([DEVICE_FIELDS.emmaDeviceStatus]),
+    );
     expect(portalCases).toEqual([{
       airtableRecordId: "service-A",
       completedAt: new Date("2026-04-01T00:00:00.000Z"),

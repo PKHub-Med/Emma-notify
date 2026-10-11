@@ -27,7 +27,8 @@ describe("Device list layout", () => {
     expect(deviceRowSource).toContain("deviceStatusPill(item.status,'device-list-device-pill')");
     expect(pageSource).toContain("renderDevice(item)");
     expect(pageSource).toContain("deviceStatusPill(item.status)");
-    expect(pageSource).toContain("text(value,'Brak informacji')");
+    expect(pageSource).toContain("text(value,'-')");
+    expect(pageSource).toContain("text(d.device.status,'-')");
     expect(pageSource).toContain("function repairDeviceStatusVariant(status)");
   });
 

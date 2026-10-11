@@ -81,6 +81,35 @@ describe("Device current-state synchronization", () => {
     expect(store.devices.get("recDevice")?.name).toBe("USG po zmianie");
   });
 
+  it("updates current Device status returned by the normal incremental sync", async () => {
+    const source = new FakeAirtable();
+    const store = new MemoryStore();
+    source.records = [deviceRecord("recDevice", "USG", "NIESPRAWNY")];
+    await run(source, store);
+
+    source.records = [deviceRecord("recDevice", "USG", "SPRAWNY")];
+    const updated = await run(source, store);
+
+    expect(updated.mode).toBe("INCREMENTAL");
+    expect(store.devices.size).toBe(1);
+    expect(store.devices.get("recDevice")?.emmaDeviceStatus).toBe("SPRAWNY");
+  });
+
+  it("refreshes computed current Device status during standard reconcile", async () => {
+    const source = new FakeAirtable();
+    const store = new MemoryStore();
+    source.records = [deviceRecord("recDevice", "USG", "NIESPRAWNY")];
+    await run(source, store);
+
+    source.records = [deviceRecord("recDevice", "USG", "SPRAWNY")];
+    await runDeviceSync({
+      airtable: source, store, requestedMode: "RECONCILE", now: fixedNow,
+    });
+
+    expect(store.devices.size).toBe(1);
+    expect(store.devices.get("recDevice")?.emmaDeviceStatus).toBe("SPRAWNY");
+  });
+
   it("keeps two different Device records with the same name", async () => {
     const source = new FakeAirtable();
     const store = new MemoryStore();
@@ -172,13 +201,14 @@ function run(source: FakeAirtable, store: MemoryStore) {
 
 function fixedNow() { return new Date("2026-08-14T10:00:00.000Z"); }
 
-function deviceRecord(id: string, name: string): AirtableRecord {
+function deviceRecord(id: string, name: string, currentStatus?: string): AirtableRecord {
   return {
     id,
     createdTime: "2026-08-01T08:00:00.000Z",
     fields: {
       [DEVICE_FIELDS.name]: name,
       [DEVICE_FIELDS.hospitalLink]: ["hospital-A"],
+      ...(currentStatus ? { [DEVICE_FIELDS.emmaDeviceStatus]: currentStatus } : {}),
       [DEVICE_FIELDS.sourceModifiedAt]: "2026-08-14T09:00:00.000Z",
     },
   };

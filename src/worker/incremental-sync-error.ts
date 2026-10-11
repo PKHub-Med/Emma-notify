@@ -6,6 +6,7 @@ export type IncrementalSyncStage =
   | "TASK"
   | "SERVICE_ORDER"
   | "INSPECTION"
+  | "DEVICE"
   | "DB"
   | "COMMUNICATION"
   | "UNKNOWN";
@@ -147,6 +148,7 @@ function safeToken(value: string): string {
 function airtableEntity(tableId: string): string {
   if (tableId === AIRTABLE_TABLE_IDS.serviceOrders) return "SERVICE_ORDER";
   if (tableId === AIRTABLE_TABLE_IDS.inspections) return "INSPECTION";
+  if (tableId === AIRTABLE_TABLE_IDS.devices) return "DEVICE";
   if (tableId === AIRTABLE_TABLE_IDS.tasks) return "TASK";
   if (tableId === AIRTABLE_TABLE_IDS.contacts) return "CONTACT";
   if (tableId === AIRTABLE_TABLE_IDS.hospitals) return "HOSPITAL";

@@ -54,6 +54,21 @@ describe("device mapper", () => {
     });
   });
 
+  it.each([
+    ["SPRAWNY", "SPRAWNY"],
+    ["NIESPRAWNY", "NIESPRAWNY"],
+    ["WARUNKOWO DOPUSZCZONY", "WARUNKOWO DOPUSZCZONY"],
+    [null, null],
+    ["   ", null],
+  ])("maps Airtable current Device status %j without deriving it", (value, expected) => {
+    const mapped = mapDevice({
+      id: "recDevice",
+      createdTime: "2026-08-01T08:00:00Z",
+      fields: { [DEVICE_FIELDS.emmaDeviceStatus]: value },
+    });
+    expect(mapped.emmaDeviceStatus).toBe(expected);
+  });
+
   it("fails closed when Device has zero or multiple hospitals", () => {
     const base = { id: "recDevice", createdTime: "2026-08-01T08:00:00Z" };
     expect(mapDevice({ ...base, fields: {} }).sourceHospitalRecordId).toBeNull();

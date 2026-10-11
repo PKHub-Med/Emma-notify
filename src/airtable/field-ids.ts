@@ -154,6 +154,7 @@ export const DEVICE_FIELDS = {
   location: "fldl06MEL6RkrDo21",
   hospitalLink: "fldMBpYguSqrxskc4",
   deviceStatus: "fldWbzAsP0qK4t5ud",
+  // Airtable: "Aktualny stan urządzenia" — current Device state shown in Emma.
   emmaDeviceStatus: "fld8McLg8jufDFT9y",
   productionYear: "fldi9HQzAEB9pwcWs",
   commissionedAt: "fldm1LzJ9gBTkdLRk",

@@ -7,7 +7,6 @@ import {
 } from "../generated/prisma/enums.js";
 import {
   AIRTABLE_TABLE_IDS,
-  DEVICE_FIELD_IDS,
   HOSPITAL_FIELD_IDS,
   HOSPITAL_FIELDS,
   INSPECTION_FIELD_IDS,
@@ -15,7 +14,6 @@ import {
   TASK_FIELD_IDS,
 } from "../airtable/field-ids.js";
 import { AirtableRequestError } from "../airtable/client.js";
-import { mapDevice } from "../airtable/device.js";
 import { mapHospital } from "../airtable/hospital.js";
 import {
   buildInspectionHospitalScopeIndex,
@@ -28,7 +26,7 @@ import type { CommunicationEventStore } from "./communication-event.js";
 import type { IncrementalStore } from "./incremental-store.js";
 import { syncSingleCaseRecord } from "./incremental-sync.js";
 import type { DeviceSyncStore } from "./device-sync.js";
-import { syncSingleDeviceRecord } from "./device-sync.js";
+import { fetchDeviceByRecordId } from "./device-sync.js";
 import type { TaskSyncStore } from "./task-sync.js";
 import { syncSingleTaskRecord } from "./task-sync.js";
 import {
@@ -366,14 +364,12 @@ export async function runPortalRefreshWorkerOnce(dependencies: {
     );
 
     await syncRecords([...deviceRecordIds], async (recordId) => {
-      const record = await dependencies.airtable.fetchRecord(
-        AIRTABLE_TABLE_IDS.devices, recordId, DEVICE_FIELD_IDS,
-      );
-      if (mapDevice(record).sourceHospitalRecordId !== claimed.sourceHospitalRecordId) {
+      const device = await fetchDeviceByRecordId(dependencies.airtable, recordId);
+      if (device.sourceHospitalRecordId !== claimed.sourceHospitalRecordId) {
         await dependencies.store.deactivateDevice(recordId, claimed.sourceHospitalRecordId);
         return;
       }
-      await syncSingleDeviceRecord({ record, store: dependencies.deviceStore, seenAt: now() });
+      await dependencies.deviceStore.upsert(device, now());
     }, (recordId) => dependencies.store.deactivateDevice(
       recordId,
       claimed.sourceHospitalRecordId,

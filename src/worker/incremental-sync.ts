@@ -44,6 +44,10 @@ import {
   IncrementalSyncStageError,
   type IncrementalSyncStage,
 } from "./incremental-sync-error.js";
+import {
+  refreshDeviceByRecordId,
+  type DeviceSyncStore,
+} from "./device-sync.js";
 
 export type IncrementalSyncOptions = {
   overlapSeconds: number;
@@ -101,6 +105,7 @@ const ENTITY_DEFINITIONS: readonly EntityDefinition[] = [
 export async function runIncrementalSync(dependencies: {
   airtable: AirtableIncrementalSource;
   store: IncrementalStore;
+  deviceStore: Pick<DeviceSyncStore, "upsert">;
   options: IncrementalSyncOptions;
   communicationStore?: CommunicationEventStore;
   now?: () => Date;
@@ -110,6 +115,7 @@ export async function runIncrementalSync(dependencies: {
   const startedAt = now();
   const stats = emptyStats();
   const contactCache = new Map<string, Contact>();
+  const refreshedDeviceRecordIds = new Set<string>();
   try {
     const serviceCommunicationEnabled = dependencies.communicationStore
       ? await atIncrementalStage("COMMUNICATION", () =>
@@ -121,10 +127,12 @@ export async function runIncrementalSync(dependencies: {
       definition,
       dependencies.airtable,
       dependencies.store,
+      dependencies.deviceStore,
       dependencies.options,
       startedAt,
       now,
       contactCache,
+      refreshedDeviceRecordIds,
       stats,
       dependencies.communicationStore,
       serviceCommunicationEnabled,
@@ -190,10 +198,12 @@ async function syncEntity(
   definition: EntityDefinition,
   airtable: AirtableIncrementalSource,
   store: IncrementalStore,
+  deviceStore: Pick<DeviceSyncStore, "upsert">,
   options: IncrementalSyncOptions,
   startedAt: Date,
   now: () => Date,
   contactCache: Map<string, Contact>,
+  refreshedDeviceRecordIds: Set<string>,
   stats: IncrementalSyncStats,
   communicationStore: CommunicationEventStore | undefined,
   serviceCommunicationEnabled: boolean,
@@ -227,8 +237,9 @@ async function syncEntity(
       ));
     stats[definition.fetchedStat] += records.length;
 
+    const deviceRecordIds = new Set<string>();
     for (const record of records) {
-      await processRecord(
+      const mappedCase = await processRecord(
         definition,
         record,
         airtable,
@@ -242,6 +253,34 @@ async function syncEntity(
         serviceCommunicationEnabled,
         log,
       );
+      if (mappedCase.deviceAirtableIds.length === 0) {
+        log?.(
+          "DEVICE_TARGETED_REFRESH_SKIPPED reason=DEVICE_RECORD_ID_MISSING " +
+          `sourceEntityType=${definition.entityType} ` +
+          `sourceRecordId=${mappedCase.airtableRecordId}`,
+        );
+      } else {
+        mappedCase.deviceAirtableIds.forEach((recordId) => deviceRecordIds.add(recordId));
+      }
+    }
+
+    for (const deviceRecordId of deviceRecordIds) {
+      if (refreshedDeviceRecordIds.has(deviceRecordId)) continue;
+      try {
+        await atIncrementalStage("DEVICE", () => refreshDeviceByRecordId({
+          airtable,
+          store: deviceStore,
+          deviceRecordId,
+          seenAt: now(),
+        }));
+        refreshedDeviceRecordIds.add(deviceRecordId);
+      } catch (error: unknown) {
+        log?.(
+          "DEVICE_TARGETED_REFRESH_FAILED " +
+          `sourceEntityType=${definition.entityType} deviceRecordId=${deviceRecordId}`,
+        );
+        throw error;
+      }
     }
 
     await atIncrementalStage("DB", () =>
@@ -267,7 +306,7 @@ async function processRecord(
   communicationStore: CommunicationEventStore | undefined,
   serviceCommunicationEnabled: boolean,
   log: ((message: string) => void) | undefined,
-): Promise<void> {
+): Promise<MappedCase> {
   const entityStage = definition.entityType as IncrementalSyncStage;
   const mappedCase = await atIncrementalStage(entityStage, async () =>
     definition.map(record));
@@ -294,7 +333,7 @@ async function processRecord(
       }));
       if (result.outcome === "CREATED") stats.communicationEventsCreated += 1;
     }
-    return;
+    return mappedCase;
   }
 
   await atIncrementalStage("DB", () =>
@@ -304,7 +343,7 @@ async function processRecord(
   if (oldStatus === newStatus) {
     await atIncrementalStage("DB", () =>
       store.upsertCaseWithoutEvent(mappedCase, detectedAt));
-    return;
+    return mappedCase;
   }
 
   stats.statusChangesDetected += 1;
@@ -329,13 +368,14 @@ async function processRecord(
 
   if (result.duplicate) {
     stats.duplicateEventsIgnored += 1;
-    return;
+    return mappedCase;
   }
   stats.eventsCreated += 1;
   if (result.withoutRecipient) stats.triggeringEventsWithoutRecipient += 1;
   stats.buffersCreated += result.buffersCreated;
   stats.buffersReset += result.buffersReset;
   stats.bufferItemsCreated += result.bufferItemsCreated;
+  return mappedCase;
 }
 
 async function resolveCurrentRecipients(
