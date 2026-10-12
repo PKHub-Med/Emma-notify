@@ -160,14 +160,15 @@ class MemoryCommunicationStore implements CommunicationEventStore {
     const cursor = this.cursors.get(key);
     if (cursor?.signature === observation.signature) {
       if (!observation.scenario) return { outcome: "NO_SCENARIO", revision: cursor.revision };
+      if (cursor.lastEventRevision === cursor.revision) {
+        cursor.pendingEventRevision = null;
+        return { outcome: "UNCHANGED", revision: cursor.revision };
+      }
       if (!allowEvent) {
         cursor.pendingEventRevision = retryableSuppression ? cursor.revision : null;
         return { outcome: "SUPPRESSED", revision: cursor.revision };
       }
-      if (cursor.lastEventRevision === cursor.revision) {
-        return { outcome: "UNCHANGED", revision: cursor.revision };
-      }
-      if (cursor.pendingEventRevision !== cursor.revision && !retryableSuppression) {
+      if (cursor.pendingEventRevision !== cursor.revision) {
         return { outcome: "UNCHANGED", revision: cursor.revision };
       }
       const fingerprint = createCommunicationFingerprint(observation, cursor.revision);
@@ -181,7 +182,9 @@ class MemoryCommunicationStore implements CommunicationEventStore {
     this.cursors.set(key, {
       signature: observation.signature,
       revision,
-      lastEventRevision: null,
+      // The Prisma update keeps the last handled revision as historical
+      // evidence when the cursor advances to a newer signature.
+      lastEventRevision: cursor?.lastEventRevision ?? null,
       pendingEventRevision: retryableSuppression && !allowEvent ? revision : null,
     });
     if (!observation.scenario) return { outcome: "NO_SCENARIO", revision };
@@ -549,6 +552,198 @@ describe("task polling and communication events", () => {
     expect(fixture.communication.events).toHaveLength(0);
     expect(fixture.communication.cursors.get("TASK:recTask")).toMatchObject({ revision: 5 });
     expect(fixture.communication.cursors.get("TASK:recTask")?.signature).not.toBe("old-contract");
+  });
+
+  it("21271: preserves revision 4 seen by reconcile and emits it once in incremental", async () => {
+    const fixture = taskFixture();
+    const diagnostics = new MemoryDiagnostics();
+    diagnostics.readiness = { ready: true };
+    fixture.communication.baselineCompleted = true;
+    fixture.store.checkpoint = {
+      baselineCompletedAt: new Date("2026-10-01T00:00:00Z"),
+      lastSuccessfulSyncAt: new Date("2026-10-12T07:00:00Z"),
+    };
+    fixture.communication.cursors.set("TASK:rec21271", {
+      signature: "revision-3-before-completion",
+      revision: 3,
+      lastEventRevision: 2,
+      pendingEventRevision: null,
+    });
+    fixture.source.setCurrent(completedTaskRecord("rec21271", "2026-10-12"));
+    const common = {
+      airtable: fixture.source,
+      store: fixture.store,
+      communicationStore: fixture.communication,
+      diagnostics,
+      timeZone: "Europe/Warsaw",
+      now: () => new Date("2026-10-12T08:00:00Z"),
+    };
+
+    await runTaskSync({ ...common, requestedMode: "RECONCILE" });
+
+    expect(fixture.communication.events).toHaveLength(0);
+    expect(fixture.communication.cursors.get("TASK:rec21271")).toMatchObject({
+      revision: 4,
+      lastEventRevision: 2,
+      pendingEventRevision: 4,
+    });
+    expect(fixture.store.checkpoint.lastSuccessfulSyncAt?.toISOString())
+      .toBe("2026-10-12T07:00:00.000Z");
+    expect(diagnostics.transitions.at(-1)).toMatchObject({
+      status: CommunicationDiagnosticStatus.PENDING_DATA,
+      reasonCode: "RECONCILE_DEFERRED",
+    });
+
+    // Model a record absent from LAST_MODIFIED_TIME: the persisted diagnostic
+    // must force an exact refetch by ID on the next incremental cycle.
+    fixture.source.currentRecords = [];
+    await runTaskSync(common);
+    await runTaskSync(common);
+
+    expect(fixture.communication.events).toHaveLength(1);
+    expect(fixture.communication.cursors.get("TASK:rec21271")).toMatchObject({
+      revision: 4,
+      lastEventRevision: 4,
+      pendingEventRevision: null,
+    });
+  });
+
+  it("21272: reconcile does not consume an incomplete incremental completion", async () => {
+    const fixture = taskFixture();
+    const diagnostics = new MemoryDiagnostics();
+    fixture.communication.baselineCompleted = true;
+    fixture.communication.cursors.set("TASK:rec21272", {
+      signature: "revision-3-before-completion",
+      revision: 3,
+      lastEventRevision: 2,
+      pendingEventRevision: null,
+    });
+    fixture.source.setCurrent(completedTaskRecord("rec21272", "2026-10-12"));
+    const common = {
+      airtable: fixture.source,
+      store: fixture.store,
+      communicationStore: fixture.communication,
+      diagnostics,
+      timeZone: "Europe/Warsaw",
+      now: () => new Date("2026-10-12T08:00:00Z"),
+    };
+
+    await runTaskSync(common);
+    expect(fixture.communication.cursors.get("TASK:rec21272")?.pendingEventRevision).toBe(4);
+    await runTaskSync({ ...common, requestedMode: "RECONCILE" });
+    expect(fixture.communication.cursors.get("TASK:rec21272")?.pendingEventRevision).toBe(4);
+    expect(diagnostics.transitions.at(-1)).toMatchObject({
+      status: CommunicationDiagnosticStatus.PENDING_DATA,
+      reasonCode: "INSPECTION_RESULTS_INCOMPLETE",
+      missingData: { expectedInspectionIds: ["recInspectionA", "recInspectionB"] },
+    });
+
+    diagnostics.readiness = { ready: true };
+    await runTaskSync(common);
+    expect(fixture.communication.events).toHaveLength(1);
+    expect(fixture.communication.cursors.get("TASK:rec21272")).toMatchObject({
+      revision: 4,
+      lastEventRevision: 4,
+      pendingEventRevision: null,
+    });
+  });
+
+  it("21282: reconcile and incremental do not replay an already handled revision", async () => {
+    const fixture = taskFixture();
+    const diagnostics = new MemoryDiagnostics();
+    diagnostics.readiness = { ready: true };
+    fixture.communication.baselineCompleted = true;
+    fixture.source.setCurrent(completedTaskRecord("rec21282", "2026-10-12"));
+    const common = {
+      airtable: fixture.source,
+      store: fixture.store,
+      communicationStore: fixture.communication,
+      diagnostics,
+      timeZone: "Europe/Warsaw",
+      now: () => new Date("2026-10-12T08:00:00Z"),
+    };
+
+    await runTaskSync(common);
+    const sentCursor = fixture.communication.cursors.get("TASK:rec21282")!;
+    sentCursor.revision = 2;
+    sentCursor.lastEventRevision = 2;
+    await runTaskSync({ ...common, requestedMode: "RECONCILE" });
+    await runTaskSync(common);
+
+    expect(fixture.communication.events).toHaveLength(1);
+    expect(fixture.communication.cursors.get("TASK:rec21282")).toMatchObject({
+      revision: 2,
+      lastEventRevision: 2,
+      pendingEventRevision: null,
+    });
+  });
+
+  it("21310: repeatedly reconciling revision 1 keeps one pending revision", async () => {
+    const fixture = taskFixture();
+    const diagnostics = new MemoryDiagnostics();
+    diagnostics.readiness = { ready: true };
+    fixture.communication.baselineCompleted = true;
+    fixture.communication.cursors.set("TASK:rec21310", {
+      signature: "revision-0-before-completion",
+      revision: 0,
+      lastEventRevision: null,
+      pendingEventRevision: null,
+    });
+    fixture.source.setCurrent(completedTaskRecord("rec21310", "2026-10-12"));
+    const common = {
+      airtable: fixture.source,
+      store: fixture.store,
+      communicationStore: fixture.communication,
+      diagnostics,
+      requestedMode: "RECONCILE" as const,
+      timeZone: "Europe/Warsaw",
+      now: () => new Date("2026-10-12T08:00:00Z"),
+    };
+
+    await runTaskSync(common);
+    await runTaskSync(common);
+    await runTaskSync(common);
+
+    expect(fixture.communication.events).toHaveLength(0);
+    expect(fixture.communication.cursors.get("TASK:rec21310")).toMatchObject({
+      revision: 1,
+      lastEventRevision: null,
+      pendingEventRevision: 1,
+    });
+  });
+
+  it("21263: a later linked inspection result does not create a second summary", async () => {
+    const fixture = taskFixture();
+    const diagnostics = new MemoryDiagnostics();
+    diagnostics.readiness = { ready: true };
+    fixture.communication.baselineCompleted = true;
+    fixture.source.setCurrent(completedTaskRecord("rec21263", "2026-10-12"));
+    const common = {
+      airtable: fixture.source,
+      store: fixture.store,
+      communicationStore: fixture.communication,
+      diagnostics,
+      timeZone: "Europe/Warsaw",
+      now: () => new Date("2026-10-12T08:00:00Z"),
+    };
+
+    await runTaskSync(common);
+    const handledCursor = fixture.communication.cursors.get("TASK:rec21263")!;
+    handledCursor.revision = 4;
+    handledCursor.lastEventRevision = 4;
+    const completedWithAdditionalInspection = completedTaskRecord("rec21263", "2026-10-12");
+    completedWithAdditionalInspection.fields[TASK_FIELDS.inspectionLinks] = [
+      "recInspectionA", "recInspectionB", "recInspectionAddedLater",
+    ];
+    fixture.source.setCurrent(completedWithAdditionalInspection);
+    await runTaskSync(common);
+
+    expect(fixture.communication.events).toHaveLength(1);
+    expect(fixture.communication.cursors.get("TASK:rec21263")).toMatchObject({
+      revision: 4,
+      lastEventRevision: 4,
+      pendingEventRevision: null,
+    });
   });
 
   it("creates one current completed event during incremental sync and none on rerun", async () => {

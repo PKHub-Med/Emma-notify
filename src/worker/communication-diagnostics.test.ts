@@ -7,6 +7,7 @@ import {
   CommunicationSourceEntityType,
 } from "../generated/prisma/enums.js";
 import { PrismaCommunicationDiagnosticRegistry } from "./communication-diagnostics.js";
+import type { CommunicationObservation } from "./communication-event.js";
 
 describe("communication diagnostic registry", () => {
   it("keeps append-only transitions and suppresses duplicate polling logs", async () => {
@@ -137,7 +138,64 @@ describe("communication diagnostic registry", () => {
       expect(fixture.log).toHaveBeenCalledTimes(1);
     },
   );
+
+  it("keeps completed data pending when the hospital scope is missing", async () => {
+    const findMany = vi.fn(async () => []);
+    const prisma = { trackedCase: { findMany } } as unknown as PrismaClient;
+    const registry = new PrismaCommunicationDiagnosticRegistry(prisma, vi.fn());
+
+    await expect(registry.assessCompletedData(completedObservation(
+      completedSnapshot({ sourceHospitalRecordId: null }),
+    ))).resolves.toMatchObject({
+      ready: false,
+      reasonCode: "HOSPITAL_SCOPE_MISSING",
+    });
+    expect(findMany).not.toHaveBeenCalled();
+  });
+
+  it("keeps completed data pending when an inspection result is not recognized", async () => {
+    const prisma = {
+      trackedCase: {
+        findMany: vi.fn(async () => [{
+          airtableRecordId: "recInspection",
+          sourceHospitalRecordId: "recHospital",
+          inspectionResult: null,
+        }]),
+      },
+    } as unknown as PrismaClient;
+    const registry = new PrismaCommunicationDiagnosticRegistry(prisma, vi.fn());
+
+    await expect(registry.assessCompletedData(
+      completedObservation(completedSnapshot()),
+    )).resolves.toMatchObject({
+      ready: false,
+      reasonCode: "INSPECTION_RESULTS_INCOMPLETE",
+      missingData: { missingResultInspectionIds: ["recInspection"] },
+    });
+  });
 });
+
+function completedSnapshot(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    linkedInspectionRecordIds: ["recInspection"],
+    sourceHospitalRecordId: "recHospital",
+    selectedContactRecordIds: ["recContact"],
+    fallbackContactRecordIds: [],
+    ...overrides,
+  };
+}
+
+function completedObservation(eventSnapshot: Record<string, unknown>): CommunicationObservation {
+  return {
+    sourceEntityType: "TASK",
+    sourceRecordId: "recTask",
+    scenario: "INSPECTION_COMPLETED",
+    signature: "signature",
+    fingerprintPayload: [],
+    eventSnapshot,
+    unknownPair: false,
+  };
+}
 
 function registryFixture() {
   let current: Record<string, any> | null = null;

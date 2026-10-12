@@ -231,21 +231,26 @@ export async function runTaskSync(dependencies: {
         detectedAt,
         timeZone,
       );
+      const completedDateEligible = observation.scenario === "INSPECTION_COMPLETED"
+        ? dependencies.mailTestMode
+          ? await isCurrentlyPerformedCompletedTask(
+              task,
+              dependencies.airtable,
+              detectedAt,
+              timeZone,
+            )
+          : isCurrentCompletedObservation(observation, detectedAt, timeZone)
+        : true;
       const automaticEventAllowed = mode === "REMINDER_ELIGIBILITY"
         ? isCurrentReminderObservation(observation, detectedAt, timeZone)
         : mode === "INCREMENTAL" &&
           visitDateEligible &&
-          (dependencies.mailTestMode
-            ? await isCurrentlyPerformedCompletedTask(
-                task,
-                dependencies.airtable,
-                detectedAt,
-                timeZone,
-              )
-            : isCurrentCompletedObservation(observation, detectedAt, timeZone));
+          completedDateEligible;
       let readiness: CompletedDataReadiness = { ready: true };
       if (observation.scenario === "INSPECTION_COMPLETED" &&
-          (automaticEventAllowed || pendingTask !== null) && dependencies.diagnostics) {
+          (automaticEventAllowed || pendingTask !== null ||
+            (mode === "RECONCILE" && completedDateEligible)) &&
+          dependencies.diagnostics) {
         readiness = await dependencies.diagnostics.assessCompletedData(observation);
       }
       const pendingExpiresAt = pendingTask
@@ -263,8 +268,13 @@ export async function runTaskSync(dependencies: {
         );
       }
       const allowEvent = automaticEventAllowed && readiness.ready && !completedLimitReached;
+      // Reconcile remains data-only, but a completion from the current business
+      // day is an eligible transition which must survive until incremental can
+      // run the normal readiness checks and create the event. Historical and
+      // baseline observations remain permanently suppressed.
       const retryableSuppression = observation.scenario === "INSPECTION_COMPLETED" &&
-        automaticEventAllowed && !pendingDataExpired;
+        !pendingDataExpired &&
+        (automaticEventAllowed || (mode === "RECONCILE" && completedDateEligible));
       const outcome = await syncSingleTaskRecord({
         record,
         store: dependencies.store,
@@ -285,6 +295,7 @@ export async function runTaskSync(dependencies: {
           taskNumber: task.taskNumber,
           mode,
           automaticEventAllowed,
+          deferredTransition: retryableSuppression && mode === "RECONCILE",
           readiness,
           completedLimitReached,
           outcome: outcome.communicationOutcome,
@@ -310,7 +321,7 @@ export async function runTaskSync(dependencies: {
     await dependencies.store.markSuccessful(
       completedAt,
       mode === "BASELINE",
-      mode !== "REMINDER_ELIGIBILITY",
+      mode === "BASELINE" || mode === "INCREMENTAL",
     );
     stats.pagesFetched = measured.metrics.pagesFetched;
     stats.requestsMade = measured.metrics.requestsMade;
@@ -376,6 +387,7 @@ async function recordTaskDiagnostic(input: {
   taskNumber: string | null;
   mode: TaskSyncMode;
   automaticEventAllowed: boolean;
+  deferredTransition: boolean;
   readiness: CompletedDataReadiness;
   completedLimitReached: boolean;
   outcome: CommunicationObservationResult["outcome"];
@@ -445,6 +457,20 @@ async function recordTaskDiagnostic(input: {
     return;
   }
   if (!input.automaticEventAllowed) {
+    if (input.deferredTransition) {
+      await input.diagnostics.record({
+        ...common,
+        status: CommunicationDiagnosticStatus.PENDING_DATA,
+        reasonCode: input.readiness.ready
+          ? "RECONCILE_DEFERRED"
+          : input.readiness.reasonCode,
+        reasonOrigin: CommunicationDiagnosticOrigin.SYNC,
+        missingData: input.readiness.ready ? null : input.readiness.missingData,
+        nextCheckAt: nextPendingCheck(input.detectedAt),
+        expiresAt: input.pendingExpiresAt,
+      });
+      return;
+    }
     await input.diagnostics.record({
       ...common,
       status: historical && input.mode === "INCREMENTAL"

@@ -98,6 +98,84 @@ describe("communication event diagnostics and snapshots", () => {
     expect(events).toHaveLength(0);
   });
 
+  it("does not treat the caller's retry policy as a persisted pending transition", async () => {
+    let cursor: any = null;
+    const events: any[] = [];
+    const transaction = {
+      communicationCursor: {
+        findUnique: vi.fn(async () => cursor),
+        create: vi.fn(async ({ data }: any) => {
+          cursor = { id: "cursor-1", lastEventRevision: null, pendingEventRevision: null, ...data };
+          return cursor;
+        }),
+        update: vi.fn(async ({ data }: any) => {
+          cursor = { ...cursor, ...data };
+          return cursor;
+        }),
+      },
+      communicationEvent: {
+        findUnique: vi.fn(async () => null),
+        create: vi.fn(async ({ data }: any) => {
+          const event = { id: `event-${events.length + 1}`, ...data };
+          events.push(event);
+          return event;
+        }),
+      },
+    };
+    const prisma = {
+      $transaction: async (operation: (tx: unknown) => unknown) => operation(transaction),
+    } as unknown as PrismaClient;
+    const store = new PrismaCommunicationEventStore(prisma);
+    const observation = buildTaskObservation({
+      ...mappedTask(),
+      completed: true,
+      day: "2026-08-12",
+      emmaCustomerStatus: "Wizyta zakończona",
+      emmaMailTemplate: "Przegląd-podsumowanie_wizyty",
+    }, detectedAt);
+
+    await store.observe(observation, false, detectedAt, false);
+    expect((await store.observe(observation, true, detectedAt, true)).outcome).toBe("UNCHANGED");
+    expect(events).toHaveLength(0);
+  });
+
+  it("clears a stale pending marker for an already emitted revision", async () => {
+    const observation = buildTaskObservation({
+      ...mappedTask(),
+      completed: true,
+      day: "2026-08-12",
+      emmaCustomerStatus: "Wizyta zakończona",
+      emmaMailTemplate: "Przegląd-podsumowanie_wizyty",
+    }, detectedAt);
+    let cursor = {
+      id: "cursor-1",
+      lastSignature: observation.signature,
+      revision: 4,
+      lastEventRevision: 4,
+      pendingEventRevision: 4,
+    };
+    const transaction = {
+      communicationCursor: {
+        findUnique: vi.fn(async () => cursor),
+        update: vi.fn(async ({ data }: any) => {
+          cursor = { ...cursor, ...data };
+          return cursor;
+        }),
+      },
+      communicationEvent: { findUnique: vi.fn(), create: vi.fn() },
+    };
+    const prisma = {
+      $transaction: async (operation: (tx: unknown) => unknown) => operation(transaction),
+    } as unknown as PrismaClient;
+
+    const result = await new PrismaCommunicationEventStore(prisma)
+      .observe(observation, false, detectedAt, true);
+
+    expect(result.outcome).toBe("UNCHANGED");
+    expect(cursor.pendingEventRevision).toBeNull();
+    expect(transaction.communicationEvent.create).not.toHaveBeenCalled();
+  });
+
   it("adopts a legacy existing matching fingerprint and repairs lastEventRevision", async () => {
     const observation = buildTaskObservation({
       ...mappedTask(),

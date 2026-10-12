@@ -43,6 +43,11 @@ export interface CommunicationEventStore {
     observation: CommunicationObservation,
     allowEvent: boolean,
     detectedAt: Date,
+    /**
+     * Marks an eligible observation as temporarily suppressed. The exact
+     * revision may be emitted later, but only while it is still the current
+     * revision. Permanent suppression deliberately clears this marker.
+     */
     retryableSuppression?: boolean,
   ): Promise<CommunicationObservationResult>;
 }
@@ -124,6 +129,18 @@ export class PrismaCommunicationEventStore implements CommunicationEventStore {
               if (!observation.scenario) {
                 return { outcome: "NO_SCENARIO", revision: cursor.revision };
               }
+              if (cursor.lastEventRevision === cursor.revision) {
+                // A reconcile of an already handled transition must not arm it
+                // again. It is useful to clear a stale pending marker left by
+                // an older worker version while preserving event deduplication.
+                if (cursor.pendingEventRevision !== null) {
+                  await transaction.communicationCursor.update({
+                    where: { id: cursor.id },
+                    data: { pendingEventRevision: null },
+                  });
+                }
+                return { outcome: "UNCHANGED", revision: cursor.revision };
+              }
               if (!allowEvent) {
                 await transaction.communicationCursor.update({
                   where: { id: cursor.id },
@@ -133,10 +150,11 @@ export class PrismaCommunicationEventStore implements CommunicationEventStore {
                 });
                 return { outcome: "SUPPRESSED", revision: cursor.revision };
               }
-              if (cursor.lastEventRevision === cursor.revision) {
-                return { outcome: "UNCHANGED", revision: cursor.revision };
-              }
-              if (cursor.pendingEventRevision !== cursor.revision && !retryableSuppression) {
+              // An unchanged observation can only be emitted when an earlier
+              // pass explicitly persisted this exact revision as pending.
+              // The caller's current retry policy is not evidence that the
+              // historic revision was eligible when first observed.
+              if (cursor.pendingEventRevision !== cursor.revision) {
                 return { outcome: "UNCHANGED", revision: cursor.revision };
               }
               const fingerprint = createCommunicationFingerprint(observation, cursor.revision);
