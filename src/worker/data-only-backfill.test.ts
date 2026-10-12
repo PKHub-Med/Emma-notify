@@ -81,7 +81,8 @@ describe("data-only backfill", () => {
     const stores = {
       baseline: { upsertCase: forbiddenWrite, syncRecipients: forbiddenWrite },
       hospital: { upsert: forbiddenWrite, synchronizeInspectionScopes: async () => ({
-        scanned: 0, repaired: 0, unchanged: 0, stillUnscoped: 0, ambiguous: 0,
+        scanned: 0, resolved: 0, sameHospital: 0, conflicts: 0, missing: 0,
+        repaired: 0, unchanged: 0, stillUnscoped: 0, ambiguous: 0,
       }) },
       device: { upsert: forbiddenWrite }, task: { upsertTask: forbiddenWrite },
       communication: { observe: forbiddenWrite },
@@ -175,7 +176,8 @@ describe("data-only backfill", () => {
     const baseline = { upsertCase: vi.fn(async (item: { airtableRecordId: string }) => item.airtableRecordId),
       syncRecipients: vi.fn(async () => undefined) };
     const hospital = { upsert: vi.fn(async () => undefined),
-      synchronizeInspectionScopes: vi.fn(async () => ({ scanned: 1, repaired: 0,
+      synchronizeInspectionScopes: vi.fn(async () => ({ scanned: 1,
+        resolved: 0, sameHospital: 0, conflicts: 0, missing: 0, repaired: 0,
         unchanged: 1, stillUnscoped: 0, ambiguous: 0 })) };
     const device = { upsert: vi.fn(async () => undefined) };
     const task = { upsertTask: vi.fn(async () => "FIRST_SEEN") };
@@ -307,7 +309,8 @@ describe("data-only backfill", () => {
     const hospital = {
       upsert: vi.fn(async () => undefined),
       synchronizeInspectionScopes: vi.fn(async () => ({
-        scanned: 1, repaired: 1, unchanged: 0, stillUnscoped: 0, ambiguous: 0,
+        scanned: 1, resolved: 1, sameHospital: 0, conflicts: 0, missing: 0,
+        repaired: 1, unchanged: 0, stillUnscoped: 0, ambiguous: 0,
       })),
     };
     const device = { upsert: vi.fn(async () => undefined) };

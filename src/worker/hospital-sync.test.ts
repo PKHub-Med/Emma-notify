@@ -51,16 +51,22 @@ describe("Hospital -> Inspection canonical scope", () => {
     const stats = await synchronizeInspectionHospitalScopes(prisma, index, log);
 
     expect(stats).toEqual({
-      scanned: 4, repaired: 0, unchanged: 4, stillUnscoped: 3, ambiguous: 2,
+      scanned: 4, resolved: 0, sameHospital: 0, conflicts: 2, missing: 1,
+      repaired: 0, unchanged: 4, stillUnscoped: 3, ambiguous: 2,
     });
     expect(update).not.toHaveBeenCalled();
     expect(createCommunicationEvent).not.toHaveBeenCalled();
+    expect(log).toHaveBeenCalledTimes(3);
+    expect(log).toHaveBeenCalledWith(
+      "INSPECTION_HOSPITAL_SCOPE_MISSING count=1 sampleSourceRecordIds=inspection-missing",
+    );
     expect(log).toHaveBeenCalledWith(expect.stringContaining(
-      "INSPECTION_HOSPITAL_SCOPE_MISSING",
+      "INSPECTION_HOSPITAL_SCOPE_AMBIGUOUS count=2",
     ));
-    expect(log).toHaveBeenCalledWith(expect.stringContaining(
-      "INSPECTION_HOSPITAL_SCOPE_AMBIGUOUS",
-    ));
+    expect(log).toHaveBeenCalledWith(
+      "INSPECTION_HOSPITAL_SCOPE_SUMMARY resolved=0 sameHospital=0 " +
+      "conflicts=2 missing=1 unchanged=4",
+    );
   });
 
   it("limits a scoped repair query to the explicit Inspection Record IDs", async () => {
@@ -127,7 +133,62 @@ describe("Hospital -> Inspection canonical scope", () => {
     const stats = await synchronizeInspectionHospitalScopes(prisma, direct, vi.fn());
 
     expect(stats.ambiguous).toBe(1);
+    expect(stats.conflicts).toBe(1);
     expect(update).not.toHaveBeenCalled();
+  });
+
+  it("treats matching direct and Device relations as the same hospital", async () => {
+    const update = vi.fn(async () => ({}));
+    const prisma = {
+      trackedCase: { findMany: vi.fn(async () => [{
+        ...caseRow("1", "inspection-same-hospital", null),
+        devices: [{ deviceAirtableId: "device-1" }],
+      }]), update },
+      trackedDevice: { findMany: vi.fn(async () => [{
+        airtableRecordId: "device-1", sourceHospitalRecordId: "H1",
+      }]) },
+    } as unknown as PrismaClient;
+    const direct = new Map([["inspection-same-hospital", new Set(["H1"])]]);
+    const log = vi.fn();
+
+    const stats = await synchronizeInspectionHospitalScopes(prisma, direct, log);
+
+    expect(stats).toMatchObject({
+      resolved: 1, sameHospital: 1, conflicts: 0, missing: 0, unchanged: 0,
+    });
+    expect(update).toHaveBeenCalledWith({
+      where: { id: "1" }, data: { sourceHospitalRecordId: "H1" },
+    });
+    expect(log).not.toHaveBeenCalledWith(expect.stringContaining(
+      "INSPECTION_HOSPITAL_SCOPE_AMBIGUOUS",
+    ));
+    expect(log).toHaveBeenCalledWith(
+      "INSPECTION_HOSPITAL_SCOPE_SUMMARY resolved=1 sameHospital=1 " +
+      "conflicts=0 missing=0 unchanged=0",
+    );
+  });
+
+  it("aggregates thousands of missing scopes into one diagnostic and one summary", async () => {
+    const rows = Array.from({ length: 2_000 }, (_, index) =>
+      caseRow(String(index), `inspection-missing-${index}`, null));
+    const prisma = {
+      trackedCase: { findMany: vi.fn(async () => rows), update: vi.fn() },
+      trackedDevice: { findMany: vi.fn(async () => []) },
+    } as unknown as PrismaClient;
+    const log = vi.fn();
+
+    const stats = await synchronizeInspectionHospitalScopes(prisma, new Map(), log);
+
+    expect(stats).toMatchObject({ missing: 2_000, conflicts: 0, unchanged: 2_000 });
+    expect(log).toHaveBeenCalledTimes(2);
+    expect(log.mock.calls[0]?.[0]).toContain(
+      "INSPECTION_HOSPITAL_SCOPE_MISSING count=2000",
+    );
+    expect(log.mock.calls[0]?.[0]).toContain("+1990more");
+    expect(log.mock.calls[1]?.[0]).toBe(
+      "INSPECTION_HOSPITAL_SCOPE_SUMMARY resolved=0 sameHospital=0 " +
+      "conflicts=0 missing=2000 unchanged=2000",
+    );
   });
 
   it("uses one paginated Hospital list operation for a 26k-like relation set", async () => {
@@ -160,7 +221,8 @@ function hospitalStore(): HospitalSyncStore {
   return {
     upsert: vi.fn(async () => undefined),
     synchronizeInspectionScopes: vi.fn(async () => ({
-      scanned: 0, repaired: 0, unchanged: 0, stillUnscoped: 0, ambiguous: 0,
+      scanned: 0, resolved: 0, sameHospital: 0, conflicts: 0, missing: 0,
+      repaired: 0, unchanged: 0, stillUnscoped: 0, ambiguous: 0,
     })),
     markRunning: vi.fn(async () => undefined),
     markSuccessful: vi.fn(async () => undefined),

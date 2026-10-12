@@ -111,11 +111,20 @@ export type InspectionHospitalScopeIndex = ReadonlyMap<string, ReadonlySet<strin
 
 export type InspectionHospitalScopeStats = {
   scanned: number;
+  resolved: number;
+  sameHospital: number;
+  conflicts: number;
+  missing: number;
+  /** @deprecated Use resolved. */
   repaired: number;
   unchanged: number;
+  /** @deprecated Use missing + conflicts. */
   stillUnscoped: number;
+  /** @deprecated Use conflicts. */
   ambiguous: number;
 };
+
+const SCOPE_DIAGNOSTIC_SAMPLE_LIMIT = 10;
 
 export function buildInspectionHospitalScopeIndex(
   hospitals: readonly MappedHospital[],
@@ -164,6 +173,14 @@ export async function synchronizeInspectionHospitalScopes(
   let unchanged = 0;
   let stillUnscoped = 0;
   let ambiguous = 0;
+  let sameHospital = 0;
+  let missing = 0;
+  let conflicts = 0;
+  let sourceConflicts = 0;
+  let multiHospital = 0;
+  let existingScopeConflicts = 0;
+  const missingSamples: string[] = [];
+  const conflictSamples: string[] = [];
 
   for (const inspection of inspections) {
     const directHospitalIds = index.get(inspection.airtableRecordId) ?? new Set<string>();
@@ -171,6 +188,9 @@ export async function synchronizeInspectionHospitalScopes(
       .map((device) => hospitalByDevice.get(device.deviceAirtableId) ?? null)
       .filter((value): value is string => Boolean(value)));
     const evidence = directHospitalIds.size > 0 ? directHospitalIds : deviceHospitalIds;
+    const sameHospitalSources = directHospitalIds.size === 1 && deviceHospitalIds.size === 1 &&
+      [...directHospitalIds].every((hospitalId) => deviceHospitalIds.has(hospitalId));
+    if (sameHospitalSources) sameHospital += 1;
     const conflictingSources = directHospitalIds.size > 0 && deviceHospitalIds.size > 0 &&
       (directHospitalIds.size !== deviceHospitalIds.size ||
         [...directHospitalIds].some((hospitalId) => !deviceHospitalIds.has(hospitalId)));
@@ -181,18 +201,19 @@ export async function synchronizeInspectionHospitalScopes(
       inspection.sourceHospitalRecordId && inferredScope &&
       inspection.sourceHospitalRecordId !== inferredScope,
     );
+    if (conflictingSources) sourceConflicts += 1;
+    if (evidence.size > 1) multiHospital += 1;
+    if (conflictsWithExisting) existingScopeConflicts += 1;
     const desiredScope = conflictsWithExisting ? null : inferredScope;
     if (directHospitalIds.size === 0 && deviceHospitalIds.size === 0) {
+      missing += 1;
       stillUnscoped += 1;
-      log(`INSPECTION_HOSPITAL_SCOPE_MISSING sourceRecordId=${inspection.airtableRecordId}`);
+      pushDiagnosticSample(missingSamples, inspection.airtableRecordId);
     } else if (conflictingSources || evidence.size > 1 || conflictsWithExisting) {
+      conflicts += 1;
       ambiguous += 1;
       stillUnscoped += 1;
-      log(
-        `INSPECTION_HOSPITAL_SCOPE_AMBIGUOUS sourceRecordId=${inspection.airtableRecordId} ` +
-        `directHospitals=${directHospitalIds.size} deviceHospitals=${deviceHospitalIds.size} ` +
-        `existingScope=${inspection.sourceHospitalRecordId ? "present" : "missing"}`,
-      );
+      pushDiagnosticSample(conflictSamples, inspection.airtableRecordId);
     }
     // Missing or conflicting evidence is never sufficient authority to erase
     // or replace an existing tenant boundary.
@@ -206,13 +227,44 @@ export async function synchronizeInspectionHospitalScopes(
     });
     repaired += 1;
   }
+  if (conflicts > 0) {
+    log(
+      `INSPECTION_HOSPITAL_SCOPE_AMBIGUOUS count=${conflicts} ` +
+      `sourceConflicts=${sourceConflicts} multiHospital=${multiHospital} ` +
+      `existingScopeConflicts=${existingScopeConflicts} ` +
+      `sampleSourceRecordIds=${formatDiagnosticSamples(conflictSamples, conflicts)}`,
+    );
+  }
+  if (missing > 0) {
+    log(
+      `INSPECTION_HOSPITAL_SCOPE_MISSING count=${missing} ` +
+      `sampleSourceRecordIds=${formatDiagnosticSamples(missingSamples, missing)}`,
+    );
+  }
+  log(
+    `INSPECTION_HOSPITAL_SCOPE_SUMMARY resolved=${repaired} sameHospital=${sameHospital} ` +
+    `conflicts=${conflicts} missing=${missing} unchanged=${unchanged}`,
+  );
   return {
     scanned: inspections.length,
+    resolved: repaired,
+    sameHospital,
+    conflicts,
+    missing,
     repaired,
     unchanged,
     stillUnscoped,
     ambiguous,
   };
+}
+
+function pushDiagnosticSample(samples: string[], sourceRecordId: string): void {
+  if (samples.length < SCOPE_DIAGNOSTIC_SAMPLE_LIMIT) samples.push(sourceRecordId);
+}
+
+function formatDiagnosticSamples(samples: readonly string[], total: number): string {
+  const suffix = total > samples.length ? `,+${total - samples.length}more` : "";
+  return samples.join(",") + suffix;
 }
 
 function metrics(source: AirtableRecordSource) {

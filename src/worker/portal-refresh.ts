@@ -361,6 +361,7 @@ export async function runPortalRefreshWorkerOnce(dependencies: {
     await dependencies.hospitalStore.synchronizeInspectionScopes(
       inspectionScopeIndex,
       dependencies.log,
+      inspectionRecordIds,
     );
 
     await syncRecords([...deviceRecordIds], async (recordId) => {

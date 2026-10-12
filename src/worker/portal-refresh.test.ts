@@ -266,7 +266,8 @@ describe("portal refresh worker", () => {
           storedShortNames.push(hospital.shortName);
         },
         synchronizeInspectionScopes: vi.fn(async () => ({
-          scanned: 0, repaired: 0, unchanged: 0, stillUnscoped: 0, ambiguous: 0,
+          scanned: 0, resolved: 0, sameHospital: 0, conflicts: 0, missing: 0,
+          repaired: 0, unchanged: 0, stillUnscoped: 0, ambiguous: 0,
         })),
       },
       deviceStore: { upsert: vi.fn() },
@@ -403,8 +404,11 @@ describe("portal refresh worker", () => {
     const upsertCaseWithoutEvent = vi.fn().mockResolvedValue("tracked-historical");
     const synchronizeInspectionScopes = vi.fn(async (
       _index: ReadonlyMap<string, ReadonlySet<string>>,
+      _log?: (message: string) => void,
+      _recordIds?: readonly string[],
     ) => ({
-      scanned: 1, repaired: 1, unchanged: 0, stillUnscoped: 0, ambiguous: 0,
+      scanned: 1, resolved: 1, sameHospital: 0, conflicts: 0, missing: 0,
+      repaired: 1, unchanged: 0, stillUnscoped: 0, ambiguous: 0,
     }));
     const deviceUpsert = vi.fn();
     const communicationStore = noOpCommunicationStore();
@@ -440,6 +444,7 @@ describe("portal refresh worker", () => {
     expect(deviceUpsert).toHaveBeenCalledOnce();
     const scopeIndex = synchronizeInspectionScopes.mock.calls[0]![0];
     expect(scopeIndex.get(inspectionId)).toEqual(new Set(["recHospitalA"]));
+    expect(synchronizeInspectionScopes.mock.calls[0]![2]).toEqual([inspectionId]);
     expect(observe).not.toHaveBeenCalled();
     expect(requestStore.status).toBe(PortalRefreshStatus.SUCCEEDED);
   });
@@ -916,7 +921,8 @@ function noOpHospitalStore() {
   return {
     upsert: vi.fn(async () => undefined),
     synchronizeInspectionScopes: vi.fn(async () => ({
-      scanned: 0, repaired: 0, unchanged: 0, stillUnscoped: 0, ambiguous: 0,
+      scanned: 0, resolved: 0, sameHospital: 0, conflicts: 0, missing: 0,
+      repaired: 0, unchanged: 0, stillUnscoped: 0, ambiguous: 0,
     })),
   };
 }
