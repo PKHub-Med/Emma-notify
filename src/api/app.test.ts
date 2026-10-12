@@ -341,7 +341,10 @@ describe("public API", () => {
     const response = await fetch(`${baseUrl}/d/${signPortalGrantToken(grant, secret)}`);
     expect(response.status).toBe(200);
     expect(response.headers.get("content-security-policy")).toContain("script-src 'nonce-");
-    expect(await response.text()).toContain("portal szpitala");
+    const html = await response.text();
+    expect(html).toContain("<title>Emma - Szpital</title>");
+    expect(html).toContain('<div class="app">');
+    expect(html).toContain('aria-label="Główna nawigacja"');
   });
 
   it("redirects expired portal tokens to /link-expired", async () => {

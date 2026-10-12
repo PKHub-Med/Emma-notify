@@ -31,7 +31,36 @@ describe("communication email activation and recipient safety", () => {
     const stats = await run(fixture, { communicationEmailsEnabled: false });
     expect(stats.candidates).toBe(0);
     expect(fixture.store.findCalls).toBe(0);
+    expect(fixture.candidate.status).toBe(CommunicationDeliveryStatus.READY);
+    expect(fixture.candidate.attemptCount).toBe(0);
     expect(fixture.provider.requests).toHaveLength(0);
+  });
+
+  it.each([
+    { communicationEmailsEnabled: false },
+    { mode: "PRODUCTION" as const, productionEmailsEnabled: false },
+  ])("keeps a delivery pending behind a kill switch and sends it once after re-enable", async (blocked) => {
+    const fixture = setup();
+
+    await run(fixture, blocked);
+    expect(fixture.candidate.status).toBe(CommunicationDeliveryStatus.READY);
+    expect(fixture.candidate.attemptCount).toBe(0);
+    expect(fixture.provider.requests).toHaveLength(0);
+
+    const enabledAt = new Date("2026-08-15T12:00:00Z");
+    await run(fixture, {
+      communicationEmailsEnabled: true,
+      mode: "PRODUCTION",
+      productionEmailsEnabled: true,
+    }, [], enabledAt);
+    await run(fixture, {
+      communicationEmailsEnabled: true,
+      mode: "PRODUCTION",
+      productionEmailsEnabled: true,
+    }, [], enabledAt);
+
+    expect(fixture.candidate.status).toBe(CommunicationDeliveryStatus.SENT);
+    expect(fixture.provider.requests).toHaveLength(1);
   });
 
   it("keeps asset discovery completely disabled by the default kill switch", async () => {
@@ -102,6 +131,9 @@ describe("communication email activation and recipient safety", () => {
   it("blocks PRODUCTION unless PRODUCTION_EMAILS_ENABLED is true", async () => {
     const fixture = setup();
     await run(fixture, { mode: "PRODUCTION", productionEmailsEnabled: false });
+    expect(fixture.store.findCalls).toBe(0);
+    expect(fixture.candidate.status).toBe(CommunicationDeliveryStatus.READY);
+    expect(fixture.candidate.attemptCount).toBe(0);
     expect(fixture.provider.requests).toHaveLength(0);
   });
 
@@ -864,7 +896,7 @@ describe("provider result and retry classification", () => {
     expect(logs.at(-1)).toContain("attempt=5");
   });
 
-  it("suppresses an empty completed summary without calling the provider", async () => {
+  it("retries an empty completed summary without calling the provider", async () => {
     const logs: string[] = [];
     const fixture = setup({
       scenario: CommunicationScenario.INSPECTION_COMPLETED,
@@ -878,10 +910,11 @@ describe("provider result and retry classification", () => {
     await run(fixture, {}, logs);
 
     expect(fixture.provider.requests).toHaveLength(0);
-    expect(fixture.candidate.status).toBe(CommunicationDeliveryStatus.CANCELLED);
-    expect(fixture.store.cancelReason).toBe(CommunicationDeliveryCancelReason.EMPTY_COMPLETED);
-    expect(logs.join(" ")).toContain("errorCategory=SUPPRESSED");
-    expect(logs.join(" ")).toContain("errorCode=EMPTY_COMPLETED");
+    expect(fixture.candidate.status).toBe(CommunicationDeliveryStatus.FAILED);
+    expect(fixture.store.cancelReason).toBeNull();
+    expect(fixture.candidate.nextRetryAt).toBeInstanceOf(Date);
+    expect(logs.join(" ")).toContain("COMMUNICATION_EMAIL_RETRY");
+    expect(logs.join(" ")).toContain("errorCode=NO_COMPLETED_INSPECTIONS");
   });
 
   it("suppresses a historical completed event even when detected today", async () => {

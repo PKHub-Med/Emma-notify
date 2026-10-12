@@ -422,19 +422,12 @@ export async function buildCommunicationTemplatePayload(input: {
       .sort((a, b) => a.result.order - b.result.order);
 
     if (completed.length === 0) {
-      return {
-        templateId,
-        variables: {
-          ...common,
-          BLOCKED_NOTICE: "",
-          VISIT_DATE: visitDate,
-          PASSED_COUNT: "0",
-          CONDITIONAL_COUNT: "0",
-          FAILED_COUNT: "0",
-          TRUNCATION_NOTICE: "",
-          ...rowSlotVariables("RESULT_ROW", [], INSPECTION_ROW_SLOT_COUNT),
-        },
-      };
+      throw new CommunicationTemplateDataError("NO_COMPLETED_INSPECTIONS", true, {
+        code: "NO_COMPLETED_INSPECTIONS",
+        expected: "at least one completed inspection",
+        found: 0,
+        recordIds: expectedInspectionIds,
+      });
     }
 
     const count = (key: InspectionResult["key"]) =>

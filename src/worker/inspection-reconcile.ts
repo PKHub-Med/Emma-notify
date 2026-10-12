@@ -212,6 +212,7 @@ export async function runInspectionReconcile(dependencies: {
   leaseMs?: number;
   pageSize?: number;
   requirePriorSuccess?: boolean;
+  onInspectionSynced?: (recordId: string, at: Date) => Promise<void>;
   log?: (message: string) => void;
 }): Promise<InspectionReconcileStats> {
   const now = dependencies.now ?? (() => new Date());
@@ -260,6 +261,11 @@ export async function runInspectionReconcile(dependencies: {
         seenAt: pageAt,
         leaseExpiresAt: new Date(pageAt.getTime() + leaseMs),
       });
+      if (dependencies.onInspectionSynced) {
+        for (const inspection of inspections) {
+          await dependencies.onInspectionSynced(inspection.airtableRecordId, pageAt);
+        }
+      }
       dependencies.log?.(
         `INSPECTION_RECONCILE_PAGE records=${page.records.length} ` +
         `recordsRead=${state.recordsRead} changed=${state.recordsChanged} ` +

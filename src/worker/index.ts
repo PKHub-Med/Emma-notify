@@ -7,6 +7,7 @@ import { PrismaBaselineStore } from "./baseline-store.js";
 import { runIncrementalSync } from "./incremental-sync.js";
 import { PrismaIncrementalStore } from "./incremental-store.js";
 import { PrismaCommunicationEventStore } from "./communication-event.js";
+import { PrismaCommunicationDiagnosticRegistry } from "./communication-diagnostics.js";
 import { runServiceCommunicationBaseline } from "./service-communication-baseline.js";
 import { PrismaTaskSyncStore, runTaskSync } from "./task-sync.js";
 import {
@@ -87,6 +88,10 @@ const hospitalSyncStore = new PrismaHospitalSyncStore(prisma);
 const deviceSyncStore = new PrismaDeviceSyncStore(prisma);
 const caseHospitalScopeRepairStore = new PrismaCaseHospitalScopeRepairStore(prisma);
 const communicationStore = new PrismaCommunicationEventStore(prisma);
+const communicationDiagnostics = new PrismaCommunicationDiagnosticRegistry(
+  prisma,
+  (message) => console.info(message),
+);
 const recipientResolutionStore = new PrismaRecipientResolutionStore(prisma);
 const communicationDeliveryStore = new PrismaCommunicationDeliveryStore(prisma);
 const communicationDeliveryCleanupStore = new PrismaCommunicationDeliveryCleanupStore(prisma);
@@ -190,6 +195,11 @@ async function start(): Promise<void> {
   });
 
   console.info(`[worker] Started as ${WORKER_ID} at ${now.toISOString()}`);
+  console.info(
+    `COMMUNICATION_EMAILS_STARTUP enabled=${config.communicationEmailsEnabled} ` +
+    `sending=${config.communicationEmailsEnabled ? "ENABLED" : "BLOCKED"} ` +
+    `killSwitch=COMMUNICATION_EMAILS_ENABLED`,
+  );
   await runCommunicationDeliveryCleanup({
     store: communicationDeliveryCleanupStore,
     activation: config.communicationSendNotBefore,
@@ -300,6 +310,9 @@ async function pollInspectionReconcile(): Promise<void> {
       airtable,
       store: inspectionReconcileStore,
       requirePriorSuccess: true,
+      onInspectionSynced: async (recordId, at) => {
+        await communicationDiagnostics.wakePendingForInspection(recordId, at);
+      },
       log: (message) => console.info(message),
     });
   } catch {
@@ -405,6 +418,7 @@ async function pollCommunicationEmail(): Promise<void> {
       grants: portalAccessGrants,
       unsubscribeGrants: communicationUnsubscribeGrants,
       dataSource: communicationTemplateDataSource,
+      diagnostics: communicationDiagnostics,
       config: {
         mailTestMode: config.emmaMailTestMode,
         communicationEmailsEnabled: config.communicationEmailsEnabled,
@@ -445,6 +459,7 @@ async function pollDeliveryPlanner(): Promise<void> {
       digestCron: config.communicationDigestCron,
       testMode: config.emmaMailTestMode,
       testCron: config.emmaMailTestCron,
+      diagnostics: communicationDiagnostics,
       log: (message) => console.info(message),
     });
   } catch {
@@ -463,6 +478,7 @@ async function pollRecipientResolution(): Promise<void> {
       store: recipientResolutionStore,
       tiemedFallbackEmail: config.tiemedFallbackEmail,
       debugEnabled: config.communicationEmailDebug,
+      diagnostics: communicationDiagnostics,
       log: (message) => console.info(message),
     });
   } catch {
@@ -482,6 +498,7 @@ async function pollTasks(
       airtable,
       store: taskSyncStore,
       communicationStore,
+      diagnostics: communicationDiagnostics,
       overlapSeconds: config.airtableSyncOverlapSeconds,
       requestedMode,
       timeZone: config.communicationTimezone,
@@ -504,6 +521,7 @@ async function pollIncremental(): Promise<void> {
       store: incrementalStore,
       deviceStore: deviceSyncStore,
       communicationStore,
+      diagnostics: communicationDiagnostics,
       options: {
         overlapSeconds: config.airtableSyncOverlapSeconds,
         quietMinutes: config.digestQuietMinutes,

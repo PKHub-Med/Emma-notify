@@ -45,7 +45,7 @@ export function compareLocalDates(left: LocalDate, right: LocalDate): number {
   return dateNumber(left) - dateNumber(right);
 }
 
-function localDateTimeToUtc(
+export function localDateTimeToUtc(
   desired: LocalDate & { hour: number; minute: number; second: number },
   timeZone: string,
 ): Date {
@@ -109,4 +109,17 @@ export function repairBatchScheduledFor(
   digestCron = "0 6,14 * * *",
 ): Date {
   return nextCronOccurrence(digestCron, detectedAt, timeZone);
+}
+
+export function nextLocalDayStart(instant: Date, timeZone: string): Date {
+  const current = localDateAt(instant, timeZone);
+  const next = new Date(Date.UTC(current.year, current.month - 1, current.day + 1));
+  return localDateTimeToUtc({
+    year: next.getUTCFullYear(),
+    month: next.getUTCMonth() + 1,
+    day: next.getUTCDate(),
+    hour: 0,
+    minute: 0,
+    second: 0,
+  }, timeZone);
 }

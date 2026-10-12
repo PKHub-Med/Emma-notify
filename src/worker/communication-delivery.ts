@@ -15,6 +15,7 @@ import {
   reminderScheduledFor,
   repairBatchScheduledFor,
 } from "./communication-time.js";
+import type { CommunicationDiagnosticRegistry } from "./communication-diagnostics.js";
 
 const PLANNER_LIMIT = 50;
 
@@ -283,6 +284,7 @@ export async function runCommunicationDeliveryPlanner(input: {
   digestCron?: string;
   testMode?: boolean;
   testCron?: string;
+  diagnostics?: CommunicationDiagnosticRegistry;
   now?: () => Date;
   log?: (message: string) => void;
 }): Promise<{ eventsPlanned: number; remindersTransitioned: number }> {
@@ -302,6 +304,7 @@ export async function runCommunicationDeliveryPlanner(input: {
       ));
     const created = await input.store.ensureDeliveries(event, plans, planningNow);
     for (const delivery of created) {
+      await input.diagnostics?.synchronizeDelivery(delivery.id, planningNow);
       if (delivery.status === CommunicationDeliveryStatus.CANCELLED) {
         input.log?.(
           `COMMUNICATION_DELIVERY_CANCELLED deliveryId=${delivery.id} ` +

@@ -1,4 +1,7 @@
 import {
+  CommunicationDiagnosticOrigin,
+  CommunicationDiagnosticStatus,
+  CommunicationSourceEntityType,
   EventType,
   SyncEntityType,
 } from "../generated/prisma/enums.js";
@@ -38,6 +41,7 @@ import {
   observeCommunication,
   type CommunicationEventStore,
 } from "./communication-event.js";
+import type { CommunicationDiagnosticRegistry } from "./communication-diagnostics.js";
 import {
   atIncrementalStage,
   formatIncrementalSyncFailure,
@@ -108,6 +112,7 @@ export async function runIncrementalSync(dependencies: {
   deviceStore: Pick<DeviceSyncStore, "upsert">;
   options: IncrementalSyncOptions;
   communicationStore?: CommunicationEventStore;
+  diagnostics?: CommunicationDiagnosticRegistry;
   now?: () => Date;
   log?: (message: string) => void;
 }): Promise<IncrementalSyncStats> {
@@ -135,6 +140,7 @@ export async function runIncrementalSync(dependencies: {
       refreshedDeviceRecordIds,
       stats,
       dependencies.communicationStore,
+      dependencies.diagnostics,
       serviceCommunicationEnabled,
       dependencies.log,
       );
@@ -189,6 +195,7 @@ export async function syncSingleCaseRecord(dependencies: {
     new Map<string, Contact>(),
     emptyStats(),
     dependencies.communicationStore,
+    undefined,
     serviceCommunicationEnabled,
     dependencies.log,
   );
@@ -206,6 +213,7 @@ async function syncEntity(
   refreshedDeviceRecordIds: Set<string>,
   stats: IncrementalSyncStats,
   communicationStore: CommunicationEventStore | undefined,
+  diagnostics: CommunicationDiagnosticRegistry | undefined,
   serviceCommunicationEnabled: boolean,
   log: ((message: string) => void) | undefined,
 ): Promise<void> {
@@ -250,6 +258,7 @@ async function syncEntity(
         contactCache,
         stats,
         communicationStore,
+        diagnostics,
         serviceCommunicationEnabled,
         log,
       );
@@ -261,6 +270,18 @@ async function syncEntity(
         );
       } else {
         mappedCase.deviceAirtableIds.forEach((recordId) => deviceRecordIds.add(recordId));
+      }
+      if (definition.entityType === SyncEntityType.INSPECTION && diagnostics) {
+        const woken = await diagnostics.wakePendingForInspection(
+          mappedCase.airtableRecordId,
+          now(),
+        );
+        if (woken > 0) {
+          log?.(
+            `COMMUNICATION_PENDING_WAKE sourceRecordId=${mappedCase.airtableRecordId} ` +
+            `pendingTasks=${woken}`,
+          );
+        }
       }
     }
 
@@ -304,6 +325,7 @@ async function processRecord(
   contactCache: Map<string, Contact>,
   stats: IncrementalSyncStats,
   communicationStore: CommunicationEventStore | undefined,
+  diagnostics: CommunicationDiagnosticRegistry | undefined,
   serviceCommunicationEnabled: boolean,
   log: ((message: string) => void) | undefined,
 ): Promise<MappedCase> {
@@ -324,14 +346,32 @@ async function processRecord(
       definition.entityType === SyncEntityType.SERVICE_ORDER &&
       communicationStore
     ) {
+      const observation = buildServiceOrderObservation(mappedCase, detectedAt);
       const result = await atIncrementalStage("COMMUNICATION", () => observeCommunication({
         store: communicationStore,
-        observation: buildServiceOrderObservation(mappedCase, detectedAt),
+        observation,
         allowEvent: serviceCommunicationEnabled,
         detectedAt,
         ...(log ? { log } : {}),
       }));
       if (result.outcome === "CREATED") stats.communicationEventsCreated += 1;
+      if (diagnostics) {
+        await diagnostics.record({
+          sourceEntityType: CommunicationSourceEntityType.SERVICE_ORDER,
+          sourceRecordId: mappedCase.airtableRecordId,
+          businessNumber: mappedCase.businessNumber,
+          scenario: observation.scenario,
+          status: observation.scenario && serviceCommunicationEnabled
+            ? CommunicationDiagnosticStatus.READY
+            : CommunicationDiagnosticStatus.NOT_ELIGIBLE,
+          reasonCode: result.outcome === "CREATED"
+            ? "EVENT_CREATED"
+            : result.outcome,
+          reasonOrigin: CommunicationDiagnosticOrigin.APPLICATION,
+          checkedAt: detectedAt,
+          eventId: result.eventId ?? null,
+        });
+      }
     }
     return mappedCase;
   }

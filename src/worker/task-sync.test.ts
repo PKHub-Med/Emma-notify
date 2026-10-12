@@ -3,9 +3,16 @@ import { describe, expect, it, vi } from "vitest";
 import { INSPECTION_FIELDS, TASK_FIELDS } from "../airtable/field-ids.js";
 import type { MappedTask } from "../airtable/task.js";
 import {
+  CommunicationDiagnosticStatus,
   CommunicationDeliveryStatus,
   CommunicationScenario,
 } from "../generated/prisma/enums.js";
+import type {
+  CommunicationCycleSummary,
+  CommunicationDiagnosticRegistry,
+  CompletedDataReadiness,
+  DiagnosticTransition,
+} from "./communication-diagnostics.js";
 import type {
   AirtableListOptions,
   AirtableRecord,
@@ -124,8 +131,13 @@ class MemoryTaskStore implements TaskSyncStore {
 
 class MemoryCommunicationStore implements CommunicationEventStore {
   baselineCompleted = false;
-  readonly cursors = new Map<string, { signature: string; revision: number }>();
-  readonly events: { observation: CommunicationObservation; fingerprint: string }[] = [];
+  readonly cursors = new Map<string, {
+    signature: string;
+    revision: number;
+    lastEventRevision: number | null;
+    pendingEventRevision: number | null;
+  }>();
+  readonly events: { id: string; observation: CommunicationObservation; fingerprint: string }[] = [];
   notificationBufferCalls = 0;
   digestCalls = 0;
   resendCalls = 0;
@@ -142,21 +154,83 @@ class MemoryCommunicationStore implements CommunicationEventStore {
     observation: CommunicationObservation,
     allowEvent: boolean,
     _detectedAt: Date,
+    retryableSuppression = false,
   ): Promise<CommunicationObservationResult> {
     const key = `${observation.sourceEntityType}:${observation.sourceRecordId}`;
     const cursor = this.cursors.get(key);
     if (cursor?.signature === observation.signature) {
-      return { outcome: "UNCHANGED", revision: cursor.revision };
+      if (!observation.scenario) return { outcome: "NO_SCENARIO", revision: cursor.revision };
+      if (!allowEvent) {
+        cursor.pendingEventRevision = retryableSuppression ? cursor.revision : null;
+        return { outcome: "SUPPRESSED", revision: cursor.revision };
+      }
+      if (cursor.lastEventRevision === cursor.revision) {
+        return { outcome: "UNCHANGED", revision: cursor.revision };
+      }
+      if (cursor.pendingEventRevision !== cursor.revision && !retryableSuppression) {
+        return { outcome: "UNCHANGED", revision: cursor.revision };
+      }
+      const fingerprint = createCommunicationFingerprint(observation, cursor.revision);
+      const id = `event-${this.events.length + 1}`;
+      this.events.push({ id, observation, fingerprint });
+      cursor.lastEventRevision = cursor.revision;
+      cursor.pendingEventRevision = null;
+      return { outcome: "CREATED", revision: cursor.revision, fingerprint, eventId: id };
     }
     const revision = cursor ? cursor.revision + 1 : 0;
-    this.cursors.set(key, { signature: observation.signature, revision });
+    this.cursors.set(key, {
+      signature: observation.signature,
+      revision,
+      lastEventRevision: null,
+      pendingEventRevision: retryableSuppression && !allowEvent ? revision : null,
+    });
     if (!observation.scenario) return { outcome: "NO_SCENARIO", revision };
     if (!allowEvent) return { outcome: "SUPPRESSED", revision };
     const fingerprint = createCommunicationFingerprint(observation, revision);
+    const id = `event-${this.events.length + 1}`;
     if (!this.events.some((event) => event.fingerprint === fingerprint)) {
-      this.events.push({ observation, fingerprint });
+      this.events.push({ id, observation, fingerprint });
     }
-    return { outcome: "CREATED", revision, fingerprint };
+    this.cursors.get(key)!.lastEventRevision = revision;
+    this.cursors.get(key)!.pendingEventRevision = null;
+    return { outcome: "CREATED", revision, fingerprint, eventId: id };
+  }
+}
+
+class MemoryDiagnostics implements CommunicationDiagnosticRegistry {
+  readiness: CompletedDataReadiness = { ready: false, reasonCode: "INSPECTION_RESULTS_INCOMPLETE",
+    missingData: { expectedInspectionIds: ["recInspectionA", "recInspectionB"] } };
+  transitions: DiagnosticTransition[] = [];
+
+  async record(input: DiagnosticTransition): Promise<boolean> {
+    this.transitions.push(input);
+    return true;
+  }
+  async assessCompletedData(): Promise<CompletedDataReadiness> { return this.readiness; }
+  async findDuePendingTasks(): Promise<Array<{
+    sourceRecordId: string;
+    firstDetectedAt: Date;
+    expiresAt: Date | null;
+    reasonCode: string;
+    missingData: Record<string, unknown> | null;
+  }>> {
+    const latest = this.transitions.at(-1);
+    if (latest?.status !== CommunicationDiagnosticStatus.PENDING_DATA) return [];
+    const first = this.transitions.find((item) =>
+      item.status === CommunicationDiagnosticStatus.PENDING_DATA) ?? latest;
+    return [{
+      sourceRecordId: latest.sourceRecordId,
+      firstDetectedAt: first.checkedAt,
+      expiresAt: latest.expiresAt ?? null,
+      reasonCode: latest.reasonCode,
+      missingData: latest.missingData ?? null,
+    }];
+  }
+  async wakePendingForInspection(): Promise<number> { return 0; }
+  async synchronizeDelivery(): Promise<void> {}
+  async summarizeCycle(): Promise<CommunicationCycleSummary> {
+    return { checked: this.transitions.length, pending: 0, blocked: 0,
+      eventsCreated: 0, sent: 0, cancelled: 0, interventionRequired: 0 };
   }
 }
 
@@ -784,6 +858,217 @@ describe("task polling and communication events", () => {
     expect(fixture.communication.events).toHaveLength(0);
     expect(logs).toHaveLength(1);
     expect(logs[0]).toContain("INCREMENTAL_SYNC_FAILED stage=TASK");
+  });
+
+  it("recovers PENDING_DATA with the same signature and creates exactly one event", async () => {
+    const fixture = taskFixture();
+    const diagnostics = new MemoryDiagnostics();
+    fixture.communication.baselineCompleted = true;
+    fixture.source.setCurrent(completedTaskRecord("recTask", "2026-10-12"));
+    const input = {
+      airtable: fixture.source,
+      store: fixture.store,
+      communicationStore: fixture.communication,
+      diagnostics,
+      timeZone: "Europe/Warsaw",
+      now: () => new Date("2026-10-12T08:00:00.000Z"),
+    };
+
+    await runTaskSync(input);
+    expect(fixture.communication.events).toHaveLength(0);
+    expect(diagnostics.transitions.at(-1)?.status)
+      .toBe(CommunicationDiagnosticStatus.PENDING_DATA);
+    expect(diagnostics.transitions.at(-1)?.eventId).toBeUndefined();
+
+    diagnostics.readiness = { ready: true };
+    fixture.source.currentRecords = [];
+    await runTaskSync(input);
+    await runTaskSync(input);
+
+    expect(fixture.communication.events).toHaveLength(1);
+    expect(diagnostics.transitions.some((item) =>
+      item.status === CommunicationDiagnosticStatus.READY &&
+      item.reasonCode === "EVENT_CREATED")).toBe(true);
+  });
+
+  it("terminates a pending completed task after the business day without an event", async () => {
+    const fixture = taskFixture();
+    const diagnostics = new MemoryDiagnostics();
+    fixture.communication.baselineCompleted = true;
+    fixture.source.setCurrent(completedTaskRecord("recTask", "2026-10-12"));
+    let clock = new Date("2026-10-12T08:00:00.000Z");
+    const input = {
+      airtable: fixture.source,
+      store: fixture.store,
+      communicationStore: fixture.communication,
+      diagnostics,
+      timeZone: "Europe/Warsaw",
+      now: () => clock,
+    };
+
+    await runTaskSync(input);
+    fixture.source.currentRecords = [];
+    clock = new Date("2026-10-13T08:00:00.000Z");
+    await runTaskSync(input);
+
+    expect(fixture.communication.events).toHaveLength(0);
+    expect(diagnostics.transitions.at(-1)).toMatchObject({
+      status: CommunicationDiagnosticStatus.BLOCKED,
+      reasonCode: "PENDING_DATA_EXPIRED",
+    });
+  });
+
+  it("observes a 23:55 task for 60 minutes but blocks ready data after midnight", async () => {
+    const fixture = taskFixture();
+    const diagnostics = new MemoryDiagnostics();
+    fixture.communication.baselineCompleted = true;
+    fixture.source.setCurrent(completedTaskRecord("recTask", "2026-10-12"));
+    let clock = new Date("2026-10-12T21:55:00.000Z"); // 23:55 Europe/Warsaw
+    const input = {
+      airtable: fixture.source,
+      store: fixture.store,
+      communicationStore: fixture.communication,
+      diagnostics,
+      timeZone: "Europe/Warsaw",
+      now: () => clock,
+    };
+
+    await runTaskSync(input);
+    expect(fixture.communication.events).toHaveLength(0);
+    expect(diagnostics.transitions.at(-1)).toMatchObject({
+      status: CommunicationDiagnosticStatus.PENDING_DATA,
+      expiresAt: new Date("2026-10-12T22:55:00.000Z"),
+    });
+
+    diagnostics.readiness = { ready: true };
+    fixture.source.currentRecords = [];
+    clock = new Date("2026-10-12T22:01:00.000Z"); // 00:01 next day locally
+    await runTaskSync(input);
+
+    expect(fixture.communication.events).toHaveLength(0);
+    expect(diagnostics.transitions.at(-1)).toMatchObject({
+      status: CommunicationDiagnosticStatus.BLOCKED,
+      reasonCode: "READY_BUT_HISTORICAL",
+      missingData: {
+        expectedInspectionIds: ["recInspectionA", "recInspectionB"],
+        lastPendingReasonCode: "INSPECTION_RESULTS_INCOMPLETE",
+      },
+    });
+  });
+
+  it("keeps an incomplete 23:59 task pending after midnight and expires it after 60 minutes", async () => {
+    const fixture = taskFixture();
+    const diagnostics = new MemoryDiagnostics();
+    fixture.communication.baselineCompleted = true;
+    fixture.source.setCurrent(completedTaskRecord("recTask", "2026-10-12"));
+    let clock = new Date("2026-10-12T21:59:00.000Z");
+    const input = {
+      airtable: fixture.source,
+      store: fixture.store,
+      communicationStore: fixture.communication,
+      diagnostics,
+      timeZone: "Europe/Warsaw",
+      now: () => clock,
+    };
+
+    await runTaskSync(input);
+    fixture.source.currentRecords = [];
+    clock = new Date("2026-10-12T22:20:00.000Z");
+    await runTaskSync(input);
+    expect(fixture.communication.events).toHaveLength(0);
+    expect(diagnostics.transitions.at(-1)).toMatchObject({
+      status: CommunicationDiagnosticStatus.PENDING_DATA,
+      expiresAt: new Date("2026-10-12T22:59:00.000Z"),
+    });
+
+    clock = new Date("2026-10-12T23:00:00.000Z");
+    await runTaskSync(input);
+    expect(fixture.communication.events).toHaveLength(0);
+    expect(diagnostics.transitions.at(-1)).toMatchObject({
+      status: CommunicationDiagnosticStatus.BLOCKED,
+      reasonCode: "PENDING_DATA_EXPIRED",
+      missingData: {
+        expectedInspectionIds: ["recInspectionA", "recInspectionB"],
+        lastPendingReasonCode: "INSPECTION_RESULTS_INCOMPLETE",
+      },
+    });
+  });
+
+  it("allows a 00:01 task to recover within its own business day", async () => {
+    const fixture = taskFixture();
+    const diagnostics = new MemoryDiagnostics();
+    fixture.communication.baselineCompleted = true;
+    fixture.source.setCurrent(completedTaskRecord("recTask", "2026-10-13"));
+    let clock = new Date("2026-10-12T22:01:00.000Z");
+    const input = {
+      airtable: fixture.source,
+      store: fixture.store,
+      communicationStore: fixture.communication,
+      diagnostics,
+      timeZone: "Europe/Warsaw",
+      now: () => clock,
+    };
+
+    await runTaskSync(input);
+    diagnostics.readiness = { ready: true };
+    fixture.source.currentRecords = [];
+    clock = new Date("2026-10-12T22:30:00.000Z");
+    await runTaskSync(input);
+
+    expect(fixture.communication.events).toHaveLength(1);
+    expect(diagnostics.transitions.at(-1)).toMatchObject({
+      status: CommunicationDiagnosticStatus.READY,
+      reasonCode: "EVENT_CREATED",
+    });
+  });
+
+  it("resumes a persisted 23:55 pending task after worker restart without historical emission", async () => {
+    const fixture = taskFixture();
+    const diagnostics = new MemoryDiagnostics();
+    fixture.communication.baselineCompleted = true;
+    fixture.source.setCurrent(completedTaskRecord("recTask", "2026-10-12"));
+    let clock = new Date("2026-10-12T21:55:00.000Z");
+
+    await runTaskSync({
+      airtable: fixture.source,
+      store: fixture.store,
+      communicationStore: fixture.communication,
+      diagnostics,
+      timeZone: "Europe/Warsaw",
+      now: () => clock,
+    });
+
+    // A new invocation represents a restarted worker; durable stores and the
+    // diagnostic registry retain their state while the incremental feed is empty.
+    fixture.source.currentRecords = [];
+    diagnostics.readiness = { ready: true };
+    clock = new Date("2026-10-12T22:10:00.000Z");
+    await runTaskSync({
+      airtable: fixture.source,
+      store: fixture.store,
+      communicationStore: fixture.communication,
+      diagnostics,
+      timeZone: "Europe/Warsaw",
+      now: () => clock,
+    });
+
+    expect(fixture.communication.events).toHaveLength(0);
+    expect(diagnostics.transitions.at(-1)).toMatchObject({
+      status: CommunicationDiagnosticStatus.BLOCKED,
+      reasonCode: "READY_BUT_HISTORICAL",
+    });
+
+    fixture.source.setCurrent(completedTaskRecord("recTask", "2026-10-12"));
+    clock = new Date("2026-10-12T22:20:00.000Z");
+    await runTaskSync({
+      airtable: fixture.source,
+      store: fixture.store,
+      communicationStore: fixture.communication,
+      diagnostics,
+      timeZone: "Europe/Warsaw",
+      now: () => clock,
+    });
+    expect(fixture.communication.events).toHaveLength(0);
   });
 });
 

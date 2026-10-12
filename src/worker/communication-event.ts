@@ -30,6 +30,7 @@ export type CommunicationObservationResult = {
   outcome: "CREATED" | "UNCHANGED" | "SUPPRESSED" | "NO_SCENARIO";
   revision: number;
   fingerprint?: string;
+  eventId?: string;
 };
 
 export interface CommunicationEventStore {
@@ -42,6 +43,7 @@ export interface CommunicationEventStore {
     observation: CommunicationObservation,
     allowEvent: boolean,
     detectedAt: Date,
+    retryableSuppression?: boolean,
   ): Promise<CommunicationObservationResult>;
 }
 
@@ -93,6 +95,7 @@ export class PrismaCommunicationEventStore implements CommunicationEventStore {
     observation: CommunicationObservation,
     allowEvent: boolean,
     detectedAt: Date,
+    retryableSuppression = false,
   ): Promise<CommunicationObservationResult> {
     for (let attempt = 1; attempt <= 3; attempt += 1) {
       try {
@@ -107,7 +110,10 @@ export class PrismaCommunicationEventStore implements CommunicationEventStore {
                   sourceRecordId: observation.sourceRecordId,
                 },
               },
-              select: { id: true, lastSignature: true, revision: true },
+              select: {
+                id: true, lastSignature: true, revision: true,
+                lastEventRevision: true, pendingEventRevision: true,
+              },
             });
 
             if (cursor?.lastSignature === observation.signature) {
@@ -115,7 +121,42 @@ export class PrismaCommunicationEventStore implements CommunicationEventStore {
                 where: { id: cursor.id },
                 data: { lastObservedAt: detectedAt },
               });
-              return { outcome: "UNCHANGED", revision: cursor.revision };
+              if (!observation.scenario) {
+                return { outcome: "NO_SCENARIO", revision: cursor.revision };
+              }
+              if (!allowEvent) {
+                await transaction.communicationCursor.update({
+                  where: { id: cursor.id },
+                  data: {
+                    pendingEventRevision: retryableSuppression ? cursor.revision : null,
+                  },
+                });
+                return { outcome: "SUPPRESSED", revision: cursor.revision };
+              }
+              if (cursor.lastEventRevision === cursor.revision) {
+                return { outcome: "UNCHANGED", revision: cursor.revision };
+              }
+              if (cursor.pendingEventRevision !== cursor.revision && !retryableSuppression) {
+                return { outcome: "UNCHANGED", revision: cursor.revision };
+              }
+              const fingerprint = createCommunicationFingerprint(observation, cursor.revision);
+              const event = await createOrAdoptCommunicationEvent(
+                transaction,
+                observation,
+                cursor.revision,
+                detectedAt,
+                fingerprint,
+              );
+              await transaction.communicationCursor.update({
+                where: { id: cursor.id },
+                data: { lastEventRevision: cursor.revision, pendingEventRevision: null },
+              });
+              return {
+                outcome: event.created ? "CREATED" : "UNCHANGED",
+                revision: cursor.revision,
+                fingerprint,
+                eventId: event.id,
+              };
             }
 
             const revision = cursor ? cursor.revision + 1 : 0;
@@ -126,6 +167,7 @@ export class PrismaCommunicationEventStore implements CommunicationEventStore {
                   lastSignature: observation.signature,
                   revision,
                   lastObservedAt: detectedAt,
+                  pendingEventRevision: null,
                 },
               });
             } else {
@@ -146,28 +188,45 @@ export class PrismaCommunicationEventStore implements CommunicationEventStore {
             if (!observation.scenario) {
               return { outcome: "NO_SCENARIO", revision };
             }
-            if (!allowEvent) return { outcome: "SUPPRESSED", revision };
+            if (!allowEvent) {
+              await transaction.communicationCursor.update({
+                where: {
+                  sourceEntityType_sourceRecordId: {
+                    sourceEntityType: toPrismaSourceType(observation.sourceEntityType),
+                    sourceRecordId: observation.sourceRecordId,
+                  },
+                },
+                data: { pendingEventRevision: retryableSuppression ? revision : null },
+              });
+              return { outcome: "SUPPRESSED", revision };
+            }
 
             const fingerprint = createCommunicationFingerprint(
               observation,
               revision,
             );
-            await transaction.communicationEvent.create({
-              data: {
-                sourceEntityType: toPrismaSourceType(
-                  observation.sourceEntityType,
-                ),
-                sourceRecordId: observation.sourceRecordId,
-                scenario: observation.scenario as PrismaCommunicationScenario,
-                fingerprint,
-                eventSnapshot: {
-                  ...observation.eventSnapshot,
-                  communicationRevision: revision,
-                } as Prisma.InputJsonObject,
-                detectedAt,
+            const event = await createOrAdoptCommunicationEvent(
+              transaction,
+              observation,
+              revision,
+              detectedAt,
+              fingerprint,
+            );
+            await transaction.communicationCursor.update({
+              where: {
+                sourceEntityType_sourceRecordId: {
+                  sourceEntityType: toPrismaSourceType(observation.sourceEntityType),
+                  sourceRecordId: observation.sourceRecordId,
+                },
               },
+              data: { lastEventRevision: revision, pendingEventRevision: null },
             });
-            return { outcome: "CREATED", revision, fingerprint };
+            return {
+              outcome: event.created ? "CREATED" : "UNCHANGED",
+              revision,
+              fingerprint,
+              eventId: event.id,
+            };
           },
         );
       } catch (error: unknown) {
@@ -193,13 +252,21 @@ export async function observeCommunication(input: {
   observation: CommunicationObservation;
   allowEvent: boolean;
   detectedAt: Date;
+  retryableSuppression?: boolean;
   log?: (message: string) => void;
 }): Promise<CommunicationObservationResult> {
-  const result = await input.store.observe(
-    input.observation,
-    input.allowEvent,
-    input.detectedAt,
-  );
+  const result = input.retryableSuppression === undefined
+    ? await input.store.observe(
+        input.observation,
+        input.allowEvent,
+        input.detectedAt,
+      )
+    : await input.store.observe(
+        input.observation,
+        input.allowEvent,
+        input.detectedAt,
+        input.retryableSuppression,
+      );
   if (result.outcome === "CREATED") {
     input.log?.(
       `COMMUNICATION_EVENT_CREATED scenario=${input.observation.scenario} sourceEntityType=${input.observation.sourceEntityType} sourceRecordId=${input.observation.sourceRecordId}`,
@@ -379,4 +446,53 @@ function toPrismaSourceType(
 function isRetryableTransactionError(error: unknown): boolean {
   return error instanceof Prisma.PrismaClientKnownRequestError &&
     (error.code === "P2002" || error.code === "P2034");
+}
+
+async function createOrAdoptCommunicationEvent(
+  transaction: Prisma.TransactionClient,
+  observation: CommunicationObservation,
+  revision: number,
+  detectedAt: Date,
+  fingerprint: string,
+): Promise<{ id: string; created: boolean }> {
+  const existing = await transaction.communicationEvent.findUnique({
+    where: { fingerprint },
+    select: {
+      id: true,
+      sourceEntityType: true,
+      sourceRecordId: true,
+      scenario: true,
+      eventSnapshot: true,
+    },
+  });
+  if (existing) {
+    const snapshot = existing.eventSnapshot;
+    const existingRevision = typeof snapshot === "object" && snapshot !== null &&
+        !Array.isArray(snapshot) &&
+        typeof (snapshot as Record<string, unknown>).communicationRevision === "number"
+      ? (snapshot as Record<string, unknown>).communicationRevision
+      : null;
+    if (existing.sourceEntityType !== toPrismaSourceType(observation.sourceEntityType) ||
+        existing.sourceRecordId !== observation.sourceRecordId ||
+        existing.scenario !== observation.scenario ||
+        (existingRevision !== null && existingRevision !== revision)) {
+      throw new Error("COMMUNICATION_FINGERPRINT_CONFLICT");
+    }
+    return { id: existing.id, created: false };
+  }
+  const created = await transaction.communicationEvent.create({
+    data: {
+      sourceEntityType: toPrismaSourceType(observation.sourceEntityType),
+      sourceRecordId: observation.sourceRecordId,
+      scenario: observation.scenario as PrismaCommunicationScenario,
+      fingerprint,
+      eventSnapshot: {
+        ...observation.eventSnapshot,
+        communicationRevision: revision,
+      } as Prisma.InputJsonObject,
+      detectedAt,
+    },
+    select: { id: true },
+  });
+  return { id: created.id, created: true };
 }

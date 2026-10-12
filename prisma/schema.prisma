@@ -112,6 +112,25 @@ enum CommunicationDeliveryCancelReason {
   MISSING_HOSPITAL_SCOPE_LEGACY
 }
 
+enum CommunicationDiagnosticStatus {
+  NOT_ELIGIBLE
+  PENDING_DATA
+  BLOCKED
+  READY
+  SCHEDULED
+  SENT
+  FAILED
+  CANCELLED
+}
+
+enum CommunicationDiagnosticOrigin {
+  AIRTABLE
+  SYNC
+  APPLICATION
+  PROVIDER
+  UNVERIFIED
+}
+
 enum PortalAccessLevel {
   COMMUNICATION
   FULL
@@ -307,6 +326,8 @@ model CommunicationCursor {
   sourceRecordId   String
   lastSignature    String
   revision         Int                           @default(0)
+  lastEventRevision Int?
+  pendingEventRevision Int?
   firstObservedAt  DateTime                      @default(now())
   lastObservedAt   DateTime                      @default(now())
   createdAt        DateTime                      @default(now())
@@ -314,6 +335,56 @@ model CommunicationCursor {
 
   @@unique([sourceEntityType, sourceRecordId])
   @@index([lastObservedAt])
+}
+
+model CommunicationDiagnostic {
+  id               String                        @id @default(cuid())
+  diagnosticKey    String                        @unique
+  sourceEntityType CommunicationSourceEntityType
+  sourceRecordId   String
+  businessNumber   String?
+  scenario         CommunicationScenario?
+  scenarioKey      String
+  status           CommunicationDiagnosticStatus
+  reasonCode       String
+  reasonOrigin     CommunicationDiagnosticOrigin
+  missingData      Json?
+  firstDetectedAt  DateTime
+  lastCheckedAt    DateTime
+  attemptCount     Int                           @default(0)
+  nextCheckAt      DateTime?
+  expiresAt        DateTime?
+  terminalAt       DateTime?
+  communicationEventId String?
+  communicationDeliveryId String?
+  retentionUntil   DateTime
+  createdAt        DateTime                      @default(now())
+  updatedAt        DateTime                      @updatedAt
+  history          CommunicationDiagnosticHistory[]
+
+  @@unique([sourceEntityType, sourceRecordId, scenarioKey])
+  @@index([status, nextCheckAt])
+  @@index([sourceRecordId, lastCheckedAt])
+  @@index([businessNumber, lastCheckedAt])
+  @@index([communicationEventId])
+  @@index([communicationDeliveryId])
+  @@index([retentionUntil])
+}
+
+model CommunicationDiagnosticHistory {
+  id               String                        @id @default(cuid())
+  diagnosticId     String
+  status           CommunicationDiagnosticStatus
+  reasonCode       String
+  reasonOrigin     CommunicationDiagnosticOrigin
+  details          Json?
+  occurredAt       DateTime
+  retentionUntil   DateTime
+  diagnostic       CommunicationDiagnostic       @relation(fields: [diagnosticId], references: [id], onDelete: Cascade)
+
+  @@index([diagnosticId, occurredAt])
+  @@index([status, occurredAt])
+  @@index([retentionUntil])
 }
 
 model CommunicationEvent {

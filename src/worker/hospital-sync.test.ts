@@ -28,7 +28,7 @@ describe("Hospital -> Inspection canonical scope", () => {
     expect(mapped.shortName).toBe(expected);
   });
 
-  it("builds a reverse Record ID map and never chooses among two Hospitals", async () => {
+  it("preserves existing scope when evidence is missing, ambiguous or conflicting", async () => {
     const index = buildInspectionHospitalScopeIndex([
       mappedHospital("H1", ["inspection-change", "inspection-same", "inspection-ambiguous"]),
       mappedHospital("H2", ["inspection-ambiguous"]),
@@ -43,6 +43,7 @@ describe("Hospital -> Inspection canonical scope", () => {
     const createCommunicationEvent = vi.fn();
     const prisma = {
       trackedCase: { findMany: vi.fn(async () => rows), update },
+      trackedDevice: { findMany: vi.fn(async () => []) },
       communicationEvent: { create: createCommunicationEvent },
     } as unknown as PrismaClient;
     const log = vi.fn();
@@ -50,19 +51,10 @@ describe("Hospital -> Inspection canonical scope", () => {
     const stats = await synchronizeInspectionHospitalScopes(prisma, index, log);
 
     expect(stats).toEqual({
-      scanned: 4, repaired: 3, unchanged: 1, stillUnscoped: 2, ambiguous: 1,
+      scanned: 4, repaired: 0, unchanged: 4, stillUnscoped: 3, ambiguous: 2,
     });
-    expect(update).toHaveBeenCalledTimes(3);
+    expect(update).not.toHaveBeenCalled();
     expect(createCommunicationEvent).not.toHaveBeenCalled();
-    expect(update).toHaveBeenCalledWith({
-      where: { id: "1" }, data: { sourceHospitalRecordId: "H1" },
-    });
-    expect(update).toHaveBeenCalledWith({
-      where: { id: "3" }, data: { sourceHospitalRecordId: null },
-    });
-    expect(update).toHaveBeenCalledWith({
-      where: { id: "4" }, data: { sourceHospitalRecordId: null },
-    });
     expect(log).toHaveBeenCalledWith(expect.stringContaining(
       "INSPECTION_HOSPITAL_SCOPE_MISSING",
     ));
@@ -75,6 +67,7 @@ describe("Hospital -> Inspection canonical scope", () => {
     const findMany = vi.fn(async () => []);
     const prisma = {
       trackedCase: { findMany, update: vi.fn() },
+      trackedDevice: { findMany: vi.fn(async () => []) },
     } as unknown as PrismaClient;
 
     await synchronizeInspectionHospitalScopes(
@@ -89,8 +82,52 @@ describe("Hospital -> Inspection canonical scope", () => {
         caseType: "INSPECTION",
         airtableRecordId: { in: ["inspection-A"] },
       },
-      select: { id: true, airtableRecordId: true, sourceHospitalRecordId: true },
+      select: {
+        id: true,
+        airtableRecordId: true,
+        sourceHospitalRecordId: true,
+        devices: { select: { deviceAirtableId: true } },
+      },
     });
+  });
+
+  it("uses one verified Device hospital when no direct relation or scope exists", async () => {
+    const update = vi.fn(async () => ({}));
+    const prisma = {
+      trackedCase: { findMany: vi.fn(async () => [{
+        ...caseRow("1", "inspection-device", null),
+        devices: [{ deviceAirtableId: "device-1" }],
+      }]), update },
+      trackedDevice: { findMany: vi.fn(async () => [{
+        airtableRecordId: "device-1", sourceHospitalRecordId: "H1",
+      }]) },
+    } as unknown as PrismaClient;
+
+    const stats = await synchronizeInspectionHospitalScopes(prisma, new Map(), vi.fn());
+
+    expect(stats.repaired).toBe(1);
+    expect(update).toHaveBeenCalledWith({
+      where: { id: "1" }, data: { sourceHospitalRecordId: "H1" },
+    });
+  });
+
+  it("does not choose between conflicting direct and Device hospitals", async () => {
+    const update = vi.fn(async () => ({}));
+    const prisma = {
+      trackedCase: { findMany: vi.fn(async () => [{
+        ...caseRow("1", "inspection-conflict", null),
+        devices: [{ deviceAirtableId: "device-1" }],
+      }]), update },
+      trackedDevice: { findMany: vi.fn(async () => [{
+        airtableRecordId: "device-1", sourceHospitalRecordId: "H2",
+      }]) },
+    } as unknown as PrismaClient;
+    const direct = new Map([["inspection-conflict", new Set(["H1"])]]);
+
+    const stats = await synchronizeInspectionHospitalScopes(prisma, direct, vi.fn());
+
+    expect(stats.ambiguous).toBe(1);
+    expect(update).not.toHaveBeenCalled();
   });
 
   it("uses one paginated Hospital list operation for a 26k-like relation set", async () => {

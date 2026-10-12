@@ -1,0 +1,312 @@
+[
+  {
+    "id": "cmv0xum0c9la80ppf8qx5i3li",
+    "task_id": "rec1KCPtqUwVWogOq",
+    "scenario": "INSPECTION_COMPLETED",
+    "detected_at": "2026-10-09T10:25:18.048Z",
+    "processed_at": "2026-10-09T10:25:29.608Z",
+    "recipients_resolved": "2026-10-09T10:25:19.429Z",
+    "resolution_attempts": 0,
+    "next_resolution": null
+  },
+  {
+    "id": "cmuv7c6f906gh0ppflmvkxzhk",
+    "task_id": "rec1sogkLzaCyQ0pJ",
+    "scenario": "INSPECTION_DATE_CONFIRMED",
+    "detected_at": "2026-10-05T10:04:17.146Z",
+    "processed_at": "2026-10-05T10:05:31.727Z",
+    "recipients_resolved": "2026-10-05T10:05:16.789Z",
+    "resolution_attempts": 0,
+    "next_resolution": null
+  },
+  {
+    "id": "cmuvxhj2s1brr0ppfpgcfit4d",
+    "task_id": "rec1sogkLzaCyQ0pJ",
+    "scenario": "INSPECTION_REMINDER",
+    "detected_at": "2026-10-05T22:16:16.840Z",
+    "processed_at": "2026-10-05T22:16:17.850Z",
+    "recipients_resolved": "2026-10-05T22:16:17.090Z",
+    "resolution_attempts": 0,
+    "next_resolution": null
+  },
+  {
+    "id": "cmuyn82a960vr0ppfeuo6xd5v",
+    "task_id": "rec1sogkLzaCyQ0pJ",
+    "scenario": "INSPECTION_COMPLETED",
+    "detected_at": "2026-10-07T19:52:17.542Z",
+    "processed_at": "2026-10-07T19:52:24.301Z",
+    "recipients_resolved": "2026-10-07T19:52:18.365Z",
+    "resolution_attempts": 0,
+    "next_resolution": null
+  },
+  {
+    "id": "cmuxzbpvf4tzh0ppfxi14d2gt",
+    "task_id": "rec2FXOX1R25F6mxh",
+    "scenario": "INSPECTION_DATE_CONFIRMED",
+    "detected_at": "2026-10-07T08:43:17.294Z",
+    "processed_at": "2026-10-07T08:43:22.706Z",
+    "recipients_resolved": "2026-10-07T08:43:18.037Z",
+    "resolution_attempts": 0,
+    "next_resolution": null
+  },
+  {
+    "id": "cmv0qrz6v9j0o0ppf65vem415",
+    "task_id": "rec2FXOX1R25F6mxh",
+    "scenario": "INSPECTION_COMPLETED",
+    "detected_at": "2026-10-09T07:07:17.853Z",
+    "processed_at": "2026-10-09T07:07:29.184Z",
+    "recipients_resolved": "2026-10-09T07:07:19.524Z",
+    "resolution_attempts": 0,
+    "next_resolution": null
+  },
+  {
+    "id": "cmuy1sgfg4vdx0ppf7515e4c1",
+    "task_id": "rec2TEXwh3by9hQkl",
+    "scenario": "INSPECTION_DATE_PROPOSED",
+    "detected_at": "2026-10-07T09:52:17.442Z",
+    "processed_at": "2026-10-07T09:52:22.873Z",
+    "recipients_resolved": "2026-10-07T09:52:17.863Z",
+    "resolution_attempts": 0,
+    "next_resolution": null
+  },
+  {
+    "id": "cmv32dfb10mb20plav3vn5zcq",
+    "task_id": "rec2TEXwh3by9hQkl",
+    "scenario": "INSPECTION_REMINDER",
+    "detected_at": "2026-10-10T22:07:26.635Z",
+    "processed_at": "2026-10-10T22:08:27.075Z",
+    "recipients_resolved": "2026-10-10T22:08:26.553Z",
+    "resolution_attempts": 0,
+    "next_resolution": null
+  },
+  {
+    "id": "cmv4z324e1s6t0pt9ctjuei7h",
+    "task_id": "rec2TEXwh3by9hQkl",
+    "scenario": "INSPECTION_COMPLETED",
+    "detected_at": "2026-10-12T06:10:56.323Z",
+    "processed_at": "2026-10-12T06:11:57.676Z",
+    "recipients_resolved": "2026-10-12T06:11:56.240Z",
+    "resolution_attempts": 0,
+    "next_resolution": null
+  },
+  {
+    "id": "cmuxnyrti485z0ppfoa174qe1",
+    "task_id": "recbz2hvfkO41Pv1A",
+    "scenario": "INSPECTION_COMPLETED",
+    "detected_at": "2026-10-07T03:25:17.519Z",
+    "processed_at": "2026-10-07T03:25:22.017Z",
+    "recipients_resolved": "2026-10-07T03:25:17.718Z",
+    "resolution_attempts": 0,
+    "next_resolution": null
+  },
+  {
+    "id": "cmuy0i5nb4uqp0ppf9ugxrave",
+    "task_id": "recDlqjAcQTwghSfo",
+    "scenario": "INSPECTION_DATE_PROPOSED",
+    "detected_at": "2026-10-07T09:16:17.293Z",
+    "processed_at": "2026-10-07T09:16:22.785Z",
+    "recipients_resolved": "2026-10-07T09:16:18.074Z",
+    "resolution_attempts": 0,
+    "next_resolution": null
+  },
+  {
+    "id": "cmuysd8i261j90ppf1lwo3t69",
+    "task_id": "recDlqjAcQTwghSfo",
+    "scenario": "INSPECTION_REMINDER",
+    "detected_at": "2026-10-07T22:16:16.960Z",
+    "processed_at": "2026-10-07T22:16:24.627Z",
+    "recipients_resolved": "2026-10-07T22:16:18.493Z",
+    "resolution_attempts": 0,
+    "next_resolution": null
+  },
+  {
+    "id": "cmv0xqr299l9s0ppfzha324m6",
+    "task_id": "recDlqjAcQTwghSfo",
+    "scenario": "INSPECTION_COMPLETED",
+    "detected_at": "2026-10-09T10:22:17.978Z",
+    "processed_at": "2026-10-09T10:22:29.596Z",
+    "recipients_resolved": "2026-10-09T10:22:19.931Z",
+    "resolution_attempts": 0,
+    "next_resolution": null
+  },
+  {
+    "id": "cmv26lya200050pnzzdjlt73x",
+    "task_id": "recfSabShqw3DWXoy",
+    "scenario": "INSPECTION_REMINDER",
+    "detected_at": "2026-10-10T07:18:16.759Z",
+    "processed_at": "2026-10-10T07:18:31.302Z",
+    "recipients_resolved": "2026-10-10T07:18:20.261Z",
+    "resolution_attempts": 0,
+    "next_resolution": null
+  },
+  {
+    "id": "cmv0uf5fm9kdh0ppf2ql68lze",
+    "task_id": "recFyqJIdm01UYhaw",
+    "scenario": "INSPECTION_COMPLETED",
+    "detected_at": "2026-10-09T08:49:17.878Z",
+    "processed_at": "2026-10-09T08:49:29.409Z",
+    "recipients_resolved": "2026-10-09T08:49:19.475Z",
+    "resolution_attempts": 0,
+    "next_resolution": null
+  },
+  {
+    "id": "cmuzcik1r76zq0ppf2xiwrujq",
+    "task_id": "recg53O0jQHrigWFM",
+    "scenario": "INSPECTION_COMPLETED",
+    "detected_at": "2026-10-08T07:40:17.527Z",
+    "processed_at": "2026-10-08T07:40:25.930Z",
+    "recipients_resolved": "2026-10-08T07:40:18.537Z",
+    "resolution_attempts": 0,
+    "next_resolution": null
+  },
+  {
+    "id": "cmuzk0mfg78sc0ppf5cpduyzn",
+    "task_id": "recLMAgUHwgKjqcLm",
+    "scenario": "INSPECTION_COMPLETED",
+    "detected_at": "2026-10-08T11:10:17.730Z",
+    "processed_at": "2026-10-08T11:10:26.392Z",
+    "recipients_resolved": "2026-10-08T11:10:18.665Z",
+    "resolution_attempts": 0,
+    "next_resolution": null
+  },
+  {
+    "id": "cmv3h9oxl17bt0plamojznwaz",
+    "task_id": "recOiqIoGzesLFSer",
+    "scenario": "INSPECTION_REMINDER",
+    "detected_at": "2026-10-11T05:04:26.731Z",
+    "processed_at": "2026-10-11T05:05:27.855Z",
+    "recipients_resolved": "2026-10-11T05:05:26.943Z",
+    "resolution_attempts": 0,
+    "next_resolution": null
+  },
+  {
+    "id": "cmv3hhezy17c60pla276vvtug",
+    "task_id": "recOiqIoGzesLFSer",
+    "scenario": "INSPECTION_COMPLETED",
+    "detected_at": "2026-10-11T05:10:26.866Z",
+    "processed_at": "2026-10-11T05:11:27.865Z",
+    "recipients_resolved": "2026-10-11T05:11:26.963Z",
+    "resolution_attempts": 0,
+    "next_resolution": null
+  },
+  {
+    "id": "cmuwpghgf2irg0ppft7qbnvb9",
+    "task_id": "recpH6zFYCZprdtXO",
+    "scenario": "INSPECTION_COMPLETED",
+    "detected_at": "2026-10-06T11:19:17.334Z",
+    "processed_at": "2026-10-06T11:20:19.649Z",
+    "recipients_resolved": "2026-10-06T11:20:17.268Z",
+    "resolution_attempts": 0,
+    "next_resolution": null
+  },
+  {
+    "id": "cmuv7c6fk06gk0ppf9ou6gflv",
+    "task_id": "recQxdKn1K3mW25T9",
+    "scenario": "INSPECTION_DATE_CONFIRMED",
+    "detected_at": "2026-10-05T10:04:17.162Z",
+    "processed_at": "2026-10-05T10:05:31.727Z",
+    "recipients_resolved": "2026-10-05T10:05:17.040Z",
+    "resolution_attempts": 0,
+    "next_resolution": null
+  },
+  {
+    "id": "cmuvxhj361brt0ppfidwd9wrm",
+    "task_id": "recQxdKn1K3mW25T9",
+    "scenario": "INSPECTION_REMINDER",
+    "detected_at": "2026-10-05T22:16:16.859Z",
+    "processed_at": "2026-10-05T22:16:17.850Z",
+    "recipients_resolved": "2026-10-05T22:16:17.353Z",
+    "resolution_attempts": 0,
+    "next_resolution": null
+  },
+  {
+    "id": "cmuyn0cgd60vc0ppfwbus4bj1",
+    "task_id": "recQxdKn1K3mW25T9",
+    "scenario": "INSPECTION_COMPLETED",
+    "detected_at": "2026-10-07T19:46:17.471Z",
+    "processed_at": "2026-10-07T19:46:24.284Z",
+    "recipients_resolved": "2026-10-07T19:46:18.359Z",
+    "resolution_attempts": 0,
+    "next_resolution": null
+  },
+  {
+    "id": "cmuxz40a14tx00ppfnblx804d",
+    "task_id": "rectyhC4B1PFvZtlL",
+    "scenario": "INSPECTION_DATE_CONFIRMED",
+    "detected_at": "2026-10-07T08:37:17.534Z",
+    "processed_at": "2026-10-07T08:37:22.689Z",
+    "recipients_resolved": "2026-10-07T08:37:18.139Z",
+    "resolution_attempts": 0,
+    "next_resolution": null
+  },
+  {
+    "id": "cmuysd8if61jb0ppfz9sau8si",
+    "task_id": "rectyhC4B1PFvZtlL",
+    "scenario": "INSPECTION_REMINDER",
+    "detected_at": "2026-10-07T22:16:16.974Z",
+    "processed_at": "2026-10-07T22:16:24.627Z",
+    "recipients_resolved": "2026-10-07T22:16:18.641Z",
+    "resolution_attempts": 0,
+    "next_resolution": null
+  },
+  {
+    "id": "cmv0v2aq79kgb0ppfom83kmxm",
+    "task_id": "rectyhC4B1PFvZtlL",
+    "scenario": "INSPECTION_COMPLETED",
+    "detected_at": "2026-10-09T09:07:17.831Z",
+    "processed_at": "2026-10-09T09:07:29.441Z",
+    "recipients_resolved": "2026-10-09T09:07:19.551Z",
+    "resolution_attempts": 0,
+    "next_resolution": null
+  },
+  {
+    "id": "cmuy36lvg4vx20ppf3ki57l9w",
+    "task_id": "recuEMFLdGxRI3hVK",
+    "scenario": "INSPECTION_COMPLETED",
+    "detected_at": "2026-10-07T10:31:17.301Z",
+    "processed_at": "2026-10-07T10:31:22.961Z",
+    "recipients_resolved": "2026-10-07T10:31:17.888Z",
+    "resolution_attempts": 0,
+    "next_resolution": null
+  },
+  {
+    "id": "cmuz7oy8k6mp50ppf0vyug44w",
+    "task_id": "recvdTs6PyOIZf4ly",
+    "scenario": "INSPECTION_COMPLETED",
+    "detected_at": "2026-10-08T05:25:17.773Z",
+    "processed_at": "2026-10-08T05:25:25.630Z",
+    "recipients_resolved": "2026-10-08T05:25:18.470Z",
+    "resolution_attempts": 0,
+    "next_resolution": null
+  },
+  {
+    "id": "cmtmrhhx0ie610pmply89y05y",
+    "task_id": "recX8wdXZOrxqvDYL",
+    "scenario": "INSPECTION_DATE_CONFIRMED",
+    "detected_at": "2026-09-04T07:38:39.715Z",
+    "processed_at": "2026-09-04T07:39:21.841Z",
+    "recipients_resolved": "2026-09-04T07:39:11.938Z",
+    "resolution_attempts": 0,
+    "next_resolution": null
+  },
+  {
+    "id": "cmv0s9zof9jh50ppf87ahzu27",
+    "task_id": "recZJTCawpyaOxCSB",
+    "scenario": "INSPECTION_COMPLETED",
+    "detected_at": "2026-10-09T07:49:17.909Z",
+    "processed_at": "2026-10-09T07:49:29.279Z",
+    "recipients_resolved": "2026-10-09T07:49:19.345Z",
+    "resolution_attempts": 0,
+    "next_resolution": null
+  },
+  {
+    "id": "cmuy32r0j4vwi0ppf5g4wvdip",
+    "task_id": "reczn0ARNGqBYAHHT",
+    "scenario": "INSPECTION_COMPLETED",
+    "detected_at": "2026-10-07T10:28:17.337Z",
+    "processed_at": "2026-10-07T10:28:22.959Z",
+    "recipients_resolved": "2026-10-07T10:28:17.887Z",
+    "resolution_attempts": 0,
+    "next_resolution": null
+  }
+]

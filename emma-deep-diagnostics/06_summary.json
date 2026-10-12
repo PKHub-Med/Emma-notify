@@ -1,0 +1,22 @@
+{
+  "generatedAt": "2026-10-12T09:16:52.725Z",
+  "mode": "READ_ONLY",
+  "cutoff": "2026-10-05",
+  "today": "2026-10-12",
+  "inspectedCases": 17,
+  "scopeOutcomes": {
+    "BRAK_SZPITALA_NA_URZADZENIU": 4,
+    "BRAK_URZADZENIA": 8,
+    "JEDEN_SZPITAL_Z_URZADZENIA": 5
+  },
+  "completedTasks": 23,
+  "taskRowsScanned": 3423,
+  "taskScanLimitReached": false,
+  "mailOutcomes": {
+    "SENT": 7,
+    "BRAK_COMPLETED_EVENT": 6,
+    "CANCELLED": 6,
+    "EVENT_BEZ_DELIVERY": 4
+  },
+  "caveat": "Events may not have been eligible for sending"
+}

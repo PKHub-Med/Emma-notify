@@ -1,5 +1,7 @@
 import { Prisma, type PrismaClient } from "../generated/prisma/client.js";
 import {
+  CommunicationDiagnosticOrigin,
+  CommunicationDiagnosticStatus,
   CommunicationRecipientResolutionStatus,
   CommunicationRecipientType,
   CommunicationSourceEntityType,
@@ -26,6 +28,7 @@ import { resolveCommunicationScenario } from "../airtable/template-scenario.js";
 import type { AirtableIncrementalSource } from "../airtable/types.js";
 import { toLinkedRecordIds, toOptionalString } from "../airtable/values.js";
 import { normalizeEmail } from "../shared/normalize-email.js";
+import type { CommunicationDiagnosticRegistry } from "./communication-diagnostics.js";
 import type {
   RecipientDebugContact,
   RecipientDebugField,
@@ -195,6 +198,7 @@ export async function resolvePendingCommunicationRecipients(input: {
   store: RecipientResolutionStore;
   tiemedFallbackEmail: string | null;
   debugEnabled?: boolean;
+  diagnostics?: CommunicationDiagnosticRegistry;
   now?: () => Date;
   log?: (message: string) => void;
 }): Promise<number> {
@@ -214,6 +218,7 @@ export async function resolveCommunicationEventRecipients(input: {
   store: RecipientResolutionStore;
   tiemedFallbackEmail: string | null;
   debugEnabled?: boolean;
+  diagnostics?: CommunicationDiagnosticRegistry;
   now?: () => Date;
   log?: (message: string) => void;
 }): Promise<void> {
@@ -369,6 +374,8 @@ export async function resolveCommunicationEventRecipients(input: {
       input.log?.(
         `COMMUNICATION_RECIPIENT_RESOLUTION_FAILED eventId=${input.event.id} reason=FALLBACK_MISSING`,
       );
+      await recordRecipientDiagnostic(input, CommunicationDiagnosticStatus.BLOCKED,
+        "RECIPIENT_FALLBACK_MISSING");
       return;
     }
     const normalizedEmail = normalizeEmail(input.tiemedFallbackEmail);
@@ -417,6 +424,39 @@ export async function resolveCommunicationEventRecipients(input: {
   input.log?.(
     `COMMUNICATION_RECIPIENTS_RESOLVED eventId=${input.event.id} scenario=${input.event.scenario} recipientCount=${readyCount + (fallback ? 1 : 0)} fallback=${fallback}`,
   );
+  if (readyCount + (fallback ? 1 : 0) > 0) {
+    await recordRecipientDiagnostic(input, CommunicationDiagnosticStatus.READY,
+      "RECIPIENTS_RESOLVED");
+  } else {
+    const reason = recipients.some((recipient) => recipient.resolutionReason === "OPTED_OUT")
+      ? "RECIPIENT_OPTED_OUT"
+      : "NO_ELIGIBLE_RECIPIENT";
+    await recordRecipientDiagnostic(input, CommunicationDiagnosticStatus.BLOCKED, reason);
+    input.log?.(
+      `COMMUNICATION_BLOCKED sourceRecordId=${input.event.sourceRecordId} ` +
+      `scenario=${input.event.scenario} reason=${reason} recipientCount=0`,
+    );
+  }
+}
+
+async function recordRecipientDiagnostic(
+  input: Parameters<typeof resolveCommunicationEventRecipients>[0],
+  status: CommunicationDiagnosticStatus,
+  reasonCode: string,
+): Promise<void> {
+  if (!input.diagnostics) return;
+  const snapshot = isObject(input.event.eventSnapshot) ? input.event.eventSnapshot : {};
+  await input.diagnostics.record({
+    sourceEntityType: input.event.sourceEntityType,
+    sourceRecordId: input.event.sourceRecordId,
+    businessNumber: snapshotString(snapshot, "taskNumber") ?? snapshotString(snapshot, "businessNumber"),
+    scenario: input.event.scenario,
+    status,
+    reasonCode,
+    reasonOrigin: CommunicationDiagnosticOrigin.APPLICATION,
+    checkedAt: (input.now ?? (() => new Date()))(),
+    eventId: input.event.id,
+  });
 }
 
 function createDebugTrace(event: RecipientResolutionEvent): RecipientResolutionDebugTrace {

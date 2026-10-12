@@ -1,10 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  CommunicationDiagnosticStatus,
   CommunicationRecipientResolutionStatus,
   CommunicationRecipientType,
   CommunicationScenario,
   CommunicationSourceEntityType,
 } from "../generated/prisma/enums.js";
+import type { CommunicationDiagnosticRegistry } from "./communication-diagnostics.js";
 import {
   AIRTABLE_TABLE_IDS,
   CONTACT_FIELDS,
@@ -370,16 +372,28 @@ describe("SERVICE_ORDER recipient resolution", () => {
 describe("fallback and failures", () => {
   it("does not create CLIENT or fallback when every valid client opted out", async () => {
     const store = new MemoryStore();
+    const recordDiagnostic = vi.fn(async () => true);
+    const diagnostics = {
+      record: recordDiagnostic,
+      assessCompletedData: vi.fn(), findDuePendingTasks: vi.fn(),
+      wakePendingForInspection: vi.fn(), synchronizeDelivery: vi.fn(), summarizeCycle: vi.fn(),
+    } as unknown as CommunicationDiagnosticRegistry;
     store.optedOut.add("recHospital:a@x.pl");
     await resolveCommunicationEventRecipients({
       event: taskEvent(["recA"], { sourceHospitalRecordId: "recHospital" }),
       airtable: airtableSource({ recA: contact("recA", "a@x.pl") }),
       store,
       tiemedFallbackEmail: fallbackEmail,
+      diagnostics,
     });
     expect(ready(store)).toHaveLength(0);
     expect(fallback(store)).toHaveLength(0);
     expect(invalid(store)).toMatchObject([{ resolutionReason: "OPTED_OUT" }]);
+    expect(recordDiagnostic).toHaveBeenCalledWith(expect.objectContaining({
+      status: CommunicationDiagnosticStatus.BLOCKED,
+      reasonCode: "RECIPIENT_OPTED_OUT",
+      eventId: "evtTask",
+    }));
   });
 
   it("never adds fallback when at least one CLIENT is ready", async () => {

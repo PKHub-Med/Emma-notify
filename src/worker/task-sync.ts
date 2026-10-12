@@ -1,6 +1,13 @@
 import { isDeepStrictEqual } from "node:util";
 import { Prisma, type PrismaClient } from "../generated/prisma/client.js";
-import { SyncEntityType, SyncStatus } from "../generated/prisma/enums.js";
+import {
+  CommunicationDiagnosticOrigin,
+  CommunicationDiagnosticStatus,
+  CommunicationScenario,
+  CommunicationSourceEntityType,
+  SyncEntityType,
+  SyncStatus,
+} from "../generated/prisma/enums.js";
 import {
   AIRTABLE_TABLE_IDS,
   TASK_FIELD_IDS,
@@ -22,8 +29,19 @@ import {
   type CommunicationObservation,
   type CommunicationObservationResult,
 } from "./communication-event.js";
-import { compareLocalDates, localDateAt, parseLocalDate } from "./communication-time.js";
+import {
+  compareLocalDates,
+  localDateAt,
+  parseLocalDate,
+} from "./communication-time.js";
 import { formatIncrementalSyncFailure } from "./incremental-sync-error.js";
+import {
+  nextPendingCheck,
+  pendingDataExpiresAt,
+  type CommunicationDiagnosticRegistry,
+  type CompletedDataReadiness,
+  type PendingTaskDiagnostic,
+} from "./communication-diagnostics.js";
 
 export type TaskSyncMode = "BASELINE" | "INCREMENTAL" | "RECONCILE" | "REMINDER_ELIGIBILITY";
 export type TaskUpsertOutcome = "FIRST_SEEN" | "UNCHANGED" | "CHANGED";
@@ -116,6 +134,7 @@ export async function runTaskSync(dependencies: {
   airtable: AirtableIncrementalSource;
   store: TaskSyncStore;
   communicationStore: CommunicationEventStore;
+  diagnostics?: CommunicationDiagnosticRegistry;
   overlapSeconds?: number;
   requestedMode?: "AUTO" | "RECONCILE" | "REMINDER_ELIGIBILITY";
   timeZone?: string;
@@ -151,7 +170,48 @@ export async function runTaskSync(dependencies: {
       TASK_FIELD_IDS,
       listOptions,
     );
-    const records = measured.records;
+    const records = [...measured.records];
+    const pendingTasks = new Map<string, PendingTaskDiagnostic>();
+    if (mode === "INCREMENTAL" && dependencies.diagnostics) {
+      const present = new Set(records.map((record) => record.id));
+      const duePending = await dependencies.diagnostics.findDuePendingTasks(startedAt);
+      for (const pendingTask of duePending) {
+        const recordId = pendingTask.sourceRecordId;
+        pendingTasks.set(recordId, pendingTask);
+        if (present.has(recordId)) continue;
+        try {
+          records.push(await dependencies.airtable.fetchRecord(
+            AIRTABLE_TABLE_IDS.tasks,
+            recordId,
+            TASK_FIELD_IDS,
+          ));
+          present.add(recordId);
+        } catch {
+          const expiresAt = pendingTask.expiresAt ??
+            pendingDataExpiresAt(pendingTask.firstDetectedAt);
+          const expired = now().getTime() >= expiresAt.getTime();
+          await dependencies.diagnostics.record({
+            sourceEntityType: CommunicationSourceEntityType.TASK,
+            sourceRecordId: recordId,
+            scenario: CommunicationScenario.INSPECTION_COMPLETED,
+            status: expired
+              ? CommunicationDiagnosticStatus.BLOCKED
+              : CommunicationDiagnosticStatus.PENDING_DATA,
+            reasonCode: expired
+              ? "PENDING_DATA_EXPIRED"
+              : "AIRTABLE_TASK_REFETCH_FAILED",
+            reasonOrigin: CommunicationDiagnosticOrigin.AIRTABLE,
+            missingData: terminalPendingEvidence(
+              pendingTask.missingData,
+              pendingTask.reasonCode,
+            ),
+            checkedAt: now(),
+            nextCheckAt: expired ? null : nextPendingCheck(now()),
+            expiresAt,
+          });
+        }
+      }
+    }
     const stats: TaskSyncStats = {
       mode, tasksFetched: records.length, recordsFetched: records.length,
       pagesFetched: 0, requestsMade: 0, firstSeen: 0, changed: 0, unchanged: 0,
@@ -164,6 +224,7 @@ export async function runTaskSync(dependencies: {
       const detectedAt = now();
       const task = mapTask(record);
       const observation = buildTaskObservation(task, detectedAt);
+      const pendingTask = pendingTasks.get(record.id) ?? null;
       const timeZone = dependencies.timeZone ?? "Europe/Warsaw";
       const visitDateEligible = isCurrentVisitDateObservation(
         observation,
@@ -182,6 +243,16 @@ export async function runTaskSync(dependencies: {
                 timeZone,
               )
             : isCurrentCompletedObservation(observation, detectedAt, timeZone));
+      let readiness: CompletedDataReadiness = { ready: true };
+      if (observation.scenario === "INSPECTION_COMPLETED" &&
+          (automaticEventAllowed || pendingTask !== null) && dependencies.diagnostics) {
+        readiness = await dependencies.diagnostics.assessCompletedData(observation);
+      }
+      const pendingExpiresAt = pendingTask
+        ? pendingTask.expiresAt ?? pendingDataExpiresAt(pendingTask.firstDetectedAt)
+        : pendingDataExpiresAt(detectedAt);
+      const pendingDataExpired = pendingTask !== null && !readiness.ready &&
+        detectedAt.getTime() >= pendingExpiresAt.getTime();
       const completedLimitReached = observation.scenario === "INSPECTION_COMPLETED" &&
         completedEventsCreated >= COMPLETED_COMMUNICATIONS_PER_RUN_LIMIT;
       if (completedLimitReached && !completedLimitLogged) {
@@ -191,18 +262,41 @@ export async function runTaskSync(dependencies: {
           `limit=${COMPLETED_COMMUNICATIONS_PER_RUN_LIMIT} mode=${mode}`,
         );
       }
-      const allowEvent = automaticEventAllowed && !completedLimitReached;
+      const allowEvent = automaticEventAllowed && readiness.ready && !completedLimitReached;
+      const retryableSuppression = observation.scenario === "INSPECTION_COMPLETED" &&
+        automaticEventAllowed && !pendingDataExpired;
       const outcome = await syncSingleTaskRecord({
         record,
         store: dependencies.store,
         communicationStore: dependencies.communicationStore,
         allowEvent,
+        retryableSuppression,
         detectedAt,
         ...(dependencies.log ? { log: dependencies.log } : {}),
       });
       if (outcome.communicationOutcome === "CREATED" &&
           observation.scenario === "INSPECTION_COMPLETED") {
         completedEventsCreated += 1;
+      }
+      if (dependencies.diagnostics) {
+        await recordTaskDiagnostic({
+          diagnostics: dependencies.diagnostics,
+          observation,
+          taskNumber: task.taskNumber,
+          mode,
+          automaticEventAllowed,
+          readiness,
+          completedLimitReached,
+          outcome: outcome.communicationOutcome,
+          ...(outcome.communicationEventId
+            ? { eventId: outcome.communicationEventId }
+            : {}),
+          detectedAt,
+          timeZone,
+          pendingTask,
+          pendingExpiresAt,
+          pendingDataExpired,
+        });
       }
       if (outcome.taskOutcome === "FIRST_SEEN") stats.firstSeen += 1;
       if (outcome.taskOutcome === "CHANGED") stats.changed += 1;
@@ -222,6 +316,15 @@ export async function runTaskSync(dependencies: {
     stats.requestsMade = measured.metrics.requestsMade;
     stats.durationMs = Math.max(0, completedAt.getTime() - startedAt.getTime());
     dependencies.log?.(formatTaskSyncStats(stats));
+    if (dependencies.diagnostics) {
+      const summary = await dependencies.diagnostics.summarizeCycle(startedAt);
+      dependencies.log?.(
+        `COMMUNICATION_CYCLE_SUMMARY checked=${summary.checked} pending=${summary.pending} ` +
+        `blocked=${summary.blocked} eventsCreated=${summary.eventsCreated} sent=${summary.sent} ` +
+        `cancelled=${summary.cancelled} interventionRequired=${summary.interventionRequired}`,
+      );
+      await dependencies.diagnostics.pruneExpired?.(completedAt);
+    }
     return stats;
   } catch (error: unknown) {
     await dependencies.store.markFailed(now()).catch(() => undefined);
@@ -240,11 +343,13 @@ export async function syncSingleTaskRecord(input: {
   store: Pick<TaskSyncStore, "upsertTask">;
   communicationStore: CommunicationEventStore;
   allowEvent: boolean;
+  retryableSuppression?: boolean;
   detectedAt: Date;
   log?: (message: string) => void;
 }): Promise<{
   taskOutcome: TaskUpsertOutcome;
   communicationOutcome: CommunicationObservationResult["outcome"];
+  communicationEventId?: string;
 }> {
   const task = mapTask(input.record);
   const taskOutcome = await input.store.upsertTask(task, input.detectedAt);
@@ -252,10 +357,150 @@ export async function syncSingleTaskRecord(input: {
     store: input.communicationStore,
     observation: buildTaskObservation(task, input.detectedAt),
     allowEvent: input.allowEvent,
+    ...(input.retryableSuppression !== undefined
+      ? { retryableSuppression: input.retryableSuppression }
+      : {}),
     detectedAt: input.detectedAt,
     ...(input.log ? { log: input.log } : {}),
   });
-  return { taskOutcome, communicationOutcome: communication.outcome };
+  return {
+    taskOutcome,
+    communicationOutcome: communication.outcome,
+    ...(communication.eventId ? { communicationEventId: communication.eventId } : {}),
+  };
+}
+
+async function recordTaskDiagnostic(input: {
+  diagnostics: CommunicationDiagnosticRegistry;
+  observation: CommunicationObservation;
+  taskNumber: string | null;
+  mode: TaskSyncMode;
+  automaticEventAllowed: boolean;
+  readiness: CompletedDataReadiness;
+  completedLimitReached: boolean;
+  outcome: CommunicationObservationResult["outcome"];
+  eventId?: string;
+  detectedAt: Date;
+  timeZone: string;
+  pendingTask: PendingTaskDiagnostic | null;
+  pendingExpiresAt: Date;
+  pendingDataExpired: boolean;
+}): Promise<void> {
+  const common = {
+    sourceEntityType: CommunicationSourceEntityType.TASK,
+    sourceRecordId: input.observation.sourceRecordId,
+    businessNumber: input.taskNumber,
+    scenario: input.observation.scenario as CommunicationScenario | null,
+    checkedAt: input.detectedAt,
+  };
+  if (!input.observation.scenario) {
+    await input.diagnostics.record({
+      ...common,
+      status: CommunicationDiagnosticStatus.NOT_ELIGIBLE,
+      reasonCode: "SCENARIO_NOT_MATCHED",
+      reasonOrigin: CommunicationDiagnosticOrigin.APPLICATION,
+    });
+    return;
+  }
+  const historical = input.observation.scenario === "INSPECTION_COMPLETED" &&
+    !isCurrentCompletedObservation(input.observation, input.detectedAt, input.timeZone);
+  if (historical && input.pendingTask) {
+    if (input.readiness.ready) {
+      await input.diagnostics.record({
+        ...common,
+        status: CommunicationDiagnosticStatus.BLOCKED,
+        reasonCode: "READY_BUT_HISTORICAL",
+        reasonOrigin: CommunicationDiagnosticOrigin.APPLICATION,
+        missingData: terminalPendingEvidence(
+          input.pendingTask.missingData,
+          input.pendingTask.reasonCode,
+        ),
+        expiresAt: input.pendingExpiresAt,
+      });
+      return;
+    }
+    if (input.pendingDataExpired) {
+      await input.diagnostics.record({
+        ...common,
+        status: CommunicationDiagnosticStatus.BLOCKED,
+        reasonCode: "PENDING_DATA_EXPIRED",
+        reasonOrigin: CommunicationDiagnosticOrigin.SYNC,
+        missingData: terminalPendingEvidence(
+          input.readiness.missingData,
+          input.readiness.reasonCode,
+        ),
+        expiresAt: input.pendingExpiresAt,
+      });
+      return;
+    }
+    await input.diagnostics.record({
+      ...common,
+      status: CommunicationDiagnosticStatus.PENDING_DATA,
+      reasonCode: input.readiness.reasonCode,
+      reasonOrigin: CommunicationDiagnosticOrigin.SYNC,
+      missingData: input.readiness.missingData,
+      nextCheckAt: nextPendingCheck(input.detectedAt),
+      expiresAt: input.pendingExpiresAt,
+    });
+    return;
+  }
+  if (!input.automaticEventAllowed) {
+    await input.diagnostics.record({
+      ...common,
+      status: historical && input.mode === "INCREMENTAL"
+        ? CommunicationDiagnosticStatus.BLOCKED
+        : CommunicationDiagnosticStatus.NOT_ELIGIBLE,
+      reasonCode: historical ? "HISTORICAL_COMPLETED" : `MODE_${input.mode}`,
+      reasonOrigin: CommunicationDiagnosticOrigin.APPLICATION,
+    });
+    return;
+  }
+  if (!input.readiness.ready) {
+    await input.diagnostics.record({
+      ...common,
+      status: input.pendingDataExpired
+        ? CommunicationDiagnosticStatus.BLOCKED
+        : CommunicationDiagnosticStatus.PENDING_DATA,
+      reasonCode: input.pendingDataExpired
+        ? "PENDING_DATA_EXPIRED"
+        : input.readiness.reasonCode,
+      reasonOrigin: CommunicationDiagnosticOrigin.SYNC,
+      missingData: input.pendingDataExpired
+        ? terminalPendingEvidence(input.readiness.missingData, input.readiness.reasonCode)
+        : input.readiness.missingData,
+      nextCheckAt: input.pendingDataExpired ? null : nextPendingCheck(input.detectedAt),
+      expiresAt: input.pendingExpiresAt,
+    });
+    return;
+  }
+  if (input.completedLimitReached) {
+    await input.diagnostics.record({
+      ...common,
+      status: CommunicationDiagnosticStatus.PENDING_DATA,
+      reasonCode: "COMPLETED_SAFETY_LIMIT",
+      reasonOrigin: CommunicationDiagnosticOrigin.APPLICATION,
+      nextCheckAt: nextPendingCheck(input.detectedAt),
+      expiresAt: input.pendingExpiresAt,
+    });
+    return;
+  }
+  await input.diagnostics.record({
+    ...common,
+    status: CommunicationDiagnosticStatus.READY,
+    reasonCode: input.outcome === "CREATED" ? "EVENT_CREATED" : "EVENT_ALREADY_EXISTS",
+    reasonOrigin: CommunicationDiagnosticOrigin.APPLICATION,
+    eventId: input.eventId ?? null,
+  });
+}
+
+function terminalPendingEvidence(
+  missingData: Record<string, unknown> | null,
+  lastPendingReasonCode: string,
+): Record<string, unknown> {
+  return {
+    ...(missingData ?? {}),
+    lastPendingReasonCode,
+  };
 }
 
 export function isCurrentCompletedObservation(

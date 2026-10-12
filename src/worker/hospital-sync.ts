@@ -143,30 +143,60 @@ export async function synchronizeInspectionHospitalScopes(
       caseType: CaseType.INSPECTION,
       ...(scopedRecordIds ? { airtableRecordId: { in: scopedRecordIds } } : {}),
     },
-    select: { id: true, airtableRecordId: true, sourceHospitalRecordId: true },
+    select: {
+      id: true,
+      airtableRecordId: true,
+      sourceHospitalRecordId: true,
+      devices: { select: { deviceAirtableId: true } },
+    },
   });
+  const deviceRecordIds = [...new Set(inspections.flatMap((inspection) =>
+    (inspection.devices ?? []).map((device) => device.deviceAirtableId)))];
+  const devices = deviceRecordIds.length > 0
+    ? await prisma.trackedDevice.findMany({
+        where: { airtableRecordId: { in: deviceRecordIds }, active: true },
+        select: { airtableRecordId: true, sourceHospitalRecordId: true },
+      })
+    : [];
+  const hospitalByDevice = new Map(devices.map((device) =>
+    [device.airtableRecordId, device.sourceHospitalRecordId]));
   let repaired = 0;
   let unchanged = 0;
   let stillUnscoped = 0;
   let ambiguous = 0;
 
   for (const inspection of inspections) {
-    const hospitalIds = index.get(inspection.airtableRecordId) ?? new Set<string>();
-    const desiredScope = hospitalIds.size === 1
-      ? hospitalIds.values().next().value ?? null
+    const directHospitalIds = index.get(inspection.airtableRecordId) ?? new Set<string>();
+    const deviceHospitalIds = new Set((inspection.devices ?? [])
+      .map((device) => hospitalByDevice.get(device.deviceAirtableId) ?? null)
+      .filter((value): value is string => Boolean(value)));
+    const evidence = directHospitalIds.size > 0 ? directHospitalIds : deviceHospitalIds;
+    const conflictingSources = directHospitalIds.size > 0 && deviceHospitalIds.size > 0 &&
+      (directHospitalIds.size !== deviceHospitalIds.size ||
+        [...directHospitalIds].some((hospitalId) => !deviceHospitalIds.has(hospitalId)));
+    const inferredScope = !conflictingSources && evidence.size === 1
+      ? evidence.values().next().value ?? null
       : null;
-    if (hospitalIds.size === 0) {
+    const conflictsWithExisting = Boolean(
+      inspection.sourceHospitalRecordId && inferredScope &&
+      inspection.sourceHospitalRecordId !== inferredScope,
+    );
+    const desiredScope = conflictsWithExisting ? null : inferredScope;
+    if (directHospitalIds.size === 0 && deviceHospitalIds.size === 0) {
       stillUnscoped += 1;
       log(`INSPECTION_HOSPITAL_SCOPE_MISSING sourceRecordId=${inspection.airtableRecordId}`);
-    } else if (hospitalIds.size > 1) {
+    } else if (conflictingSources || evidence.size > 1 || conflictsWithExisting) {
       ambiguous += 1;
       stillUnscoped += 1;
       log(
         `INSPECTION_HOSPITAL_SCOPE_AMBIGUOUS sourceRecordId=${inspection.airtableRecordId} ` +
-        `uniqueHospitals=${hospitalIds.size}`,
+        `directHospitals=${directHospitalIds.size} deviceHospitals=${deviceHospitalIds.size} ` +
+        `existingScope=${inspection.sourceHospitalRecordId ? "present" : "missing"}`,
       );
     }
-    if (inspection.sourceHospitalRecordId === desiredScope) {
+    // Missing or conflicting evidence is never sufficient authority to erase
+    // or replace an existing tenant boundary.
+    if (!desiredScope || inspection.sourceHospitalRecordId === desiredScope) {
       unchanged += 1;
       continue;
     }

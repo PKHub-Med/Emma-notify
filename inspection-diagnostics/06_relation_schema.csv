@@ -1,0 +1,5 @@
+﻿"table_name","column_name","data_type"
+"TrackedCaseDevice","id","text"
+"TrackedCaseDevice","trackedCaseId","text"
+"TrackedCaseDevice","deviceAirtableId","text"
+"TrackedCaseDevice","createdAt","timestamp without time zone"

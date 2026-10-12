@@ -51,6 +51,7 @@ import {
   renderDebugEmailHtml,
   type RecipientResolutionDebugTrace,
 } from "./communication-email-debug.js";
+import type { CommunicationDiagnosticRegistry } from "./communication-diagnostics.js";
 import { normalizeEmail } from "../shared/normalize-email.js";
 
 const MAX_ATTEMPTS = 5;
@@ -522,6 +523,7 @@ export async function runCommunicationEmailSender(input: {
   dataSource: CommunicationTemplateDataSource;
   assetPreflight?: CommunicationAssetPreflight;
   config: CommunicationEmailSenderConfig;
+  diagnostics?: CommunicationDiagnosticRegistry;
   now?: () => Date;
   log?: (message: string) => void;
 }): Promise<{ candidates: number; sent: number; failed: number; cancelled: number }> {
@@ -558,6 +560,9 @@ export async function runCommunicationEmailSender(input: {
       stats.sent += outcome.sent;
       stats.failed += outcome.failed;
       stats.cancelled += outcome.cancelled;
+      for (const item of matching) {
+        await input.diagnostics?.synchronizeDelivery(item.id, now());
+      }
       continue;
     }
 
@@ -566,6 +571,9 @@ export async function runCommunicationEmailSender(input: {
     if (outcome === "SENT") stats.sent += 1;
     if (outcome === "FAILED") stats.failed += 1;
     if (outcome === "CANCELLED") stats.cancelled += 1;
+    if (outcome !== "SKIPPED") {
+      await input.diagnostics?.synchronizeDelivery(candidate.id, now());
+    }
   }
   return stats;
 }
@@ -1094,7 +1102,9 @@ export async function sendCommunicationDelivery(input: {
 
   if (input.candidate.scenario === CommunicationScenario.INSPECTION_COMPLETED &&
       isEmptyCompletedVariables(variables)) {
-    return suppressEmptyCompleted(input);
+    return fail(input, classifyDeliveryError({
+      source: "TRANSIENT", code: "COMPLETED_DATA_PENDING",
+    }), attempt);
   }
 
   try {
@@ -1481,23 +1491,6 @@ export async function isCurrentlyPerformedCompletedCandidate(
 function isEmptyCompletedVariables(variables: Record<string, TemplateVariableValue>): boolean {
   return ["PASSED_COUNT", "CONDITIONAL_COUNT", "FAILED_COUNT"]
     .every((key) => Number(variables[key] ?? 0) === 0);
-}
-
-async function suppressEmptyCompleted(
-  input: Parameters<typeof sendCommunicationDelivery>[0],
-): Promise<"CANCELLED"> {
-  const failure = classifyDeliveryError({ source: "SUPPRESSED", code: "EMPTY_COMPLETED" });
-  await input.store.cancel(
-    input.candidate.id,
-    CommunicationDeliveryCancelReason.EMPTY_COMPLETED,
-    input.now,
-  );
-  input.log?.(
-    `COMMUNICATION_EMAIL_SUPPRESSED deliveryId=${input.candidate.id} ` +
-    `scenario=INSPECTION_COMPLETED errorCategory=${failure.category} ` +
-    `errorCode=${failure.code} reason=${failure.code} ${deliveryDiagnosticFields(input.candidate)}`,
-  );
-  return "CANCELLED";
 }
 
 function isPreActivation(candidate: CommunicationSendCandidate, activation: Date): boolean {
