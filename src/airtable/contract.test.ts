@@ -38,6 +38,7 @@ describe("central Airtable contract", () => {
       contactLinks: "fld3jpkvIZrCAQVbR",
       selectedContactLinks: "fldCfGEH3o4QnieTs",
       selectedContactEmailLookup: "fld86wH67E8Hpl5au",
+      emmaRecipientEmail: "fldJXn7fW409Kq7FK",
       emmaCustomerStatus: "fldiTY6M5rQLoOFvd",
       emmaMailTemplate: "fldgGORaQ08utJddW",
       sourceHospitalLink: "fldDQYxpMRt6xaHCE",

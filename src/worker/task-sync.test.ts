@@ -47,12 +47,14 @@ class FakeAirtable implements AirtableIncrementalSource {
   currentRecords: AirtableRecord[] = [];
   readonly recordsById = new Map<string, AirtableRecord>();
   lastOptions: AirtableListOptions | undefined;
+  lastFieldIds: readonly string[] = [];
 
   async fetchAllRecords(
     _tableId: string,
-    _fieldIds: readonly string[],
+    fieldIds: readonly string[],
     options?: AirtableListOptions,
   ): Promise<AirtableRecord[]> {
+    this.lastFieldIds = fieldIds;
     this.lastOptions = options;
     if (options?.filterByFormula?.includes("Przegląd-przypomnienie_o_wizycie")) {
       const tomorrow = options.filterByFormula.match(/= '(\d{4}-\d{2}-\d{2})'/)?.[1];
@@ -496,6 +498,15 @@ describe("task polling and communication events", () => {
     expect(formula).not.toContain(`{${TASK_FIELDS.emmaCustomerStatus}}`);
     expect(formula).not.toContain(`{${TASK_FIELDS.emmaMailTemplate}}`);
     expect(buildTaskPollingFormula()).toContain("LAST_MODIFIED_TIME");
+  });
+
+  it("requests EMMA: mail DT during task synchronization", async () => {
+    const fixture = taskFixture();
+    fixture.source.setCurrent(taskRecord());
+
+    await fixture.run();
+
+    expect(fixture.source.lastFieldIds).toContain(TASK_FIELDS.emmaRecipientEmail);
   });
 
   it("runs an explicit reconcile without an incremental filter", async () => {

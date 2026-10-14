@@ -23,6 +23,8 @@ export const TASK_FIELDS = {
   // Airtable: "Imie i nazwisko".
   selectedContactLinks: "fldCfGEH3o4QnieTs",
   selectedContactEmailLookup: "fld86wH67E8Hpl5au",
+  // Airtable Metadata API: "EMMA: mail DT" in Zadania (tblHWODYlfsTQ7NB9).
+  emmaRecipientEmail: "fldJXn7fW409Kq7FK",
   emmaCustomerStatus: "fldiTY6M5rQLoOFvd",
   emmaMailTemplate: "fldgGORaQ08utJddW",
   sourceHospitalLink: "fldDQYxpMRt6xaHCE",

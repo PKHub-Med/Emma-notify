@@ -385,6 +385,7 @@ export function buildTaskObservation(
       department: task.department,
       durationSeconds: task.durationSeconds,
       completed: task.completed,
+      emmaRecipientEmail: task.emmaRecipientEmail,
       selectedContactRecordIds: task.selectedContactRecordIds,
       fallbackContactRecordIds: task.hospitalContactRecordIds,
       sourceHospitalRecordId: task.sourceHospitalRecordId,

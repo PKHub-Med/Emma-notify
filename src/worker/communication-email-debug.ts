@@ -31,6 +31,11 @@ export type RecipientResolutionDebugTrace = {
     airtableRefetched: boolean;
     refetchedAt: string | null;
   };
+  taskRecipientResolution?: {
+    source: "EVENT_SNAPSHOT" | "AIRTABLE_REFETCH";
+    airtableRefetched: boolean;
+    refetchedAt: string | null;
+  };
   contacts: RecipientDebugContact[];
   consideredAddresses: {
     address: string | null;

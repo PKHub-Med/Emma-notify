@@ -348,7 +348,7 @@ describe("dynamic HTML and source mapping", () => {
 
   it.each([
     [1800, "30 min"], [3600, "1 godz."], [5400, "1 godz. 30 min"], [null, "-"],
-  ])("formats inspection duration %j consistently in device and result rows", async (seconds, expected) => {
+  ])("keeps duration in scheduling mails but omits it from summary rows (%j)", async (seconds, expected) => {
     const one = { ...inspection("only", "SPRAWNY"), estimatedDurationSeconds: seconds };
     const dataSource: CommunicationTemplateDataSource = {
       async getEmployees() { return []; },
@@ -367,7 +367,14 @@ describe("dynamic HTML and source mapping", () => {
       });
       const row = String(scenario === CommunicationScenario.INSPECTION_COMPLETED
         ? payload.variables.RESULT_ROW_01 : payload.variables.DEVICE_ROW_01);
-      expect(row).toContain(`>${expected}</td></tr>`);
+      if (scenario === CommunicationScenario.INSPECTION_COMPLETED) {
+        expect(row.match(/<td\b/g)).toHaveLength(3);
+        expect(row).not.toContain(`>${expected}</td></tr>`);
+        expect(row).not.toContain("Szacunkowy czas");
+        expect(row).not.toContain('class="rr-time"');
+      } else {
+        expect(row).toContain(`>${expected}</td></tr>`);
+      }
     }
   });
 
@@ -446,7 +453,7 @@ describe("dynamic HTML and source mapping", () => {
   it("renders each completed inspection as a desktop row that becomes a full-width mobile block", async () => {
     const row = String((await build(CommunicationScenario.INSPECTION_COMPLETED)).variables.RESULT_ROW_01);
     expect(row).toContain('<tr class="result-row">');
-    expect(row.match(/<td\b/g)).toHaveLength(4);
+    expect(row.match(/<td\b/g)).toHaveLength(3);
     expect(row).toContain('class="rr-details"');
     expect(row).toContain('class="mr-lp"');
     expect(row).toContain('class="mr-status mr-defective"');
@@ -455,17 +462,42 @@ describe("dynamic HTML and source mapping", () => {
     expect(row).toContain('SN: SN<span class="dr-separator"> &#183; </span><br class="mr-break"');
     expect(row).toContain("Numer sprawy: 25793");
     expect(row).toContain("Nr zlecenia klienta: ADZP-381-353/25");
-    expect(row).toContain("Szacunkowy czas: 12 min");
+    expect(row).not.toContain("Szacunkowy czas");
+    expect(row).not.toContain("12 min");
+    expect(row).not.toContain('class="rr-time"');
     expect(row).not.toContain("min-width");
   });
 
   it("switches the result table to mobile blocks only below 680px", () => {
     const html = readFileSync("resend-templates/emma-inspection-summary.html", "utf8");
     expect(html).toContain('@media only screen and (max-width:680px)');
-    expect(html).toContain('.desktop-result-header,.rr-lp,.rr-status,.rr-time{display:none!important');
+    expect(html).toContain('.desktop-result-header,.rr-lp,.rr-status{display:none!important');
     expect(html).toContain('.rr-details{display:table-cell!important;width:100%!important');
     expect(html).toContain('<tr class="desktop-result-header">');
     expect(html).not.toContain("min-width");
+  });
+
+  it("renders exactly LP, device data and status columns in the summary table", () => {
+    const html = readFileSync("resend-templates/emma-inspection-summary.html", "utf8");
+    const header = html.match(/<tr class="desktop-result-header">([\s\S]*?)<\/tr>/)?.[1];
+    expect(header).toBeDefined();
+    expect(header?.match(/<td\b/g)).toHaveLength(3);
+    expect(header).toContain(">LP</td>");
+    expect(header).toContain(">URZĄDZENIE I DANE</td>");
+    expect(header).toContain(">STATUS</td>");
+    expect(html).not.toContain("SZACUNKOWY CZAS");
+    expect(html).not.toContain("mr-time");
+    expect(html).not.toContain("rr-time");
+  });
+
+  it("leaves estimated-time columns in the three scheduling templates", () => {
+    for (const template of [
+      "resend-templates/emma-inspection-proposed.html",
+      "resend-templates/emma-inspection-confirmed.html",
+      "resend-templates/emma-inspection-reminder.html",
+    ]) {
+      expect(readFileSync(template, "utf8")).toMatch(/szacunkowy czas/i);
+    }
   });
 
   it("always uses the first task performer, including that employee email", async () => {

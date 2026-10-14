@@ -9,9 +9,6 @@ import {
 } from "../generated/prisma/enums.js";
 import {
   AIRTABLE_TABLE_IDS,
-  CONTACT_FIELDS,
-  CONTACT_FIELD_IDS,
-  HOSPITAL_FIELDS,
   SERVICE_ORDER_FIELDS,
   TASK_FIELDS,
 } from "../airtable/field-ids.js";
@@ -19,18 +16,13 @@ import {
   AmbiguousRepairRecipientEmailError,
   parseRepairRecipientEmail,
 } from "../airtable/mappers.js";
-import {
-  mapContact,
-  resolveRecipient,
-  resolveRepairEmailRecipient,
-} from "../airtable/recipient.js";
+import { resolveRepairEmailRecipient } from "../airtable/recipient.js";
 import { resolveCommunicationScenario } from "../airtable/template-scenario.js";
 import type { AirtableIncrementalSource } from "../airtable/types.js";
 import { toLinkedRecordIds, toOptionalString } from "../airtable/values.js";
 import { normalizeEmail } from "../shared/normalize-email.js";
 import type { CommunicationDiagnosticRegistry } from "./communication-diagnostics.js";
 import type {
-  RecipientDebugContact,
   RecipientDebugField,
   RecipientResolutionDebugTrace,
 } from "./communication-email-debug.js";
@@ -43,6 +35,8 @@ const REPAIR_RECIPIENT_REFRESH_FIELDS = [
   SERVICE_ORDER_FIELDS.emmaMailTemplate,
   SERVICE_ORDER_FIELDS.sourceHospitalLink,
 ] as const;
+const TASK_RECIPIENT_SOURCE = "TASK.EMMA_MAIL_DT";
+const FALLBACK_RECIPIENT_SOURCE = "TIEMED_FALLBACK_EMAIL";
 
 export type RecipientResolutionEvent = {
   id: string;
@@ -230,219 +224,250 @@ export async function resolveCommunicationEventRecipients(input: {
     await resolveRepairRecipient(input, sourceHospitalRecordId, recipients, debugTrace);
     return;
   }
+  await resolveTaskRecipient(input, recipients, debugTrace);
+}
 
-  const primaryContactRecordIds = primaryContactIdsFromSnapshot(input.event);
-  let validClientEmailCount = 0;
+async function resolveTaskRecipient(
+  input: Parameters<typeof resolveCommunicationEventRecipients>[0],
+  recipients: CommunicationEventRecipientInput[],
+  debugTrace?: RecipientResolutionDebugTrace,
+): Promise<void> {
+  const resolvedAt = (input.now ?? (() => new Date()))();
+  const snapshot = isObject(input.event.eventSnapshot) ? input.event.eventSnapshot : {};
+  const snapshotContainsField = Object.prototype.hasOwnProperty.call(
+    snapshot,
+    "emmaRecipientEmail",
+  );
+  let rawValue = snapshotContainsField ? snapshot.emmaRecipientEmail : null;
 
-  const resolveContactGroup = async (
-    contactRecordIds: readonly string[],
-    source: RecipientDebugContact["source"],
-  ): Promise<boolean> => {
-    for (const contactRecordId of contactRecordIds) {
-      let contactRecord;
-      try {
-        contactRecord = await input.airtable.fetchRecord(
-          AIRTABLE_TABLE_IDS.contacts,
-          contactRecordId,
-          CONTACT_FIELD_IDS,
-        );
-      } catch {
-        await handleAirtableReadFailure(input, contactRecordId, debugTrace);
-        return false;
-      }
-
-      const resolved = resolveRecipient(contactRecordId, mapContact(contactRecord));
-      if (!resolved.eligible || !resolved.email || !resolved.normalizedEmail) {
-        addContactDebug(debugTrace, contactRecord, source, resolved.normalizedEmail,
-          "REJECTED", resolved.eligibilityReason);
-        recipients.push({
-          recipientType: CommunicationRecipientType.CLIENT,
-          sourceContactRecordId: contactRecordId,
-          email: resolved.email,
-          normalizedEmail: null,
-          recipientKey: `INVALID:${contactRecordId}`,
-          resolutionStatus: CommunicationRecipientResolutionStatus.INVALID,
-          resolutionReason: resolved.eligibilityReason,
-        });
-        continue;
-      }
-      if (recipients.some((recipient) =>
-        recipient.normalizedEmail === resolved.normalizedEmail)) {
-        addContactDebug(debugTrace, contactRecord, source, resolved.normalizedEmail,
-          "SKIPPED", "DUPLICATE_NORMALIZED_EMAIL");
-        continue;
-      }
-      validClientEmailCount += 1;
-      if (sourceHospitalRecordId && await input.store.isOptedOut(sourceHospitalRecordId, resolved.normalizedEmail)) {
-        addContactDebug(debugTrace, contactRecord, source, resolved.normalizedEmail,
-          "REJECTED", "OPTED_OUT");
-        recipients.push({
-          recipientType: CommunicationRecipientType.CLIENT,
-          sourceContactRecordId: contactRecordId,
-          email: resolved.email,
-          normalizedEmail: resolved.normalizedEmail,
-          recipientKey: `OPTED_OUT:${resolved.normalizedEmail}`,
-          resolutionStatus: CommunicationRecipientResolutionStatus.INVALID,
-          resolutionReason: "OPTED_OUT",
-        });
-        continue;
-      }
-      addContactDebug(debugTrace, contactRecord, source, resolved.normalizedEmail,
-        "ACCEPTED", "ELIGIBLE");
-      recipients.push({
-        recipientType: CommunicationRecipientType.CLIENT,
-        sourceContactRecordId: contactRecordId,
-        email: resolved.email,
-        normalizedEmail: resolved.normalizedEmail,
-        recipientKey: resolved.normalizedEmail,
-        resolutionStatus: CommunicationRecipientResolutionStatus.READY,
-        resolutionReason: null,
-      });
-    }
-    return true;
-  };
-
-  if (!await resolveContactGroup(primaryContactRecordIds, "PRIMARY_CONTACT_LINK")) return;
-
-  let readyCount = countReadyRecipients(recipients);
-  if (input.event.sourceEntityType === CommunicationSourceEntityType.TASK && readyCount === 0) {
-    const fallbackContactRecordIds = fallbackContactIdsFromSnapshot(input.event);
-    if (fallbackContactRecordIds.length > 0 && sourceHospitalRecordId) {
-      let hospitalRecord;
-      try {
-        hospitalRecord = await input.airtable.fetchRecord(
-          AIRTABLE_TABLE_IDS.hospitals,
-          sourceHospitalRecordId,
-          [HOSPITAL_FIELDS.contactLinks],
-        );
-      } catch {
-        await handleAirtableReadFailure(input, null, debugTrace);
-        return;
-      }
-
-      if (hospitalRecord) {
-        debugTrace?.sourceFields.push(debugField(
-          "HOSPITAL_FIELDS.contactLinks",
-          HOSPITAL_FIELDS.contactLinks,
+  if (!snapshotContainsField) {
+    let currentRecord;
+    try {
+      currentRecord = await input.airtable.fetchRecord(
+        AIRTABLE_TABLE_IDS.tasks,
+        input.event.sourceRecordId,
+        [TASK_FIELDS.emmaRecipientEmail],
+      );
+    } catch {
+      const failedAttempts = (input.event.recipientResolutionAttemptCount ?? 0) + 1;
+      if (failedAttempts < MAX_RECIPIENT_RESOLUTION_ATTEMPTS) {
+        await input.store.markFailed(
+          input.event.id,
+          CommunicationRecipientType.CLIENT,
           null,
-          hospitalRecord.fields[HOSPITAL_FIELDS.contactLinks],
-        ));
-        const hospitalContactIds = new Set(linkedRecordIds(
-          hospitalRecord.fields[HOSPITAL_FIELDS.contactLinks],
-        ));
-        const primaryIds = new Set(primaryContactRecordIds);
-        const scopedFallbackIds: string[] = [];
-        for (const contactRecordId of fallbackContactRecordIds) {
-          if (primaryIds.has(contactRecordId)) continue;
-          if (hospitalContactIds.has(contactRecordId)) {
-            scopedFallbackIds.push(contactRecordId);
-          } else {
-            addUnscopedContactDebug(debugTrace, contactRecordId);
-            recipients.push({
-              recipientType: CommunicationRecipientType.CLIENT,
-              sourceContactRecordId: contactRecordId,
-              email: null,
-              normalizedEmail: null,
-              recipientKey: `INVALID_SCOPE:${contactRecordId}`,
-              resolutionStatus: CommunicationRecipientResolutionStatus.INVALID,
-              resolutionReason: "HOSPITAL_SCOPE_MISMATCH",
-            });
-          }
-        }
-        if (!await resolveContactGroup(
-          scopedFallbackIds,
-          "HOSPITAL_FALLBACK_CONTACT_LINK",
-        )) return;
+          "TASK_RECIPIENT_AIRTABLE_READ_FAILED",
+          resolvedAt,
+        );
+      } else {
+        await invalidateTaskRecipient(
+          input,
+          recipients,
+          debugTrace,
+          "TASK_RECIPIENT_AIRTABLE_READ_FAILED",
+          null,
+          resolvedAt,
+        );
       }
+      input.log?.(
+        `COMMUNICATION_RECIPIENT_RESOLUTION_FAILED eventId=${input.event.id} ` +
+        `reason=TASK_RECIPIENT_AIRTABLE_READ_FAILED failedAttempts=${failedAttempts}`,
+      );
+      await recordRecipientDiagnostic(
+        input,
+        CommunicationDiagnosticStatus.BLOCKED,
+        "TASK_RECIPIENT_AIRTABLE_READ_FAILED",
+      );
+      return;
+    }
+    rawValue = currentRecord.fields[TASK_FIELDS.emmaRecipientEmail] ?? null;
+    if (debugTrace) {
+      debugTrace.taskRecipientResolution = {
+        source: "AIRTABLE_REFETCH",
+        airtableRefetched: true,
+        refetchedAt: resolvedAt.toISOString(),
+      };
+      debugTrace.sourceFields.push(debugField(
+        "AIRTABLE_REFETCH.TASK_FIELDS.emmaRecipientEmail",
+        TASK_FIELDS.emmaRecipientEmail,
+        "EMMA: mail DT",
+        rawValue,
+      ));
     }
   }
 
-  readyCount = countReadyRecipients(recipients);
-  let fallback = false;
-  if (readyCount === 0 && validClientEmailCount === 0) {
+  let parsedEmail: string | null;
+  try {
+    parsedEmail = parseRepairRecipientEmail(rawValue);
+  } catch (error) {
+    const reason = error instanceof AmbiguousRepairRecipientEmailError
+      ? "TASK_RECIPIENT_EMAIL_AMBIGUOUS"
+      : "TASK_RECIPIENT_EMAIL_INVALID";
+    await invalidateTaskRecipient(
+      input,
+      recipients,
+      debugTrace,
+      reason,
+      typeof rawValue === "string" ? rawValue.trim() || null : null,
+      resolvedAt,
+    );
+    await recordRecipientDiagnostic(input, CommunicationDiagnosticStatus.BLOCKED, reason);
+    return;
+  }
+
+  const resolved = resolveRepairEmailRecipient(parsedEmail);
+  if (resolved.eligibilityReason === "INVALID_EMAIL") {
+    await invalidateTaskRecipient(
+      input,
+      recipients,
+      debugTrace,
+      "TASK_RECIPIENT_EMAIL_INVALID",
+      resolved.email,
+      resolvedAt,
+    );
+    await recordRecipientDiagnostic(
+      input,
+      CommunicationDiagnosticStatus.BLOCKED,
+      "TASK_RECIPIENT_EMAIL_INVALID",
+    );
+    return;
+  }
+
+  if (resolved.eligibilityReason === "MISSING_EMAIL") {
     if (!input.tiemedFallbackEmail) {
-      await input.store.markFailed(
-        input.event.id,
-        CommunicationRecipientType.TIEMED_FALLBACK,
+      await invalidateTaskRecipient(
+        input,
+        recipients,
+        debugTrace,
+        "TASK_RECIPIENT_FALLBACK_MISSING",
         null,
-        "FALLBACK_MISSING",
-        (input.now ?? (() => new Date()))(),
+        resolvedAt,
+        FALLBACK_RECIPIENT_SOURCE,
       );
       input.log?.(
-        `COMMUNICATION_RECIPIENT_FALLBACK_MISSING eventId=${input.event.id} scenario=${input.event.scenario}`,
+        `COMMUNICATION_RECIPIENT_FALLBACK_MISSING eventId=${input.event.id} ` +
+        `scenario=${input.event.scenario} source=${FALLBACK_RECIPIENT_SOURCE}`,
       );
-      input.log?.(
-        `COMMUNICATION_RECIPIENT_RESOLUTION_FAILED eventId=${input.event.id} reason=FALLBACK_MISSING`,
+      await recordRecipientDiagnostic(
+        input,
+        CommunicationDiagnosticStatus.BLOCKED,
+        "TASK_RECIPIENT_FALLBACK_MISSING",
+        FALLBACK_RECIPIENT_SOURCE,
       );
-      await recordRecipientDiagnostic(input, CommunicationDiagnosticStatus.BLOCKED,
-        "RECIPIENT_FALLBACK_MISSING");
       return;
     }
-    const normalizedEmail = normalizeEmail(input.tiemedFallbackEmail);
+    const normalizedFallback = normalizeEmail(input.tiemedFallbackEmail);
     recipients.push({
       recipientType: CommunicationRecipientType.TIEMED_FALLBACK,
       sourceContactRecordId: null,
       email: input.tiemedFallbackEmail,
-      normalizedEmail,
-      recipientKey: normalizedEmail,
+      normalizedEmail: normalizedFallback,
+      recipientKey: normalizedFallback,
       resolutionStatus: CommunicationRecipientResolutionStatus.FALLBACK,
-      resolutionReason: "NO_VALID_CLIENT_EMAIL",
+      resolutionReason: "TASK_EMMA_MAIL_DT_EMPTY",
     });
     debugTrace?.consideredAddresses.push({
       address: input.tiemedFallbackEmail,
-      normalizedAddress: normalizedEmail,
-      source: "TIEMED_FALLBACK_EMAIL",
+      normalizedAddress: normalizedFallback,
+      source: FALLBACK_RECIPIENT_SOURCE,
       decision: "ACCEPTED",
-      reason: "NO_VALID_CLIENT_EMAIL",
+      reason: "TASK_EMMA_MAIL_DT_EMPTY",
     });
-    fallback = true;
+    if (debugTrace) {
+      debugTrace.finalRecipients = [{
+        address: normalizedFallback,
+        source: FALLBACK_RECIPIENT_SOURCE,
+        status: CommunicationRecipientResolutionStatus.FALLBACK,
+        reason: "TASK_EMMA_MAIL_DT_EMPTY",
+      }];
+    }
+    await input.store.markResolved(input.event.id, recipients, resolvedAt, debugTrace);
     input.log?.(
-      `COMMUNICATION_RECIPIENT_FALLBACK eventId=${input.event.id} scenario=${input.event.scenario}`,
+      `COMMUNICATION_RECIPIENT_FALLBACK eventId=${input.event.id} ` +
+      `scenario=${input.event.scenario} source=${FALLBACK_RECIPIENT_SOURCE}`,
     );
+    await recordRecipientDiagnostic(
+      input,
+      CommunicationDiagnosticStatus.READY,
+      "TASK_RECIPIENT_FALLBACK_USED",
+      FALLBACK_RECIPIENT_SOURCE,
+    );
+    return;
   }
 
+  recipients.push({
+    recipientType: CommunicationRecipientType.CLIENT,
+    sourceContactRecordId: null,
+    email: resolved.email,
+    normalizedEmail: resolved.normalizedEmail,
+    recipientKey: resolved.normalizedEmail!,
+    resolutionStatus: CommunicationRecipientResolutionStatus.READY,
+    resolutionReason: null,
+  });
+  debugTrace?.consideredAddresses.push({
+    address: resolved.email,
+    normalizedAddress: resolved.normalizedEmail,
+    source: TASK_RECIPIENT_SOURCE,
+    decision: "ACCEPTED",
+    reason: "ELIGIBLE",
+  });
   if (debugTrace) {
-    debugTrace.finalRecipients = recipients
-      .filter((recipient) => recipient.resolutionStatus ===
-        CommunicationRecipientResolutionStatus.READY ||
-        recipient.resolutionStatus === CommunicationRecipientResolutionStatus.FALLBACK)
-      .flatMap((recipient) => recipient.normalizedEmail ? [{
-        address: recipient.normalizedEmail,
-        source: recipient.sourceContactRecordId
-          ? `CONTACT:${recipient.sourceContactRecordId}`
-          : "TIEMED_FALLBACK_EMAIL",
-        status: recipient.resolutionStatus,
-        reason: recipient.resolutionReason,
-      }] : []);
+    debugTrace.finalRecipients = [{
+      address: resolved.normalizedEmail!,
+      source: TASK_RECIPIENT_SOURCE,
+      status: CommunicationRecipientResolutionStatus.READY,
+      reason: null,
+    }];
   }
-  await input.store.markResolved(
-    input.event.id,
-    recipients,
-    (input.now ?? (() => new Date()))(),
-    debugTrace,
-  );
+  await input.store.markResolved(input.event.id, recipients, resolvedAt, debugTrace);
   input.log?.(
-    `COMMUNICATION_RECIPIENTS_RESOLVED eventId=${input.event.id} scenario=${input.event.scenario} recipientCount=${readyCount + (fallback ? 1 : 0)} fallback=${fallback}`,
+    `COMMUNICATION_RECIPIENTS_RESOLVED eventId=${input.event.id} ` +
+    `scenario=${input.event.scenario} recipientCount=1 fallback=false ` +
+    `source=${TASK_RECIPIENT_SOURCE}`,
   );
-  if (readyCount + (fallback ? 1 : 0) > 0) {
-    await recordRecipientDiagnostic(input, CommunicationDiagnosticStatus.READY,
-      "RECIPIENTS_RESOLVED");
-  } else {
-    const reason = recipients.some((recipient) => recipient.resolutionReason === "OPTED_OUT")
-      ? "RECIPIENT_OPTED_OUT"
-      : "NO_ELIGIBLE_RECIPIENT";
-    await recordRecipientDiagnostic(input, CommunicationDiagnosticStatus.BLOCKED, reason);
-    input.log?.(
-      `COMMUNICATION_BLOCKED sourceRecordId=${input.event.sourceRecordId} ` +
-      `scenario=${input.event.scenario} reason=${reason} recipientCount=0`,
-    );
-  }
+  await recordRecipientDiagnostic(
+    input,
+    CommunicationDiagnosticStatus.READY,
+    "TASK_RECIPIENT_RESOLVED",
+  );
+}
+
+async function invalidateTaskRecipient(
+  input: Parameters<typeof resolveCommunicationEventRecipients>[0],
+  recipients: CommunicationEventRecipientInput[],
+  debugTrace: RecipientResolutionDebugTrace | undefined,
+  reason: string,
+  email: string | null,
+  resolvedAt: Date,
+  source = TASK_RECIPIENT_SOURCE,
+): Promise<void> {
+  recipients.push({
+    recipientType: CommunicationRecipientType.CLIENT,
+    sourceContactRecordId: null,
+    email,
+    normalizedEmail: null,
+    recipientKey: `INVALID:${reason}`,
+    resolutionStatus: CommunicationRecipientResolutionStatus.INVALID,
+    resolutionReason: reason,
+  });
+  debugTrace?.consideredAddresses.push({
+    address: email,
+    normalizedAddress: null,
+    source,
+    decision: "REJECTED",
+    reason,
+  });
+  await input.store.markResolved(input.event.id, recipients, resolvedAt, debugTrace);
+  input.log?.(
+    `COMMUNICATION_TASK_RECIPIENT_REJECTED eventId=${input.event.id} ` +
+    `scenario=${input.event.scenario} reason=${reason} source=${source}`,
+  );
 }
 
 async function recordRecipientDiagnostic(
   input: Parameters<typeof resolveCommunicationEventRecipients>[0],
   status: CommunicationDiagnosticStatus,
   reasonCode: string,
+  recipientSource = TASK_RECIPIENT_SOURCE,
 ): Promise<void> {
   if (!input.diagnostics) return;
   const snapshot = isObject(input.event.eventSnapshot) ? input.event.eventSnapshot : {};
@@ -454,6 +479,7 @@ async function recordRecipientDiagnostic(
     status,
     reasonCode,
     reasonOrigin: CommunicationDiagnosticOrigin.APPLICATION,
+    missingData: { recipientSource },
     checkedAt: (input.now ?? (() => new Date()))(),
     eventId: input.event.id,
   });
@@ -464,12 +490,8 @@ function createDebugTrace(event: RecipientResolutionEvent): RecipientResolutionD
   const task = event.sourceEntityType === CommunicationSourceEntityType.TASK;
   const sourceFields: RecipientDebugField[] = task
     ? [
-        debugField("TASK_FIELDS.selectedContactLinks", TASK_FIELDS.selectedContactLinks,
-          "Imie i nazwisko", snapshot.selectedContactRecordIds),
-        debugField("TASK_FIELDS.contactLinks", TASK_FIELDS.contactLinks,
-          "Osoba kontaktowa (from SZPITAL)", snapshot.fallbackContactRecordIds),
-        debugField("TASK_FIELDS.sourceHospitalLink", TASK_FIELDS.sourceHospitalLink,
-          null, snapshot.sourceHospitalRecordId),
+        debugField("TASK_FIELDS.emmaRecipientEmail", TASK_FIELDS.emmaRecipientEmail,
+          "EMMA: mail DT", snapshot.emmaRecipientEmail),
       ]
     : [
         debugField("SERVICE_ORDER_FIELDS.repairRecipientEmail",
@@ -487,7 +509,13 @@ function createDebugTrace(event: RecipientResolutionEvent): RecipientResolutionD
     hospitalRecordId: snapshotString(snapshot, "sourceHospitalRecordId"),
     hospitalName: snapshotString(snapshot, "hospitalName"),
     sourceFields,
-    ...(task ? {} : {
+    ...(task ? {
+      taskRecipientResolution: {
+        source: "EVENT_SNAPSHOT" as const,
+        airtableRefetched: false,
+        refetchedAt: null,
+      },
+    } : {
       repairRecipientResolution: {
         source: "EVENT_SNAPSHOT" as const,
         airtableRefetched: false,
@@ -759,65 +787,6 @@ async function invalidateRepairRecipient(
   );
 }
 
-function addContactDebug(
-  trace: RecipientResolutionDebugTrace | undefined,
-  record: { id: string; fields: Record<string, unknown> },
-  source: RecipientDebugContact["source"],
-  normalizedEmail: string | null,
-  decision: RecipientDebugContact["decision"],
-  reason: string,
-): void {
-  if (!trace) return;
-  const rawEmail = optionalDebugString(record.fields[CONTACT_FIELDS.email]);
-  const fields = [
-    debugField("CONTACT_FIELDS.name", CONTACT_FIELDS.name, null,
-      record.fields[CONTACT_FIELDS.name]),
-    debugField("CONTACT_FIELDS.contactable", CONTACT_FIELDS.contactable, null,
-      record.fields[CONTACT_FIELDS.contactable]),
-    debugField("CONTACT_FIELDS.email", CONTACT_FIELDS.email, null,
-      record.fields[CONTACT_FIELDS.email]),
-  ];
-  trace.contacts.push({
-    recordId: record.id,
-    source,
-    fields,
-    rawEmail,
-    normalizedEmail,
-    decision,
-    reason,
-  });
-  trace.consideredAddresses.push({
-    address: rawEmail,
-    normalizedAddress: normalizedEmail,
-    source: `${source}:${record.id}:CONTACT_FIELDS.email`,
-    decision,
-    reason,
-  });
-}
-
-function addUnscopedContactDebug(
-  trace: RecipientResolutionDebugTrace | undefined,
-  contactRecordId: string,
-): void {
-  if (!trace) return;
-  trace.contacts.push({
-    recordId: contactRecordId,
-    source: "HOSPITAL_FALLBACK_CONTACT_LINK",
-    fields: [],
-    rawEmail: null,
-    normalizedEmail: null,
-    decision: "SKIPPED",
-    reason: "HOSPITAL_SCOPE_MISMATCH",
-  });
-  trace.consideredAddresses.push({
-    address: null,
-    normalizedAddress: null,
-    source: `HOSPITAL_FALLBACK_CONTACT_LINK:${contactRecordId}`,
-    decision: "SKIPPED",
-    reason: "HOSPITAL_SCOPE_MISMATCH; contact record was not read",
-  });
-}
-
 function debugField(
   codeName: string,
   airtableFieldId: string,
@@ -832,106 +801,10 @@ function debugField(
   };
 }
 
-function optionalDebugString(value: unknown): string | null {
-  return typeof value === "string" && value.trim() ? value : null;
-}
-
 function snapshotString(snapshot: unknown, key: string): string | null {
   if (!isObject(snapshot)) return null;
   const value = snapshot[key];
   return typeof value === "string" && value.trim() ? value.trim() : null;
-}
-
-function primaryContactIdsFromSnapshot(event: RecipientResolutionEvent): string[] {
-  if (!isObject(event.eventSnapshot)) return [];
-  const field = event.sourceEntityType === CommunicationSourceEntityType.TASK
-    ? "selectedContactRecordIds"
-    : "contactRecordIds";
-  const value = event.eventSnapshot[field];
-  if (!Array.isArray(value)) return [];
-  return [...new Set(value.filter((item): item is string =>
-    typeof item === "string" && item.trim().length > 0))];
-}
-
-function fallbackContactIdsFromSnapshot(event: RecipientResolutionEvent): string[] {
-  if (!isObject(event.eventSnapshot)) return [];
-  return linkedRecordIds(event.eventSnapshot.fallbackContactRecordIds);
-}
-
-function linkedRecordIds(value: unknown): string[] {
-  if (!Array.isArray(value)) return [];
-  return [...new Set(value.filter((item): item is string =>
-    typeof item === "string" && item.trim().length > 0))];
-}
-
-function countReadyRecipients(recipients: readonly CommunicationEventRecipientInput[]): number {
-  return recipients.filter((recipient) =>
-    recipient.resolutionStatus === CommunicationRecipientResolutionStatus.READY).length;
-}
-
-async function handleAirtableReadFailure(
-  input: {
-    event: RecipientResolutionEvent;
-    store: RecipientResolutionStore;
-    tiemedFallbackEmail: string | null;
-    now?: () => Date;
-    log?: (message: string) => void;
-  },
-  sourceContactRecordId: string | null,
-  debugTrace?: RecipientResolutionDebugTrace,
-): Promise<void> {
-  const failedAt = (input.now ?? (() => new Date()))();
-  const failedAttempts = (input.event.recipientResolutionAttemptCount ?? 0) + 1;
-  if (failedAttempts >= MAX_RECIPIENT_RESOLUTION_ATTEMPTS && input.tiemedFallbackEmail) {
-    const normalizedEmail = normalizeEmail(input.tiemedFallbackEmail);
-    if (debugTrace) {
-      debugTrace.consideredAddresses.push({
-        address: null,
-        normalizedAddress: null,
-        source: sourceContactRecordId
-          ? `CONTACT:${sourceContactRecordId}`
-          : "HOSPITAL_SCOPE_READ",
-        decision: "REJECTED",
-        reason: `AIRTABLE_CONTACT_READ_FAILED:${failedAttempts}`,
-      }, {
-        address: input.tiemedFallbackEmail,
-        normalizedAddress: normalizedEmail,
-        source: "TIEMED_FALLBACK_EMAIL",
-        decision: "ACCEPTED",
-        reason: `AIRTABLE_CONTACT_READ_FAILED:${failedAttempts}`,
-      });
-      debugTrace.finalRecipients = [{
-        address: normalizedEmail,
-        source: "TIEMED_FALLBACK_EMAIL",
-        status: CommunicationRecipientResolutionStatus.FALLBACK,
-        reason: `AIRTABLE_CONTACT_READ_FAILED:${failedAttempts}`,
-      }];
-    }
-    await input.store.markResolved(input.event.id, [{
-      recipientType: CommunicationRecipientType.TIEMED_FALLBACK,
-      sourceContactRecordId: null,
-      email: input.tiemedFallbackEmail,
-      normalizedEmail,
-      recipientKey: normalizedEmail,
-      resolutionStatus: CommunicationRecipientResolutionStatus.FALLBACK,
-      resolutionReason: `AIRTABLE_CONTACT_READ_FAILED:${failedAttempts}`,
-    }], failedAt, debugTrace);
-    input.log?.(
-      `COMMUNICATION_RECIPIENT_FALLBACK eventId=${input.event.id} ` +
-      `reason=AIRTABLE_CONTACT_READ_FAILED failedAttempts=${failedAttempts}`,
-    );
-    return;
-  }
-  await input.store.markFailed(
-    input.event.id,
-    CommunicationRecipientType.CLIENT,
-    sourceContactRecordId,
-    "AIRTABLE_CONTACT_READ_FAILED",
-    failedAt,
-  );
-  input.log?.(
-    `COMMUNICATION_RECIPIENT_RESOLUTION_FAILED eventId=${input.event.id} reason=AIRTABLE_CONTACT_READ_FAILED`,
-  );
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {

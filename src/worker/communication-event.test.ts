@@ -418,7 +418,7 @@ describe("communication event diagnostics and snapshots", () => {
     expect(observation.eventSnapshot).not.toHaveProperty("contactRecordIds");
   });
 
-  it("builds the required task event snapshot without resolving emails", () => {
+  it("stores EMMA: mail DT in the task event snapshot without resolving it", () => {
     const observation = buildTaskObservation(mappedTask(), detectedAt);
 
     expect(observation.eventSnapshot).toMatchObject({
@@ -427,6 +427,7 @@ describe("communication event diagnostics and snapshots", () => {
       taskNumber: "12",
       scenario: "INSPECTION_DATE_CONFIRMED",
       day: "2026-09-10",
+      emmaRecipientEmail: ["task@hospital.pl"],
       selectedContactRecordIds: ["recContactA", "recContactB"],
       fallbackContactRecordIds: ["recHospitalContact"],
       linkedInspectionRecordIds: ["recInspectionA"],
@@ -436,6 +437,17 @@ describe("communication event diagnostics and snapshots", () => {
       detectedAt: detectedAt.toISOString(),
     });
     expect(observation.eventSnapshot).not.toHaveProperty("email");
+  });
+
+  it("does not create a new task transition solely because EMMA: mail DT changed", () => {
+    const before = buildTaskObservation(mappedTask(), detectedAt);
+    const after = buildTaskObservation({
+      ...mappedTask(),
+      emmaRecipientEmail: ["changed@hospital.pl"],
+    }, detectedAt);
+
+    expect(after.signature).toBe(before.signature);
+    expect(after.fingerprintPayload).toEqual(before.fingerprintPayload);
   });
 });
 
@@ -471,6 +483,7 @@ function mappedTask(): MappedTask {
     selectedContactRecordIds: ["recContactA", "recContactB"],
     hospitalContactRecordIds: ["recHospitalContact"],
     sourceHospitalRecordId: "recHospital",
+    emmaRecipientEmail: ["task@hospital.pl"],
     emmaCustomerStatus: "Ustalono termin wizyty",
     emmaMailTemplate: "Przegląd-informacja_o_umówionej_wizycie",
   };

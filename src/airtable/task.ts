@@ -21,14 +21,14 @@ export type MappedTask = {
   selectedContactRecordIds: string[];
   hospitalContactRecordIds: string[];
   sourceHospitalRecordId: string | null;
+  emmaRecipientEmail: unknown;
   emmaCustomerStatus: string | null;
   emmaMailTemplate: string | null;
 };
 
 /**
- * Maps the read-only Airtable task contract without affecting notification
- * routing. In particular, recipients remain linked contact record IDs; the
- * email lookup field is deliberately not read or treated as canonical.
+ * Keeps the raw formula value so recipient resolution can distinguish an
+ * empty value from an ambiguous multi-address value without guessing.
  */
 export function mapTask(record: AirtableRecord): MappedTask {
   return {
@@ -56,6 +56,7 @@ export function mapTask(record: AirtableRecord): MappedTask {
     sourceHospitalRecordId: toFirstLinkedRecordId(
       record.fields[TASK_FIELDS.sourceHospitalLink],
     ),
+    emmaRecipientEmail: record.fields[TASK_FIELDS.emmaRecipientEmail] ?? null,
     emmaCustomerStatus: toOptionalString(
       record.fields[TASK_FIELDS.emmaCustomerStatus],
     ),

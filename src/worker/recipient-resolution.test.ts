@@ -28,193 +28,151 @@ import {
 
 const fallbackEmail = "fallback@example.test";
 
-describe("TASK recipient resolution", () => {
-  it("resolves one selected contact as one CLIENT recipient", async () => {
-    const result = await resolveTask(["recA"], { recA: contact("recA", "a@x.pl") });
-    expect(ready(result.store)).toMatchObject([
-      { recipientType: CommunicationRecipientType.CLIENT, normalizedEmail: "a@x.pl" },
-    ]);
-  });
-
-  it("resolves three different selected contacts separately", async () => {
-    const result = await resolveTask(["recA", "recB", "recC"], {
-      recA: contact("recA", "a@x.pl"),
-      recB: contact("recB", "b@x.pl"),
-      recC: contact("recC", "c@x.pl"),
-    });
-    expect(ready(result.store)).toHaveLength(3);
-  });
-
-  it("deduplicates contacts by trimmed, lowercase normalizedEmail", async () => {
-    const result = await resolveTask(["recA", "recB"], {
-      recA: contact("recA", " Same@Example.PL "),
-      recB: contact("recB", "same@example.pl"),
-    });
-    expect(ready(result.store)).toHaveLength(1);
-    expect(ready(result.store)[0]?.normalizedEmail).toBe("same@example.pl");
-  });
-
-  it("keeps a valid client, records invalid diagnostics and does not add fallback", async () => {
-    const result = await resolveTask(["recA", "recB"], {
-      recA: contact("recA", "valid@example.pl"),
-      recB: contact("recB", "invalid"),
-    });
+describe("TASK EMMA: mail DT recipient resolution", () => {
+  it.each([
+    CommunicationScenario.INSPECTION_DATE_PROPOSED,
+    CommunicationScenario.INSPECTION_DATE_CONFIRMED,
+    CommunicationScenario.INSPECTION_REMINDER,
+    CommunicationScenario.INSPECTION_COMPLETED,
+  ])("uses exactly one CLIENT from TASK.EMMA_MAIL_DT for %s", async (scenario) => {
+    const result = await resolveTaskEmail([" Client@Hospital.PL "], { scenario });
+    expect(ready(result.store)).toMatchObject([{
+      recipientType: CommunicationRecipientType.CLIENT,
+      sourceContactRecordId: null,
+      email: "Client@Hospital.PL",
+      normalizedEmail: "client@hospital.pl",
+    }]);
     expect(ready(result.store)).toHaveLength(1);
     expect(fallback(result.store)).toHaveLength(0);
-    expect(invalid(result.store)).toHaveLength(1);
-  });
-
-  it("uses fallback when selected contacts are empty", async () => {
-    const result = await resolveTask([], {});
-    expect(fallback(result.store)).toHaveLength(1);
     expect(result.airtable.fetchRecord).not.toHaveBeenCalled();
   });
 
-  it("uses fallback when every selected contact has no email", async () => {
-    const result = await resolveTask(["recA", "recB"], {
-      recA: contact("recA", null), recB: contact("recB", null),
+  it("works with empty contact relations and never reads Kontakty", async () => {
+    const result = await resolveTaskEmail("client@example.pl", {
+      extraSnapshot: {
+        selectedContactRecordIds: [],
+        fallbackContactRecordIds: [],
+        sourceHospitalRecordId: null,
+      },
     });
-    expect(fallback(result.store)).toHaveLength(1);
+    expect(ready(result.store)).toHaveLength(1);
+    expect(result.airtable.fetchRecord).not.toHaveBeenCalled();
   });
 
-  it("uses fallback when every selected contact email is invalid", async () => {
-    const result = await resolveTask(["recA", "recB"], {
-      recA: contact("recA", "bad"), recB: contact("recB", "also-bad"),
+  it("ignores contactable=NIE and opt-out for the task address", async () => {
+    const store = new MemoryStore();
+    store.optedOut.add("recHospital:client@example.pl");
+    const airtable = airtableSource({
+      recContact: contact("recContact", "other@example.pl", "NIE"),
     });
-    expect(fallback(result.store)).toHaveLength(1);
-  });
-
-  it("uses the Contact Email field, never an event lookup value", async () => {
-    const result = await resolveTask(["recA"], { recA: contact("recA", "fresh@x.pl") }, {
-      selectedContactEmailLookup: "stale@x.pl",
+    await resolveCommunicationEventRecipients({
+      event: taskEvent(["recContact"], {
+        emmaRecipientEmail: "client@example.pl",
+        sourceHospitalRecordId: "recHospital",
+      }),
+      airtable,
+      store,
+      tiemedFallbackEmail: fallbackEmail,
     });
-    expect(ready(result.store)[0]?.normalizedEmail).toBe("fresh@x.pl");
+    expect(ready(store)).toMatchObject([{ normalizedEmail: "client@example.pl" }]);
+    expect(airtable.fetchRecord).not.toHaveBeenCalled();
+    await expect(store.isOptedOut("recHospital", "client@example.pl")).resolves.toBe(true);
   });
 
-  it("uses a valid Imie i nazwisko contact without reading or adding hospital fallback", async () => {
-    const result = await resolveInspection(
-      ["recPrimary"], ["recFallback"],
-      {
-        recPrimary: contact("recPrimary", "primary@hospital.pl"),
-        recFallback: contact("recFallback", "fallback@hospital.pl"),
-      },
-      ["recFallback"],
-    );
-
-    expect(ready(result.store)).toMatchObject([
-      { sourceContactRecordId: "recPrimary", normalizedEmail: "primary@hospital.pl" },
-    ]);
-    expect(result.airtable.fetchRecord).toHaveBeenCalledTimes(1);
-    expect(result.airtable.fetchRecord).not.toHaveBeenCalledWith(
-      expect.anything(), "recFallback", expect.anything(),
-    );
+  it("uses TIEMED_FALLBACK_EMAIL when the task field is empty", async () => {
+    const result = await resolveTaskEmail(null, { debugEnabled: true });
+    expect(fallback(result.store)).toMatchObject([{
+      recipientType: CommunicationRecipientType.TIEMED_FALLBACK,
+      normalizedEmail: fallbackEmail,
+      resolutionReason: "TASK_EMMA_MAIL_DT_EMPTY",
+    }]);
+    expect(result.store.debugTrace?.finalRecipients).toMatchObject([{
+      source: "TIEMED_FALLBACK_EMAIL",
+    }]);
+    expect(result.logs.join(" ")).toContain("source=TIEMED_FALLBACK_EMAIL");
   });
 
-  it("uses the hospital contact when Imie i nazwisko is empty", async () => {
-    const result = await resolveInspection(
-      [], ["recFallback"],
-      { recFallback: contact("recFallback", "fallback@hospital.pl") },
-      ["recFallback"],
-    );
+  it("records the actual fallback source in communication diagnostics", async () => {
+    const recordDiagnostic = vi.fn(async () => true);
+    const diagnostics = {
+      record: recordDiagnostic,
+      assessCompletedData: vi.fn(), findDuePendingTasks: vi.fn(),
+      wakePendingForInspection: vi.fn(), synchronizeDelivery: vi.fn(), summarizeCycle: vi.fn(),
+    } as unknown as CommunicationDiagnosticRegistry;
+    await resolveCommunicationEventRecipients({
+      event: taskEvent([], { emmaRecipientEmail: null }),
+      airtable: airtableSource({}),
+      store: new MemoryStore(),
+      tiemedFallbackEmail: fallbackEmail,
+      diagnostics,
+    });
 
-    expect(ready(result.store)).toMatchObject([
-      { sourceContactRecordId: "recFallback", normalizedEmail: "fallback@hospital.pl" },
-    ]);
-    expect(fallback(result.store)).toHaveLength(0);
+    expect(recordDiagnostic).toHaveBeenCalledWith(expect.objectContaining({
+      missingData: { recipientSource: "TIEMED_FALLBACK_EMAIL" },
+    }));
   });
 
-  it("uses the hospital contact when Imie i nazwisko has no email", async () => {
-    const result = await resolveInspection(
-      ["recPrimary"], ["recFallback"],
-      {
-        recPrimary: contact("recPrimary", null),
-        recFallback: contact("recFallback", "fallback@hospital.pl"),
-      },
-      ["recFallback"],
-    );
-
-    expect(ready(result.store)).toMatchObject([
-      { sourceContactRecordId: "recFallback", normalizedEmail: "fallback@hospital.pl" },
-    ]);
-  });
-
-  it("uses the hospital contact when Imie i nazwisko is not contactable", async () => {
-    const result = await resolveInspection(
-      ["recPrimary"], ["recFallback"],
-      {
-        recPrimary: contact("recPrimary", "primary@hospital.pl", "NIE"),
-        recFallback: contact("recFallback", "fallback@hospital.pl"),
-      },
-      ["recFallback"],
-    );
-
-    expect(ready(result.store)).toMatchObject([
-      { sourceContactRecordId: "recFallback", normalizedEmail: "fallback@hospital.pl" },
-    ]);
-  });
-
-  it("uses the hospital contact when the primary contact is opted out", async () => {
-    const result = await resolveInspection(
-      ["recPrimary"], ["recFallback"],
-      {
-        recPrimary: contact("recPrimary", "primary@hospital.pl"),
-        recFallback: contact("recFallback", "fallback@hospital.pl"),
-      },
-      ["recFallback"],
-      ["primary@hospital.pl"],
-    );
-
-    expect(ready(result.store)).toMatchObject([
-      { sourceContactRecordId: "recFallback", normalizedEmail: "fallback@hospital.pl" },
-    ]);
-  });
-
-  it("applies the existing opt-out rule to a hospital fallback contact", async () => {
-    const result = await resolveInspection(
-      [], ["recFallback"],
-      { recFallback: contact("recFallback", "fallback@hospital.pl") },
-      ["recFallback"],
-      ["fallback@hospital.pl"],
-    );
-
+  it("blocks in a controlled way when the field and fallback are empty", async () => {
+    const result = await resolveTaskEmail(null, { configuredFallback: null });
     expect(ready(result.store)).toHaveLength(0);
     expect(fallback(result.store)).toHaveLength(0);
-    expect(invalid(result.store)).toMatchObject([{ resolutionReason: "OPTED_OUT" }]);
+    expect(invalid(result.store)).toMatchObject([{
+      resolutionReason: "TASK_RECIPIENT_FALLBACK_MISSING",
+    }]);
+    expect(result.logs.join(" ")).toContain("COMMUNICATION_RECIPIENT_FALLBACK_MISSING");
   });
 
-  it("keeps NO_VALID_CLIENT_EMAIL Tiemed fallback when both contact groups are invalid", async () => {
-    const result = await resolveInspection(
-      ["recPrimary"], ["recFallback"],
-      {
-        recPrimary: contact("recPrimary", null),
-        recFallback: contact("recFallback", "not-an-email"),
-      },
-      ["recFallback"],
-    );
-
+  it.each([
+    ["not-an-email", "TASK_RECIPIENT_EMAIL_INVALID"],
+    [["one@example.pl", "two@example.pl"], "TASK_RECIPIENT_EMAIL_AMBIGUOUS"],
+  ])("blocks invalid or ambiguous value %j", async (value, reason) => {
+    const result = await resolveTaskEmail(value);
     expect(ready(result.store)).toHaveLength(0);
-    expect(fallback(result.store)).toMatchObject([
-      { resolutionReason: "NO_VALID_CLIENT_EMAIL" },
-    ]);
+    expect(fallback(result.store)).toHaveLength(0);
+    expect(invalid(result.store)).toMatchObject([{ resolutionReason: reason }]);
   });
 
-  it("does not use a fallback contact outside sourceHospitalRecordId", async () => {
-    const result = await resolveInspection(
-      [], ["recOtherHospital"],
-      { recOtherHospital: contact("recOtherHospital", "other@hospital.pl") },
-      ["recThisHospital"],
+  it("refetches EMMA: mail DT for a legacy event whose snapshot lacks the field", async () => {
+    const store = new MemoryStore();
+    const airtable = airtableSource({
+      recTask: taskRecord(["legacy-current@example.pl"]),
+    });
+    await resolveCommunicationEventRecipients({
+      event: taskEvent([], {}),
+      airtable,
+      store,
+      tiemedFallbackEmail: fallbackEmail,
+      debugEnabled: true,
+    });
+    expect(ready(store)).toMatchObject([{
+      normalizedEmail: "legacy-current@example.pl",
+    }]);
+    expect(airtable.fetchRecord).toHaveBeenCalledWith(
+      AIRTABLE_TABLE_IDS.tasks,
+      "recTask",
+      [TASK_FIELDS.emmaRecipientEmail],
     );
+    expect(store.debugTrace?.taskRecipientResolution).toMatchObject({
+      source: "AIRTABLE_REFETCH",
+      airtableRefetched: true,
+    });
+    expect(store.debugTrace?.finalRecipients).toMatchObject([{
+      source: "TASK.EMMA_MAIL_DT",
+    }]);
+  });
 
-    expect(ready(result.store)).toHaveLength(0);
-    expect(fallback(result.store)).toMatchObject([
-      { resolutionReason: "NO_VALID_CLIENT_EMAIL" },
-    ]);
-    expect(invalid(result.store)).toMatchObject([
-      { sourceContactRecordId: "recOtherHospital", resolutionReason: "HOSPITAL_SCOPE_MISMATCH" },
-    ]);
-    expect(result.airtable.fetchRecord).not.toHaveBeenCalledWith(
-      expect.anything(), "recOtherHospital", expect.anything(),
-    );
+  it("persists one recipient across repeated resolution attempts", async () => {
+    const store = new MemoryStore();
+    const airtable = airtableSource({});
+    const input = {
+      event: taskEvent([], { emmaRecipientEmail: "once@example.pl" }),
+      airtable,
+      store,
+      tiemedFallbackEmail: fallbackEmail,
+    };
+    await resolveCommunicationEventRecipients(input);
+    await resolveCommunicationEventRecipients(input);
+    expect(ready(store)).toHaveLength(1);
   });
 });
 
@@ -369,134 +327,6 @@ describe("SERVICE_ORDER recipient resolution", () => {
   });
 });
 
-describe("fallback and failures", () => {
-  it("does not create CLIENT or fallback when every valid client opted out", async () => {
-    const store = new MemoryStore();
-    const recordDiagnostic = vi.fn(async () => true);
-    const diagnostics = {
-      record: recordDiagnostic,
-      assessCompletedData: vi.fn(), findDuePendingTasks: vi.fn(),
-      wakePendingForInspection: vi.fn(), synchronizeDelivery: vi.fn(), summarizeCycle: vi.fn(),
-    } as unknown as CommunicationDiagnosticRegistry;
-    store.optedOut.add("recHospital:a@x.pl");
-    await resolveCommunicationEventRecipients({
-      event: taskEvent(["recA"], { sourceHospitalRecordId: "recHospital" }),
-      airtable: airtableSource({ recA: contact("recA", "a@x.pl") }),
-      store,
-      tiemedFallbackEmail: fallbackEmail,
-      diagnostics,
-    });
-    expect(ready(store)).toHaveLength(0);
-    expect(fallback(store)).toHaveLength(0);
-    expect(invalid(store)).toMatchObject([{ resolutionReason: "OPTED_OUT" }]);
-    expect(recordDiagnostic).toHaveBeenCalledWith(expect.objectContaining({
-      status: CommunicationDiagnosticStatus.BLOCKED,
-      reasonCode: "RECIPIENT_OPTED_OUT",
-      eventId: "evtTask",
-    }));
-  });
-
-  it("never adds fallback when at least one CLIENT is ready", async () => {
-    const result = await resolveTask(["recA"], { recA: contact("recA", "a@x.pl") });
-    expect(fallback(result.store)).toHaveLength(0);
-  });
-
-  it("persists FAILED and does not throw when fallback configuration is missing", async () => {
-    const result = await resolveTask([], {}, {}, null);
-    expect(result.store.failedReason).toBe("FALLBACK_MISSING");
-    expect(result.logs.join(" ")).toContain("COMMUNICATION_RECIPIENT_FALLBACK_MISSING");
-  });
-
-  it("persists FAILED and never falls back on an Airtable read error", async () => {
-    const store = new MemoryStore();
-    const logs: string[] = [];
-    const airtable = airtableSource({}, new Error("temporary"));
-    await resolveCommunicationEventRecipients({
-      event: taskEvent(["recA"]), airtable, store,
-      tiemedFallbackEmail: fallbackEmail, log: (message) => logs.push(message),
-    });
-    expect(store.failedReason).toBe("AIRTABLE_CONTACT_READ_FAILED");
-    expect(fallback(store)).toHaveLength(0);
-    expect(logs.join(" ")).toContain("COMMUNICATION_RECIPIENT_RESOLUTION_FAILED");
-  });
-
-  it("logs operational metadata without email addresses or contact payloads", async () => {
-    const result = await resolveTask(["recA"], { recA: contact("recA", "secret@x.pl") });
-    expect(result.logs.join(" ")).toMatch(/eventId=evtTask.*recipientCount=1.*fallback=false/);
-    expect(result.logs.join(" ")).not.toContain("secret@x.pl");
-    expect(result.logs.join(" ")).not.toContain("Contact A");
-  });
-});
-
-describe("recipient resolution idempotency and safety", () => {
-  it("captures the actual Airtable fields and decisions only when debug is enabled", async () => {
-    const store = new MemoryStore();
-    await resolveCommunicationEventRecipients({
-      event: taskEvent(["recA", "recB"], { sourceHospitalRecordId: "recHospital" }),
-      airtable: airtableSource({
-        recA: contact("recA", " Same@Example.PL "),
-        recB: contact("recB", "same@example.pl"),
-      }),
-      store,
-      tiemedFallbackEmail: fallbackEmail,
-      debugEnabled: true,
-    });
-
-    expect(store.debugTrace?.sourceFields).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        codeName: "TASK_FIELDS.selectedContactLinks",
-        airtableFieldId: TASK_FIELDS.selectedContactLinks,
-        airtableDisplayName: "Imie i nazwisko",
-        value: ["recA", "recB"],
-      }),
-    ]));
-    expect(store.debugTrace?.contacts).toMatchObject([
-      { recordId: "recA", rawEmail: " Same@Example.PL ", decision: "ACCEPTED", reason: "ELIGIBLE" },
-      { recordId: "recB", rawEmail: "same@example.pl", decision: "SKIPPED", reason: "DUPLICATE_NORMALIZED_EMAIL" },
-    ]);
-    expect(store.debugTrace?.finalRecipients).toMatchObject([
-      { address: "same@example.pl", source: "CONTACT:recA", status: "READY" },
-    ]);
-  });
-
-  it("does not persist recipient debug data when debug is disabled", async () => {
-    const result = await resolveTask(["recA"], { recA: contact("recA", "a@x.pl") });
-    expect(result.store.debugTrace).toBeNull();
-  });
-
-  it("a repeated resolution keeps one recipient without duplicates", async () => {
-    const store = new MemoryStore();
-    const airtable = airtableSource({ recA: contact("recA", "a@x.pl") });
-    const input = { event: taskEvent(["recA"]), airtable, store, tiemedFallbackEmail: fallbackEmail };
-    await resolveCommunicationEventRecipients(input);
-    await resolveCommunicationEventRecipients(input);
-    expect(ready(store)).toHaveLength(1);
-  });
-
-  it("100 runs keep exactly the same recipient set", async () => {
-    const store = new MemoryStore();
-    const airtable = airtableSource({
-      recA: contact("recA", "a@x.pl"), recB: contact("recB", "b@x.pl"),
-    });
-    const input = { event: taskEvent(["recA", "recB"]), airtable, store, tiemedFallbackEmail: fallbackEmail };
-    for (let run = 0; run < 100; run += 1) await resolveCommunicationEventRecipients(input);
-    expect(ready(store).map((item) => item.normalizedEmail).sort()).toEqual(["a@x.pl", "b@x.pl"]);
-  });
-
-  it("stops at recipient persistence without buffer, digest, AccessLink or Resend dependencies", async () => {
-    const forbidden = vi.fn();
-    const result = await resolveTask([], {});
-    expect(result.store.recipients).toHaveLength(1);
-    expect(forbidden).not.toHaveBeenCalled();
-  });
-
-  it("does not reactivate legacy CaseEvent mailing", async () => {
-    const result = await resolveTask([], {});
-    expect(result.store.resolvedAt).toBeInstanceOf(Date);
-    expect(result.store.processedAtWrites).toBe(0);
-  });
-});
-
 describe("recipient resolution retry", () => {
   it("backs off until a delayed repair address appears without creating another event", async () => {
     const store = new RepairRetryStore();
@@ -554,62 +384,12 @@ describe("recipient resolution retry", () => {
     expect(await run()).toBe(0);
   });
 
-  it("backs off after Airtable failure and resolves when the retry succeeds", async () => {
-    const store = new RetryStore();
-    let calls = 0;
-    const airtable = {
-      fetchAllRecords: vi.fn(async () => []),
-      fetchRecord: vi.fn(async () => {
-        calls += 1;
-        if (calls === 1) throw new Error("temporary failure");
-        return contact("recA", "recovered@example.pl");
-      }),
-    } satisfies AirtableIncrementalSource;
-    let clock = new Date("2026-08-13T10:00:00Z");
-    const run = () => resolvePendingCommunicationRecipients({
-      airtable, store, tiemedFallbackEmail: fallbackEmail, now: () => clock,
-    });
-
-    await run();
-    expect(store.resolvedAt).toBeNull();
-    expect(store.nextAt?.toISOString()).toBe("2026-08-13T10:00:15.000Z");
-    clock = new Date("2026-08-13T10:00:14Z");
-    expect(await run()).toBe(0);
-    expect(calls).toBe(1);
-    clock = new Date("2026-08-13T10:00:15Z");
-    expect(await run()).toBe(1);
-    expect(store.resolvedAt).toEqual(clock);
-    expect(store.recipients[0]?.resolutionStatus).toBe(
-      CommunicationRecipientResolutionStatus.READY,
-    );
-  });
-
   it("uses exponential backoff capped at 15 minutes", () => {
     expect(recipientResolutionBackoffSeconds(1)).toBe(15);
     expect(recipientResolutionBackoffSeconds(2)).toBe(30);
     expect(recipientResolutionBackoffSeconds(100)).toBe(900);
   });
 
-  it("retries contact reads, then resolves exactly one Tiemed fallback on attempt four", async () => {
-    const store = new RetryStore();
-    const airtable = airtableSource({}, new Error("Airtable unavailable"));
-    let clock = new Date("2026-08-13T10:00:00Z");
-    const run = () => resolvePendingCommunicationRecipients({
-      airtable, store, tiemedFallbackEmail: fallbackEmail, now: () => clock,
-    });
-    for (let attempt = 1; attempt < MAX_RECIPIENT_RESOLUTION_ATTEMPTS; attempt += 1) {
-      expect(await run()).toBe(1);
-      expect(fallback(store)).toHaveLength(0);
-      expect(store.resolvedAt).toBeNull();
-      clock = store.nextAt!;
-    }
-    expect(await run()).toBe(1);
-    expect(ready(store)).toHaveLength(0);
-    expect(fallback(store)).toMatchObject([{ resolutionReason: "AIRTABLE_CONTACT_READ_FAILED:4" }]);
-    expect(await run()).toBe(0);
-    expect(fallback(store)).toHaveLength(1);
-    expect(airtable.fetchRecord).toHaveBeenCalledTimes(4);
-  });
 });
 
 class MemoryStore implements RecipientResolutionStore {
@@ -703,6 +483,36 @@ async function resolveTask(
   return { store, airtable, logs };
 }
 
+async function resolveTaskEmail(
+  emmaRecipientEmail: unknown,
+  options: {
+    scenario?: CommunicationScenario;
+    extraSnapshot?: Record<string, unknown>;
+    configuredFallback?: string | null;
+    debugEnabled?: boolean;
+  } = {},
+) {
+  const store = new MemoryStore();
+  const airtable = airtableSource({});
+  const logs: string[] = [];
+  const event = taskEvent([], {
+    emmaRecipientEmail,
+    ...options.extraSnapshot,
+  });
+  event.scenario = options.scenario ?? CommunicationScenario.INSPECTION_REMINDER;
+  await resolveCommunicationEventRecipients({
+    event,
+    airtable,
+    store,
+    tiemedFallbackEmail: options.configuredFallback === undefined
+      ? fallbackEmail
+      : options.configuredFallback,
+    debugEnabled: options.debugEnabled,
+    log: (message) => logs.push(message),
+  });
+  return { store, airtable, logs };
+}
+
 async function resolveService(
   repairRecipientEmail: string | null,
   scenario = CommunicationScenario.REPAIR_RECEIVED,
@@ -792,6 +602,14 @@ function hospital(id: string, contactIds: string[]): AirtableRecord {
     id,
     createdTime: "2026-08-11T08:00:00.000Z",
     fields: { [HOSPITAL_FIELDS.contactLinks]: contactIds },
+  };
+}
+
+function taskRecord(emmaRecipientEmail: unknown): AirtableRecord {
+  return {
+    id: "recTask",
+    createdTime: "2026-08-11T08:00:00.000Z",
+    fields: { [TASK_FIELDS.emmaRecipientEmail]: emmaRecipientEmail },
   };
 }
 

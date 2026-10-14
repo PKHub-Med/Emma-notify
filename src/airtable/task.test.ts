@@ -23,6 +23,7 @@ describe("task contract mapper", () => {
         "recContactA",
       ],
       [TASK_FIELDS.selectedContactEmailLookup]: "ignored@example.com",
+      [TASK_FIELDS.emmaRecipientEmail]: [" client@example.com "],
       [TASK_FIELDS.sourceHospitalLink]: ["recHospital"],
       [TASK_FIELDS.emmaCustomerStatus]: "Wizyta potwierdzona",
       [TASK_FIELDS.emmaMailTemplate]: "Przegląd-przypomnienie_o_wizycie",
@@ -38,6 +39,7 @@ describe("task contract mapper", () => {
       selectedContactRecordIds: ["recContactA", "recContactB"],
       hospitalContactRecordIds: ["recHospitalContactA", "recHospitalContactB"],
       sourceHospitalRecordId: "recHospital",
+      emmaRecipientEmail: [" client@example.com "],
       emmaCustomerStatus: "Wizyta potwierdzona",
       emmaMailTemplate: "Przegląd-przypomnienie_o_wizycie",
     });
