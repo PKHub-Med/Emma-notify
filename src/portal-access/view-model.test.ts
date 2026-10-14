@@ -410,6 +410,8 @@ describe("paginated hospital portal", () => {
   });
 
   it("returns every Device in a multi-device Case detail", async () => {
+    let deviceFindManyCalls = 0;
+    let linkedDeviceSelect: unknown;
     const prisma = {
       $queryRaw: async () => [{
         type: "INSPECTION", sourceRecordId: "inspection-I1", sortKey: 1n,
@@ -429,10 +431,15 @@ describe("paginated hospital portal", () => {
       trackedCaseDevice: { findMany: async () => ["A", "B", "C"].map((id) => ({
         trackedCaseId: "case-I1", deviceAirtableId: `device-${id}`,
       })) },
-      trackedDevice: { findMany: async () => ["A", "B", "C"].map((id) => ({
-        airtableRecordId: `device-${id}`, name: `Device ${id}`, manufacturer: "M",
-        model: id, serialNumber: `SN-${id}`, inventoryNumber: null,
-      })) },
+      trackedDevice: { findMany: async ({ select }: { select: unknown }) => {
+        deviceFindManyCalls += 1;
+        linkedDeviceSelect = select;
+        return ["A", "B", "C"].map((id) => ({
+          airtableRecordId: `device-${id}`, name: `Device ${id}`, manufacturer: "M",
+          model: id, serialNumber: `SN-${id}`, inventoryNumber: null,
+          emmaDeviceStatus: id === "A" ? "SPRAWNY" : "NIESPRAWNY",
+        }));
+      } },
       communicationAsset: { findMany: async () => [] },
     } as unknown as PrismaClient;
     const item = await new PrismaHospitalPortalStore(prisma).findScopedCase({
@@ -443,8 +450,55 @@ describe("paginated hospital portal", () => {
       "device-A", "device-B", "device-C",
     ]);
     expect(item?.deviceName).toBe("3 urządzenia");
+    expect(item?.emmaDeviceStatus).toBeNull();
     expect(item?.deviceId).toBeNull();
     expect(item?.department).toBe("Oddział Okulistyczny");
+    expect(deviceFindManyCalls).toBe(1);
+    expect(linkedDeviceSelect).toMatchObject({ emmaDeviceStatus: true });
+  });
+
+  it("maps Device state from the uniquely matching linked Device without mixing multi-device Cases", () => {
+    const stored = portalCaseSnapshot({
+      deviceName: "Pompa docelowa",
+      manufacturer: "Producent",
+      model: "P-2",
+      serialNumber: "SN-TARGET",
+      inventoryNumber: "INV-TARGET",
+    });
+    const item = mapCase(stored, "REPAIR", [
+      {
+        sourceRecordId: "device-other", deviceName: "Inne urządzenie",
+        manufacturer: "Producent", model: "P-1", serialNumber: "SN-OTHER",
+        inventoryNumber: "INV-OTHER", emmaDeviceStatus: "SPRAWNY",
+      },
+      {
+        sourceRecordId: "device-target", deviceName: "Pompa docelowa",
+        manufacturer: "Producent", model: "P-2", serialNumber: "SN-TARGET",
+        inventoryNumber: "INV-TARGET", emmaDeviceStatus: "NIESPRAWNY",
+      },
+    ]);
+
+    expect(item.deviceName).toBe("Pompa docelowa");
+    expect(item.emmaDeviceStatus).toBe("NIESPRAWNY");
+  });
+
+  it("returns no Device state when the displayed Device cannot be matched unambiguously", () => {
+    const stored = portalCaseSnapshot({ serialNumber: null, inventoryNumber: null });
+    const item = mapCase(stored, "INSPECTION", [
+      {
+        sourceRecordId: "device-a", deviceName: "Urządzenie",
+        manufacturer: null, model: null, serialNumber: null,
+        inventoryNumber: null, emmaDeviceStatus: "SPRAWNY",
+      },
+      {
+        sourceRecordId: "device-b", deviceName: "Urządzenie",
+        manufacturer: null, model: null, serialNumber: null,
+        inventoryNumber: null, emmaDeviceStatus: "NIESPRAWNY",
+      },
+    ]);
+
+    expect(item.emmaDeviceStatus).toBeNull();
+    expect(item.deviceName).toBe("2 urządzenia");
   });
 
   it("hides a document when its Case is outside retention", async () => {
@@ -1092,6 +1146,36 @@ function portalAsset(
   };
 }
 
+function portalCaseSnapshot(
+  overrides: Partial<StoredPortalCase> = {},
+): StoredPortalCase {
+  return {
+    id: "case-device-state",
+    airtableRecordId: "repair-device-state",
+    businessNumber: "R-1",
+    clientOrderNumber: null,
+    emmaCustomerStatus: "Diagnostyka",
+    hospitalName: "Szpital A",
+    deviceName: "Urządzenie",
+    manufacturer: null,
+    model: null,
+    serialNumber: "SN-1",
+    inventoryNumber: "INV-1",
+    currentStatus: "Diagnostyka",
+    faultDescription: null,
+    sourceCreatedAt: null,
+    reportedAt: new Date("2026-08-05T00:00:00.000Z"),
+    sourceModifiedAt: null,
+    inspectionDueDate: null,
+    inspectionPerformedAt: null,
+    inspectionResult: null,
+    inspectionValidUntil: null,
+    sourceSnapshot: {},
+    events: [],
+    ...overrides,
+  };
+}
+
 function caseItem(
   type: "REPAIR" | "INSPECTION",
   index: number,
@@ -1106,7 +1190,7 @@ function caseItem(
     type, sourceRecordId: `${type === "REPAIR" ? "repair" : "inspection"}-${index}`,
     deviceId: `device-${index}`, deviceName: `Urządzenie UNIKAT-${index}`,
     manufacturer: "Producent", model: "M1", manufacturerModel: "Producent · M1",
-    serialNumber: `SN-${index}`, inventoryNumber: `INV-${index}`,
+    serialNumber: `SN-${index}`, inventoryNumber: `INV-${index}`, emmaDeviceStatus: null,
     caseNumber: String(index), clientOrderNumber: null,
     currentStatus: type === "INSPECTION" ? "SPRAWNE" : "Diagnostyka",
     lastChangedAt: new Date(2026, 7, 13, 12, 0, -index), requiresAction: false,

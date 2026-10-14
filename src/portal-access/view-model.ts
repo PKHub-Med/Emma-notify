@@ -62,6 +62,7 @@ export type PortalCaseListItem = {
   manufacturerModel: string | null;
   serialNumber: string | null;
   inventoryNumber: string | null;
+  emmaDeviceStatus: string | null;
   caseNumber: string | null;
   clientOrderNumber: string | null;
   currentStatus: string;
@@ -1399,18 +1400,22 @@ export function mapCase(
   const snapshotModel = stored.model;
   const snapshotSerialNumber = stored.serialNumber;
   const snapshotInventoryNumber = stored.inventoryNumber;
+  const displayedDevice = resolveDisplayedCaseDevice(stored, devices);
   const item: PortalCaseListItem = {
     type, sourceRecordId: stored.airtableRecordId,
     deviceId: devices.length === 1 && devices[0]!.currentDeviceAccessible !== false
       ? devices[0]!.sourceRecordId
       : null,
     devices: publicDevices,
-    deviceName: devices.length > 1 ? `${devices.length} urządzenia` : snapshotDeviceName,
+    deviceName: devices.length > 1 && !displayedDevice
+      ? `${devices.length} urządzenia`
+      : snapshotDeviceName,
     manufacturer: snapshotManufacturer,
     model: snapshotModel,
     manufacturerModel: joinNonEmpty([snapshotManufacturer, snapshotModel]),
     serialNumber: snapshotSerialNumber,
     inventoryNumber: snapshotInventoryNumber,
+    emmaDeviceStatus: repairDeviceStatus(displayedDevice?.emmaDeviceStatus),
     caseNumber: stored.businessNumber, clientOrderNumber: stored.clientOrderNumber,
     currentStatus,
     lastChangedAt: history.at(-1)?.changedAt ?? stored.sourceModifiedAt ?? stored.sourceCreatedAt,
@@ -1520,6 +1525,36 @@ export function mapCase(
     };
   }
   return item;
+}
+
+function resolveDisplayedCaseDevice(
+  stored: Pick<StoredPortalCase, "deviceName" | "manufacturer" | "model" | "serialNumber" | "inventoryNumber">,
+  devices: readonly PortalCaseDevice[],
+): PortalCaseDevice | null {
+  if (devices.length === 1) return devices[0]!;
+  if (devices.length === 0) return null;
+
+  const serialNumber = normalizedDeviceIdentity(stored.serialNumber);
+  const inventoryNumber = normalizedDeviceIdentity(stored.inventoryNumber);
+  if (serialNumber || inventoryNumber) {
+    const matches = devices.filter((device) =>
+      (!serialNumber || normalizedDeviceIdentity(device.serialNumber) === serialNumber)
+      && (!inventoryNumber || normalizedDeviceIdentity(device.inventoryNumber) === inventoryNumber));
+    if (matches.length === 1) return matches[0]!;
+    return null;
+  }
+
+  const identity = [stored.deviceName, stored.manufacturer, stored.model]
+    .map(normalizedDeviceIdentity);
+  const matches = devices.filter((device) =>
+    [device.deviceName, device.manufacturer, device.model]
+      .map(normalizedDeviceIdentity)
+      .every((value, index) => value === identity[index]));
+  return matches.length === 1 ? matches[0]! : null;
+}
+
+function normalizedDeviceIdentity(value: string | null | undefined): string {
+  return value?.trim().toLocaleUpperCase("pl-PL") ?? "";
 }
 
 const DATE_ONLY_INSPECTION_HEADER_TYPES = new Set(["WYKONANO"]);

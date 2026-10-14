@@ -1449,5 +1449,58 @@ body.lightbox-open{overflow:hidden}
   .device-row-search .list-row-main,.device-list-validity{grid-column:1/-1}
   .device-list-cell{align-items:flex-start}
 }
+/* Repair and inspection lists: shared four-column status typography. */
+.case-list-row{
+  grid-template-columns:minmax(0,48fr) minmax(130px,17fr) minmax(145px,18fr) minmax(135px,17fr);
+  column-gap:16px;
+  align-items:stretch;
+}
+.case-list-main{min-width:0}
+.case-list-main b,.case-list-main span{overflow-wrap:anywhere}
+.case-list-cell{
+  display:flex;
+  min-width:0;
+  flex-direction:column;
+  align-items:flex-start;
+  justify-content:center;
+  gap:5px;
+  font-family:inherit;
+  font-size:12px;
+  font-weight:700;
+  line-height:1.35;
+  text-align:left;
+}
+.case-list-cell .case-list-label,
+.case-list-dates b{
+  display:block;
+  margin:0;
+  color:var(--muted);
+  font-family:inherit;
+  font-size:9px;
+  font-weight:800;
+  line-height:1.35;
+  letter-spacing:.04em;
+  text-transform:uppercase;
+}
+.case-list-cell strong{font-size:12px;font-weight:700;line-height:1.35;color:#4a596d}
+.case-list-cell .status-tag,
+.case-list-cell .case-detail-status-pill{
+  max-width:100%;
+  font-family:inherit;
+  font-size:12px;
+  font-weight:850;
+  line-height:1.2;
+  white-space:normal;
+  overflow-wrap:anywhere;
+  text-align:center;
+}
+.case-list-dates{gap:7px;text-align:left;font-size:12px;line-height:1.35;color:#4a596d}
+.case-list-dates span{font-size:12px;line-height:1.35}
+@media(max-width:800px){
+  .case-list-row{grid-template-columns:minmax(0,1fr);gap:11px}
+  .case-list-cell{padding-top:10px;border-top:1px solid var(--line);align-items:flex-start}
+  .case-list-cell .status-tag,.case-list-cell .case-detail-status-pill{text-align:left}
+  .case-list-dates{grid-template-columns:repeat(2,minmax(0,1fr));width:100%}
+}
 [hidden]{display:none!important}
 `;
