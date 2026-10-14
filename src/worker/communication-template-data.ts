@@ -693,12 +693,13 @@ function deviceRows(inspections: TemplateInspection[]): string[] {
       ? "border-bottom:1px solid #D9E1EB;"
       : "";
     const details = [
-      `<div style="font-size:14px;line-height:20px;font-weight:800;color:#1F2F49;">${htmlEscape(display(inspection.deviceName, "Urządzenie"))}</div>`,
+      `<div style="font-size:14px;line-height:20px;font-weight:800;color:#1F2F49;"><span class="mobile-device-lp" style="display:none;mso-hide:all;">LP ${index + 1}</span>${htmlEscape(display(inspection.deviceName, "Urządzenie"))}</div>`,
       `<div style="margin-top:3px;font-size:12px;line-height:18px;color:#34445D;">${htmlEscape(display(inspection.manufacturer, "—"))} &#183; ${htmlEscape(display(inspection.model, "—"))}</div>`,
-      `<div style="margin-top:4px;font-size:12px;line-height:18px;color:#66758A;">SN: ${htmlEscape(display(inspection.serialNumber, "—"))} &#183; Nr inw.: ${htmlEscape(display(inspection.inventoryNumber, "—"))}<br>Numer sprawy: ${htmlEscape(display(inspection.businessNumber, "—"))}<br>Nr zlecenia klienta: ${htmlEscape(display(inspection.clientOrderNumber, "brak numeru"))}</div>`,
+      `<div style="margin-top:4px;font-size:12px;line-height:18px;color:#66758A;word-break:break-all;">SN: ${htmlEscape(display(inspection.serialNumber, "—"))} &#183; Nr inw.: ${htmlEscape(display(inspection.inventoryNumber, "—"))}<br>Numer sprawy: ${htmlEscape(display(inspection.businessNumber, "—"))}<br>Nr zlecenia klienta: ${htmlEscape(display(inspection.clientOrderNumber, "brak numeru"))}</div>`,
     ].join("");
-
-    return `<tr><td style="padding:13px 8px;${bottomBorder}border-right:1px solid #D9E1EB;text-align:center;vertical-align:middle;font-size:12px;line-height:18px;color:#34445D;">${index + 1}</td><td style="padding:13px 12px;${bottomBorder}border-right:1px solid #D9E1EB;vertical-align:top;">${details}</td><td style="padding:13px 8px;${bottomBorder}text-align:center;vertical-align:middle;font-size:12px;line-height:18px;font-weight:700;color:#1F2F49;white-space:nowrap;">${htmlEscape(formatDuration(inspection.estimatedDurationSeconds))}</td></tr>`;
+    const duration = htmlEscape(formatDuration(inspection.estimatedDurationSeconds));
+    const card = `<table class="device-card-table" role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border-collapse:separate;border-spacing:0;table-layout:fixed;"><tr><td class="device-card-details" style="padding:0;vertical-align:top;">${details}</td></tr><tr class="device-mobile-time" style="display:none;mso-hide:all;"><td style="padding:10px 12px;border-top:1px solid #D9E1EB;background:#F7F9FC;font-size:12px;line-height:18px;color:#1F2F49;"><span style="font-weight:700;color:#66758A;">Szacunkowy czas:</span> <strong style="font-weight:800;color:#1F2F49;">${duration}</strong></td></tr></table>`;
+    return `<tr class="device-row"><td class="device-lp" width="44" style="width:44px;padding:13px 8px;${bottomBorder}border-right:1px solid #D9E1EB;text-align:center;vertical-align:middle;font-size:12px;line-height:18px;color:#34445D;">${index + 1}</td><td class="device-details" style="padding:13px 12px;${bottomBorder}border-right:1px solid #D9E1EB;vertical-align:top;overflow-wrap:anywhere;word-break:break-word;">${card}</td><td class="device-time" width="145" style="width:145px;padding:13px 8px;${bottomBorder}text-align:center;vertical-align:middle;font-size:12px;line-height:18px;font-weight:700;color:#1F2F49;white-space:nowrap;">${duration}</td></tr>`;
   });
 }
 

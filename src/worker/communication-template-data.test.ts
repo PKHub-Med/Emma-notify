@@ -340,10 +340,75 @@ describe("dynamic HTML and source mapping", () => {
     expect(row).toContain("Nr zlecenia klienta: ADZP-381-353/25");
     expect(row).toContain("Numer sprawy: 25793");
     expect(row).toContain("12 min");
+    expect(row).toContain('<tr class="device-row">');
+    expect(row).toContain('class="device-card-table"');
+    expect(row).toContain('class="mobile-device-lp"');
+    expect(row).toContain('>LP 1</span>');
+    expect(row).toContain('class="device-mobile-time"');
+    expect(row).toContain("Szacunkowy czas:</span> <strong");
+    expect(row.match(/Łóżko &lt;OIOM&gt;/g)).toHaveLength(1);
+    expect(row.match(/Nr zlecenia klienta: ADZP-381-353\/25/g)).toHaveLength(1);
     expect(row).toContain("border-right:1px solid #D9E1EB");
     expect(row).toContain("font-size:12px");
     expect(row).toContain("&#183;");
     expect(row).not.toContain("Ă‚Â·");
+  });
+
+  it("renders a three-column desktop row and a full-width nested-table mobile card", async () => {
+    const row = String((await build(CommunicationScenario.INSPECTION_DATE_CONFIRMED))
+      .variables.DEVICE_ROW_01);
+    expect(row).toMatch(/^<tr class="device-row"><td class="device-lp"/);
+    expect(row.match(/<td class="device-lp"/g)).toHaveLength(1);
+    expect(row.match(/<td class="device-details"/g)).toHaveLength(1);
+    expect(row.match(/<td class="device-time"/g)).toHaveLength(1);
+    expect(row).toContain('<table class="device-card-table" role="presentation" width="100%"');
+    expect(row).toMatch(/<tr class="device-mobile-time"[^>]*><td style="padding:10px 12px;border-top:1px solid #D9E1EB/);
+    expect(row).not.toContain("overflow-x");
+  });
+
+  it("allows long device names and identifiers to wrap inside mobile cards", async () => {
+    const longInspection = {
+      ...inspection("long", "SPRAWNY"),
+      deviceName: "Bardzo długa nazwa urządzenia diagnostycznego do intensywnej terapii",
+      serialNumber: "SERIALNUMBERWITHOUTNATURALBREAKPOINTS12345678901234567890",
+    };
+    const dataSource: CommunicationTemplateDataSource = {
+      async getEmployees() { return []; },
+      async getInspections() { return [longInspection]; },
+    };
+    const payload = await buildCommunicationTemplatePayload({
+      delivery: {
+        id: "delivery-long", scenario: CommunicationScenario.INSPECTION_REMINDER,
+        sourceRecordId: "task", eventSnapshot: {
+          ...taskSnapshot(), linkedInspectionRecordIds: ["long"],
+        },
+      },
+      dataSource, secureUrl, unsubscribeUrl, preparedAt, timeZone: "Europe/Warsaw",
+    });
+    const row = String(payload.variables.DEVICE_ROW_01);
+    expect(row).toContain("Bardzo długa nazwa urządzenia diagnostycznego");
+    expect(row).toContain("SERIALNUMBERWITHOUTNATURALBREAKPOINTS12345678901234567890");
+    expect(row).toContain("overflow-wrap:anywhere;word-break:break-word");
+    expect(row).toContain("word-break:break-all");
+  });
+
+  it("applies the shared card CSS to all three scheduling templates", () => {
+    for (const template of [
+      "resend-templates/emma-inspection-proposed.html",
+      "resend-templates/emma-inspection-confirmed.html",
+      "resend-templates/emma-inspection-reminder.html",
+    ]) {
+      const html = readFileSync(template, "utf8");
+      const header = html.match(/<tr class="device-table-header">([\s\S]*?)<\/tr>/)?.[1];
+      expect(header?.match(/<td\b/g)).toHaveLength(3);
+      expect(html).toContain('@media only screen and (max-width:680px)');
+      expect(html).toContain('.device-mobile-time{display:table-row!important');
+      expect(html).toContain('.device-table-header,.device-lp,.device-time{display:none!important');
+      expect(html).toContain('.device-details{display:table-cell!important;width:100%!important');
+      expect(html).toContain('.device-list-table{width:100%!important;border:0!important;background:transparent!important;table-layout:fixed!important');
+      expect(html).toContain('class="device-list-table"');
+      expect(html).not.toContain("overflow-x");
+    }
   });
 
   it.each([
