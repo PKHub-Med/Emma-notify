@@ -1223,7 +1223,7 @@ function portalCasesSql(
     : visibleCaseSql(scope, "SERVICE_ORDER");
   const inspectionVisibility = deviceHistory
     ? deviceHistoryCaseSql(scope, deviceHistory.deviceId)
-    : visibleCaseSql(scope, "INSPECTION");
+    : standardInspectionVisibilitySql(scope, retentionCutoffDate);
   const serviceOrderSortKey = deviceHistory
     ? Prisma.sql`FLOOR(EXTRACT(EPOCH FROM c."reportedAt") * 1000)::bigint`
     : Prisma.sql`FLOOR(EXTRACT(EPOCH FROM COALESCE((SELECT MAX(e."detectedAt") FROM "CaseEvent" e
@@ -1269,6 +1269,26 @@ function portalCasesSql(
       ${inspectionRetention}
       ${inspectionVisibility}
   `;
+}
+
+function standardInspectionVisibilitySql(
+  scope: PortalDataScope,
+  retentionCutoffDate: string | null,
+): Prisma.Sql {
+  if (scope.accessLevel !== PortalAccessLevel.COMMUNICATION) {
+    return visibleCaseSql(scope, "INSPECTION");
+  }
+  if (retentionCutoffDate === null) {
+    return visibleCaseSql(scope, "INSPECTION");
+  }
+  return Prisma.sql`AND (
+    (TRUE ${visibleCaseSql(scope, "INSPECTION")})
+    OR (
+      c."inspectionPerformedAt" IS NOT NULL
+      AND c."inspectionPerformedAt" >= CAST(${retentionCutoffDate} AS date)
+      ${deviceHistoryCaseSql(scope)}
+    )
+  )`;
 }
 
 function deviceHistoryCaseSql(

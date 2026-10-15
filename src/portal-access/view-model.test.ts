@@ -409,6 +409,67 @@ describe("paginated hospital portal", () => {
     expect(queries[3]!.strings.join("?")).toContain('JOIN "TrackedCaseDevice"');
   });
 
+  describe("inspection list visibility through authorized Device history", () => {
+    it("includes inspection 28033 on the list and in the counter through the same scoped predicate", async () => {
+      const { store, queries, portalScope } = inspectionListVisibilityFixture();
+
+      await store.pageCases(portalScope, {
+        filter: "INSPECTION", query: "28033", cursor: null, limit: 30,
+      });
+      await store.getSummaryCounts(portalScope);
+
+      const listQuery = queries.find((query) => query.strings.join("?").includes('ORDER BY "sortKey" DESC'))!;
+      const countQuery = queries.find((query) => query.strings.join("?").includes('COUNT(*) FILTER'))!;
+      for (const query of [listQuery, countQuery]) {
+        const sql = query.strings.join("?");
+        expect(sql).toContain('FROM "TrackedCaseDevice" history_link');
+        expect(sql).toContain('(TRUE AND (');
+        expect(sql).toContain('OR (\n      c."inspectionPerformedAt" IS NOT NULL');
+        expect(query.values).toContain("2026-07-01");
+        expect(query.values).toContain("hospital-1");
+      }
+    });
+
+    it("keeps inspections from other Hospitals outside the Device-history branch", async () => {
+      const { sql, values } = await inspectionListVisibilitySql();
+      expect(sql).toContain('c."sourceHospitalRecordId" =');
+      expect(sql).toContain('d."sourceHospitalRecordId" =');
+      expect(values.filter((value) => value === "hospital-1").length).toBeGreaterThan(2);
+    });
+
+    it("rejects inspections linked only through an inactive Device", async () => {
+      const { sql } = await inspectionListVisibilitySql();
+      expect(sql).toContain("d.active = true");
+    });
+
+    it("keeps historical inspections outside the three-month Device-history window", async () => {
+      const { sql, values } = await inspectionListVisibilitySql();
+      expect(sql).toContain('c."inspectionPerformedAt" IS NOT NULL');
+      expect(sql).toContain('c."inspectionPerformedAt" >= CAST(? AS date)');
+      expect(values.filter((value) => value === "2026-07-01").length).toBeGreaterThanOrEqual(2);
+    });
+
+    it("requires an authorized communication before a Device can reveal an inspection", async () => {
+      const { sql } = await inspectionListVisibilitySql();
+      expect(sql).toContain("communication_delivery.status = 'SENT'");
+      expect(sql).toContain('communication_recipient."recipientType" = \'CLIENT\'');
+      expect(sql).toContain('visible_device_link."deviceAirtableId" = d."airtableRecordId"');
+    });
+
+    it("does not extend repair visibility or add Device-history access in FULL", async () => {
+      const communication = await inspectionListVisibilitySql();
+      const repairBranch = communication.sql.slice(0, communication.sql.indexOf("UNION ALL"));
+      expect(repairBranch).not.toContain('FROM "TrackedCaseDevice" history_link');
+
+      const full = inspectionListVisibilityFixture(PortalAccessLevel.FULL);
+      await full.store.pageCases(full.portalScope, {
+        filter: "INSPECTION", query: null, cursor: null, limit: 30,
+      });
+      expect(full.queries[0]!.strings.join("?"))
+        .not.toContain('FROM "TrackedCaseDevice" history_link');
+    });
+  });
+
   it("returns every Device in a multi-device Case detail", async () => {
     let deviceFindManyCalls = 0;
     let linkedDeviceSelect: unknown;
@@ -993,6 +1054,42 @@ describe("paginated hospital portal", () => {
     expect(html).not.toContain("Brak spraw dostępnych w tym widoku.");
   });
 });
+
+function inspectionListVisibilityFixture(
+  accessLevel: PortalAccessLevel = PortalAccessLevel.COMMUNICATION,
+) {
+  const queries: Array<{ strings: readonly string[]; values: readonly unknown[] }> = [];
+  const prisma = {
+    $queryRaw: async (query: { strings: readonly string[]; values: readonly unknown[] }) => {
+      queries.push(query);
+      return [];
+    },
+  } as unknown as PrismaClient;
+  const portalScope: PortalDataScope = {
+    hospitalId: "hospital-1",
+    accessLevel,
+    communicationDeliveryId: "delivery-repair-25000",
+    contextType: "REPAIR",
+    contextId: "repair-25000",
+  };
+  return {
+    store: new PrismaHospitalPortalStore(
+      prisma,
+      () => new Date("2026-10-01T10:00:00.000Z"),
+    ),
+    queries,
+    portalScope,
+  };
+}
+
+async function inspectionListVisibilitySql() {
+  const fixture = inspectionListVisibilityFixture();
+  await fixture.store.pageCases(fixture.portalScope, {
+    filter: "INSPECTION", query: null, cursor: null, limit: 30,
+  });
+  const query = fixture.queries[0]!;
+  return { sql: query.strings.join("?"), values: query.values };
+}
 
 function memoryStore(
   repairCount: number,
