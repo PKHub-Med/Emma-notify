@@ -18,7 +18,7 @@ import {
   PrismaCommunicationDeliveryStore,
   runCommunicationDeliveryPlanner,
 } from "./communication-delivery.js";
-import { createResendClient } from "../email/resend-client.js";
+import { createResendClient, withProductionBcc } from "../email/resend-client.js";
 import {
   PortalAccessGrantService,
   PrismaPortalAccessGrantStore,
@@ -118,7 +118,10 @@ const communicationUnsubscribeGrants = new CommunicationUnsubscribeGrantService(
     ttlDays: config.linkTtlDays,
   },
 );
-const communicationEmailProvider = createResendClient(config.resendApiKey);
+const baseCommunicationEmailProvider = createResendClient(config.resendApiKey);
+const communicationEmailProvider = config.emailMode === "PRODUCTION"
+  ? withProductionBcc(baseCommunicationEmailProvider)
+  : baseCommunicationEmailProvider;
 const assetStorage = config.communicationAssetsEnabled ? createS3ObjectStorage(config) : undefined;
 const assetResolver = config.communicationAssetsEnabled
   ? new CommunicationAssetResolver(
