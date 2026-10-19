@@ -6,7 +6,13 @@ import {
   CommunicationRecipientType,
   CommunicationScenario,
 } from "../generated/prisma/enums.js";
-import type { EmailProvider, ProviderEmailRequest, ProviderEmailResult } from "../email/resend-client.js";
+import {
+  PRODUCTION_EMAIL_BCC,
+  withProductionBcc,
+  type EmailProvider,
+  type ProviderEmailRequest,
+  type ProviderEmailResult,
+} from "../email/resend-client.js";
 import {
   communicationBatchIdempotencyKey,
   communicationIdempotencyKey,
@@ -279,6 +285,126 @@ describe("communication email activation and recipient safety", () => {
     expect(request as unknown as Record<string, unknown>).not.toHaveProperty("html");
     expect(request as unknown as Record<string, unknown>).not.toHaveProperty("text");
     expect(request as unknown as Record<string, unknown>).not.toHaveProperty("react");
+  });
+});
+
+const payloadSafetyScenarios = [
+  CommunicationScenario.REPAIR_RECEIVED,
+  CommunicationScenario.REPAIR_DELAYED_PARTS,
+  CommunicationScenario.REPAIR_COMPLETED,
+  CommunicationScenario.INSPECTION_DATE_PROPOSED,
+  CommunicationScenario.INSPECTION_DATE_CONFIRMED,
+  CommunicationScenario.INSPECTION_REMINDER,
+  CommunicationScenario.INSPECTION_COMPLETED,
+] as const;
+
+describe("production and test payload safety for every communication scenario", () => {
+  it.each(payloadSafetyScenarios)(
+    "keeps production %s free of recipient diagnostics and enforces real TO plus BCC",
+    async (scenario) => {
+      const fixture = setupPayloadSafetyScenario(scenario);
+      const provider = withProductionBcc(fixture.provider);
+      await runCommunicationEmailSender({
+        store: fixture.store,
+        provider,
+        grants: fixture.grants,
+        unsubscribeGrants: fixture.unsubscribeGrants,
+        dataSource: fixture.dataSource,
+        config: {
+          ...config(),
+          mailTestMode: false,
+          communicationEmailDebug: false,
+          mode: "PRODUCTION",
+          productionEmailsEnabled: true,
+        },
+        now: () => new Date("2026-08-15T12:00:00Z"),
+      });
+
+      expect(fixture.provider.requests).toHaveLength(1);
+      const request = fixture.provider.requests[0]!;
+      expect(request.to).toBe("client@example.com");
+      expect(request.bcc).toEqual([PRODUCTION_EMAIL_BCC]);
+      expect(request.html).toBeUndefined();
+      expect(request.subject).toBeUndefined();
+
+      const payload = JSON.stringify(request);
+      expect(payload).not.toContain("DIAGNOSTYKA ODBIORCÓW");
+      expect(payload).not.toContain("test@example.test");
+      expect(payload).not.toContain("recSafetySource");
+      expect(payload).not.toContain("recSafetyHospital");
+      expect(payload).not.toContain("CONTACT_FIELDS");
+      expect(payload).not.toContain("recipientResolutionDebug");
+
+      const template = readFileSync(`resend-templates/${request.template.id}.html`, "utf8");
+      const html = renderConditionalTemplate(template, request.template.variables);
+      expect(html).not.toContain("DIAGNOSTYKA ODBIORCÓW");
+      expect(html).not.toContain("TYLKO TEST");
+      expect(html).not.toContain("test@example.test");
+      expect(html).not.toContain("recSafetySource");
+      expect(html).not.toContain("recSafetyHospital");
+    },
+  );
+
+  it.each(payloadSafetyScenarios)(
+    "renders TEST diagnostics and redirects %s to TEST_EMAIL",
+    async (scenario) => {
+      const fixture = setupPayloadSafetyScenario(scenario);
+      await runCommunicationEmailSender({
+        store: fixture.store,
+        provider: fixture.provider,
+        grants: fixture.grants,
+        unsubscribeGrants: fixture.unsubscribeGrants,
+        dataSource: fixture.dataSource,
+        config: {
+          ...config(),
+          mailTestMode: true,
+          communicationEmailDebug: true,
+          mode: "TEST",
+          productionEmailsEnabled: false,
+        },
+        now: () => new Date("2026-08-15T12:00:00Z"),
+      });
+
+      expect(fixture.provider.requests).toHaveLength(1);
+      const request = fixture.provider.requests[0]!;
+      expect(request.to).toBe("test@example.test");
+      expect(request.bcc).toBeUndefined();
+      expect(request.html).toContain("DIAGNOSTYKA ODBIORCÓW — TYLKO TEST");
+      expect(request.html).toContain("recSafetySource");
+      expect(request.html).toContain("Provider To: <strong>test@example.test</strong>");
+    },
+  );
+
+  it("keeps production fallback payloads free of Airtable record identifiers", async () => {
+    const fixture = setupPayloadSafetyScenario(CommunicationScenario.REPAIR_DELAYED_PARTS);
+    fixture.candidate.event.eventSnapshot = { sourceHospitalRecordId: "recSafetyHospital" };
+    const provider = withProductionBcc(fixture.provider);
+    await runCommunicationEmailSender({
+      store: fixture.store,
+      provider,
+      grants: fixture.grants,
+      unsubscribeGrants: fixture.unsubscribeGrants,
+      dataSource: fixture.dataSource,
+      config: {
+        ...config(),
+        mailTestMode: false,
+        communicationEmailDebug: false,
+        mode: "PRODUCTION",
+        productionEmailsEnabled: true,
+      },
+      now: () => new Date("2026-08-15T12:00:00Z"),
+    });
+
+    expect(fixture.provider.requests).toHaveLength(1);
+    const request = fixture.provider.requests[0]!;
+    expect(request.to).toBe("fallback@tiemed.pl");
+    expect(request.bcc).toEqual([PRODUCTION_EMAIL_BCC]);
+    expect(request.template.variables.BLOCKED_NOTICE).toContain("TEMPLATE_DATA_MISSING");
+    const payload = JSON.stringify(request);
+    expect(payload).not.toContain("recSafetySource");
+    expect(payload).not.toContain("recSafetyHospital");
+    expect(payload).not.toContain("test@example.test");
+    expect(payload).not.toContain("DIAGNOSTYKA ODBIORCÓW");
   });
 });
 
@@ -1128,6 +1254,40 @@ function setup(
     unsubscribeGrants: new FixedUnsubscribeGrants(),
     dataSource: dataSource(),
   };
+}
+
+function setupPayloadSafetyScenario(scenario: typeof payloadSafetyScenarios[number]) {
+  const inspectionScenario = ![
+    CommunicationScenario.REPAIR_RECEIVED,
+    CommunicationScenario.REPAIR_DELAYED_PARTS,
+    CommunicationScenario.REPAIR_COMPLETED,
+  ].includes(scenario as CommunicationScenario);
+  const completed = scenario === CommunicationScenario.INSPECTION_COMPLETED;
+  const eventSnapshot = inspectionScenario
+    ? reminderSnapshot({
+        day: completed ? "2026-08-15" : "2026-08-16",
+        sourceHospitalRecordId: "recSafetyHospital",
+      })
+    : { ...repairSnapshot(), sourceHospitalRecordId: "recSafetyHospital" };
+  const fixture = setup({
+    scenario,
+    eventSnapshot,
+    event: {
+      id: "event-safety",
+      detectedAt: activation,
+      sourceRecordId: "recSafetySource",
+      eventSnapshot,
+      recipientResolutionDebug: debugTrace("recSafetySource", "client@example.com"),
+    },
+  });
+  fixture.dataSource.getInspections = async (recordIds) => recordIds.map((airtableRecordId) => ({
+    ...inspectionFixture(airtableRecordId, completed ? "SPRAWNY" : ""),
+    currentStatus: completed ? "ZAKOŃCZONY" : "PLANOWANY",
+    inspectionResult: completed ? "SPRAWNY" : null,
+    sourceHospitalRecordId: "recSafetyHospital",
+    inspectionPerformedAt: completed ? new Date("2026-08-15T08:00:00Z") : null,
+  }));
+  return fixture;
 }
 
 function run(

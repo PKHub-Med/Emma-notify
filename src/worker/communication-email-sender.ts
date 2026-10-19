@@ -1345,7 +1345,7 @@ async function sendBlockedDelivery(
       ...communicationEmailDebugOverrides(
         input.config, [input.candidate], actualFallback, payload.templateId, variables,
       ),
-      idempotencyKey: `emma-communication-blocked/${input.candidate.event.sourceRecordId}/${input.candidate.scenario}`,
+      idempotencyKey: `${communicationIdempotencyKey(input.candidate.id)}-blocked`,
     });
   } catch {
     await fail(input, classifyDeliveryError({

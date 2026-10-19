@@ -1024,8 +1024,6 @@ function blockedNotice(input: {
     "Wiadomość nie została wysłana do klienta.",
     `Scenariusz: ${input.scenario}`,
     `Kod błędu: ${input.code}`,
-    `Źródło: ${input.sourceRecordIds.join(", ")}`,
-    input.recordIds?.length ? `Rekordy: ${input.recordIds.join(", ")}` : "",
     input.failedAttemptCount !== undefined
       ? `Liczba nieudanych prób: ${input.failedAttemptCount}` : "",
     input.expected !== undefined ? `Oczekiwano: ${safeDiagnostic(input.expected)}` : "",
