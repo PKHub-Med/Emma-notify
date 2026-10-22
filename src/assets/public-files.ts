@@ -1,12 +1,12 @@
 import { Prisma, type PrismaClient } from "../generated/prisma/client.js";
 import {
   AssetProcessingStatus,
-  CommunicationDeliveryStatus,
   PortalAccessLevel,
   StoredFileKind,
 } from "../generated/prisma/enums.js";
 import type { PortalAuthorizationContext } from "../portal-access/public.js";
 import type { PortalAccessPolicy } from "../portal-access/policy.js";
+import { visibleCaseSql } from "../portal-access/policy.js";
 import type { ObjectStorage } from "./object-storage.js";
 
 export type PublicAssetVariant = "portal" | "thumb" | "document";
@@ -54,32 +54,10 @@ export type PublicAssetAccessScope = {
 /** One shared predicate for file redirects, case assets and the Documents tab. */
 export function publicAssetAccessWhere(
   scope: PublicAssetAccessScope,
-): Prisma.CommunicationAssetWhereInput {
-  const communicationOnly = scope.accessLevel === PortalAccessLevel.COMMUNICATION;
+): Prisma.CaseAssetWhereInput {
   return {
-    ...(communicationOnly ? {
-      exposedAt: { not: null },
-      OR: [
-        {
-          deliveryId: scope.communicationDeliveryId,
-          delivery: {
-            status: CommunicationDeliveryStatus.SENT,
-            communicationEvent: {
-              eventSnapshot: { path: ["sourceHospitalRecordId"], equals: scope.hospitalId },
-            },
-          },
-        },
-        ...(scope.communicationBatchMessageId ? [{
-          delivery: {
-            status: CommunicationDeliveryStatus.SENT,
-            resendMessageId: scope.communicationBatchMessageId,
-            communicationEvent: {
-              eventSnapshot: { path: ["sourceHospitalRecordId"], equals: scope.hospitalId },
-            },
-          },
-        }] : []),
-      ],
-    } : {}),
+    active: true,
+    sourceHospitalRecordId: scope.hospitalId,
     storedFile: {
       processingStatus: AssetProcessingStatus.READY,
       orphanedAt: null,
@@ -103,19 +81,13 @@ export class PrismaPublicAssetStore implements PublicAssetStore {
     authorization: PortalAuthorizationContext,
   ): Promise<PublicAssetAuthorization> {
     const access = await this.accessPolicy.resolve(authorization.sourceHospitalRecordId);
-    const asset = await this.prisma.communicationAsset.findUnique({
+    const asset = await this.prisma.caseAsset.findUnique({
       where: { id: assetId },
       select: {
-        deliveryId: true,
-        exposedAt: true,
-        delivery: {
-          select: {
-            status: true,
-            resendMessageId: true,
-            communicationEventRecipient: { select: { recipientType: true } },
-            communicationEvent: { select: { eventSnapshot: true } },
-          },
-        },
+        active: true,
+        sourceRecordId: true,
+        sourceEntityType: true,
+        sourceHospitalRecordId: true,
         storedFile: {
           select: {
             processingStatus: true,
@@ -130,38 +102,49 @@ export class PrismaPublicAssetStore implements PublicAssetStore {
       },
     });
     if (!asset) return { asset: null, reason: "ASSET_NOT_FOUND" };
-    if (asset.storedFile.sourceHospitalRecordId !== access.hospitalId) {
+    if (asset.sourceHospitalRecordId !== access.hospitalId ||
+      asset.storedFile.sourceHospitalRecordId !== access.hospitalId) {
       return { asset: null, reason: "HOSPITAL_SCOPE_MISMATCH" };
     }
     if (asset.storedFile.processingStatus !== AssetProcessingStatus.READY) {
       return { asset: null, reason: "NOT_READY" };
     }
-    if (asset.storedFile.orphanedAt !== null) {
+    if (!asset.active || asset.storedFile.orphanedAt !== null) {
       return { asset: null, reason: "ORPHANED" };
     }
     if (access.accessLevel === PortalAccessLevel.COMMUNICATION) {
-      if (asset.exposedAt === null) return { asset: null, reason: "NOT_EXPOSED" };
-      const eventHospital = snapshotHospital(asset.delivery.communicationEvent.eventSnapshot);
-      if (eventHospital !== access.hospitalId) {
-        return { asset: null, reason: "HOSPITAL_SCOPE_MISMATCH" };
-      }
-      const sent = asset.delivery.status === CommunicationDeliveryStatus.SENT;
-      const exactGrantDelivery = asset.deliveryId === authorization.communicationDeliveryId;
-      const grantDelivery = await this.prisma.communicationDelivery?.findUnique({
-        where: { id: authorization.communicationDeliveryId },
-        select: { resendMessageId: true, status: true },
-      });
-      const sameBatch = Boolean(grantDelivery?.status === CommunicationDeliveryStatus.SENT &&
-        grantDelivery.resendMessageId &&
-        grantDelivery.resendMessageId === asset.delivery.resendMessageId);
-      if (!sent) return { asset: null, reason: "ACCESS_POLICY_DENIED" };
-      if (!exactGrantDelivery && !sameBatch) {
-        return { asset: null, reason: "GRANT_DELIVERY_MISMATCH" };
-      }
+      const caseType = asset.sourceEntityType === "SERVICE_ORDER" ? "SERVICE_ORDER"
+        : asset.sourceEntityType === "INSPECTION" ? "INSPECTION" : null;
+      if (!caseType || !await this.isVisibleCommunicationCase(
+        access.hospitalId, authorization.communicationDeliveryId,
+        caseType, asset.sourceRecordId,
+      )) return { asset: null, reason: "ACCESS_POLICY_DENIED" };
     }
     const { processingStatus: _processingStatus, orphanedAt: _orphanedAt,
       sourceHospitalRecordId: _sourceHospitalRecordId, ...publicAsset } = asset.storedFile;
     return { asset: publicAsset, reason: null };
+  }
+
+  private async isVisibleCommunicationCase(
+    hospitalId: string,
+    communicationDeliveryId: string,
+    caseType: "SERVICE_ORDER" | "INSPECTION",
+    sourceRecordId: string,
+  ): Promise<boolean> {
+    const rows = await this.prisma.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+      SELECT c.id FROM "TrackedCase" c
+      WHERE c.active = true
+        AND c."sourceHospitalRecordId" = ${hospitalId}
+        AND c."caseType" = CAST(${caseType} AS "CaseType")
+        AND c."airtableRecordId" = ${sourceRecordId}
+        ${visibleCaseSql({
+          hospitalId,
+          accessLevel: PortalAccessLevel.COMMUNICATION,
+          communicationDeliveryId,
+        }, caseType)}
+      LIMIT 1
+    `);
+    return rows.length === 1;
   }
 }
 
@@ -220,10 +203,4 @@ function selectKey(asset: PublicAssetObject, variant: PublicAssetVariant): strin
     return null;
   }
   return variant === "document" ? asset.documentObjectKey : null;
-}
-
-function snapshotHospital(snapshot: unknown): string | null {
-  if (typeof snapshot !== "object" || snapshot === null || Array.isArray(snapshot)) return null;
-  const value = (snapshot as Record<string, unknown>).sourceHospitalRecordId;
-  return typeof value === "string" && value.trim() ? value.trim() : null;
 }

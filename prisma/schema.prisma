@@ -522,12 +522,36 @@ model StoredFile {
   createdAt                DateTime              @default(now())
   updatedAt                DateTime              @updatedAt
   communicationAssets      CommunicationAsset[]
+  caseAssets               CaseAsset[]
 
+  @@unique([sourceProvider, sourceAttachmentId])
   @@index([processingStatus, createdAt])
   @@index([processingStatus, processingStartedAt])
   @@index([processingStatus, nextAttemptAt])
   @@index([sourceHospitalRecordId])
   @@index([orphanedAt])
+}
+
+model CaseAsset {
+  id                     String                        @id @default(cuid())
+  storedFileId           String
+  sourceRecordId         String
+  sourceFieldId          String
+  sourceEntityType       CommunicationSourceEntityType
+  sourceHospitalRecordId String
+  role                   CommunicationAssetRole
+  displayOrder           Int
+  active                 Boolean                       @default(true)
+  firstSeenAt            DateTime                      @default(now())
+  lastSeenAt             DateTime                      @default(now())
+  removedAt              DateTime?
+  createdAt              DateTime                      @default(now())
+  updatedAt              DateTime                      @updatedAt
+  storedFile             StoredFile                    @relation(fields: [storedFileId], references: [id], onDelete: Restrict)
+
+  @@unique([sourceEntityType, sourceRecordId, sourceFieldId, storedFileId])
+  @@index([sourceHospitalRecordId, sourceEntityType, sourceRecordId, active])
+  @@index([storedFileId, active])
 }
 
 model CommunicationAsset {

@@ -168,7 +168,7 @@ function fixture(communicatedId: string) {
         .map((item) => ({ trackedCaseId: `tracked-${item.id}`, deviceAirtableId: item.deviceId })),
     },
     communicationDelivery: { findUnique: async () => ({ resendMessageId: "batch-1" }) },
-    communicationAsset: { findMany: async () => [] },
+    caseAsset: { findMany: async () => [] },
   } as unknown as PrismaClient;
   return { store: new PrismaHospitalPortalStore(prisma, () => NOW), queries };
 }

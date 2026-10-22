@@ -55,6 +55,10 @@ import {
   PrismaCommunicationAssetStatusStore,
 } from "../assets/preflight.js";
 import { createS3ObjectStorage } from "../assets/object-storage.js";
+import {
+  PrismaCaseAttachmentSyncStore,
+  synchronizeCaseAttachments,
+} from "../assets/case-attachment-sync.js";
 import { PrismaDeviceSyncStore, runDeviceSync } from "./device-sync.js";
 import {
   PrismaCaseHospitalScopeRepairStore,
@@ -143,6 +147,8 @@ const assetProcessorStore = config.communicationAssetsEnabled
   ? new PrismaAssetProcessorStore(prisma) : undefined;
 const assetDownloadSource = config.communicationAssetsEnabled
   ? new AirtableAttachmentDownloadSource(airtable) : undefined;
+const caseAttachmentSyncStore = config.communicationAssetsEnabled
+  ? new PrismaCaseAttachmentSyncStore(prisma) : undefined;
 let heartbeatTimer: NodeJS.Timeout | undefined;
 let incrementalTimer: NodeJS.Timeout | undefined;
 let taskTimer: NodeJS.Timeout | undefined;
@@ -340,6 +346,14 @@ async function pollPortalRefresh(): Promise<void> {
       taskStore: taskSyncStore,
       communicationStore,
       quietMinutes: config.digestQuietMinutes,
+      ...(caseAttachmentSyncStore ? {
+        synchronizeAttachments: (target) => synchronizeCaseAttachments({
+          target,
+          airtable,
+          store: caseAttachmentSyncStore,
+          log: (message) => console.info(message),
+        }),
+      } : {}),
       log: (message) => console.info(message),
     });
   } catch {

@@ -341,6 +341,32 @@ describe("asset processor", () => {
     expect(source.resolve).not.toHaveBeenCalled();
     expect(store.rejected).toEqual({ status: "REJECTED_TOO_LARGE", code: "SOURCE_TOO_LARGE" });
   });
+
+  it("classifies an exhausted storage failure without leaking raw secrets or URLs", async () => {
+    const pdf = pdfBytes(32);
+    const store = new MemoryProcessorStore({
+      ...imageJob(), kind: StoredFileKind.DOCUMENT,
+      originalMimeType: "application/pdf", attemptCount: 4,
+    });
+    const logs: string[] = [];
+    const storage = new MemoryObjectStorage();
+    storage.putObject = async () => {
+      throw Object.assign(new Error("request failed https://secret.invalid/token?sig=private"), {
+        name: "AccessDenied", $metadata: { httpStatusCode: 403 },
+      });
+    };
+    await runAssetProcessor({
+      store, source: fixedSource(pdf, "application/pdf"), storage,
+      config: processorConfig(), fetchFunction: fixedFetch(pdf, "application/pdf"),
+      log: (message) => logs.push(message),
+    });
+    expect(store.failed).toMatchObject({ code: "ACCESSDENIED", nextAttemptAt: null });
+    expect(logs.join("\n")).toContain("stage=STORAGE_UPLOAD");
+    expect(logs.join("\n")).toContain("stage=RETRY_EXHAUSTED");
+    expect(logs.join("\n")).toContain("httpStatus=403");
+    expect(logs.join("\n")).not.toContain("secret.invalid");
+    expect(logs.join("\n")).not.toContain("private");
+  });
 });
 
 describe("bounded preflight and public access", () => {
@@ -391,7 +417,7 @@ describe("bounded preflight and public access", () => {
     await expect(service.signedUrl(authorization, "asset-1", "document")).resolves.toBeNull();
   });
 
-  it("builds COMMUNICATION asset visibility as exact grant delivery or the same batch", async () => {
+  it("builds case-asset visibility from active READY files in the same Hospital", async () => {
     const where = publicAssetAccessWhere({
       hospitalId: "hospital-A",
       accessLevel: PortalAccessLevel.COMMUNICATION,
@@ -399,89 +425,38 @@ describe("bounded preflight and public access", () => {
       communicationBatchMessageId: "resend-batch-A",
     });
     expect(where).toMatchObject({
-      exposedAt: { not: null },
-      OR: [
-        { deliveryId: "delivery-A", delivery: { status: "SENT" } },
-        { delivery: { status: "SENT", resendMessageId: "resend-batch-A" } },
-      ],
+      active: true,
+      sourceHospitalRecordId: "hospital-A",
       storedFile: { sourceHospitalRecordId: "hospital-A" },
     });
   });
 
-  it("scopes a fallback asset to the exact delivery of the current grant", async () => {
-    const findUnique = vi.fn().mockResolvedValue(databaseAsset({
-      deliveryId: "delivery-A", recipientType: "TIEMED_FALLBACK",
-    }));
+  it("allows an old COMMUNICATION link only when its Case remains visible", async () => {
+    const findUnique = vi.fn().mockResolvedValue(databaseAsset());
+    const query = vi.fn().mockResolvedValue([{ id: "case-1" }]);
     const store = new PrismaPublicAssetStore(
-      { communicationAsset: { findUnique } } as never,
+      { caseAsset: { findUnique }, $queryRaw: query } as never,
       { resolve: async (hospitalId) => ({ hospitalId, accessLevel: PortalAccessLevel.COMMUNICATION }) },
     );
-    const grantA = {
-      communicationDeliveryId: "delivery-A", sourceHospitalRecordId: "hospital-A",
-      entryContext: {
-        type: "SERVICE_ORDER" as const, sourceRecordId: "recOrder-A",
-        scenario: CommunicationScenario.REPAIR_RECEIVED,
-      },
-    };
-    await expect(store.findAuthorized("asset-fallback", grantA)).resolves.toMatchObject({
+    await expect(store.findAuthorized("case-asset", publicAuthorization())).resolves.toMatchObject({
       documentObjectKey: "hospital-A/protocol.pdf",
     });
-    await expect(store.findAuthorized("asset-fallback", {
-      ...grantA, communicationDeliveryId: "delivery-unrelated",
-    })).resolves.toBeNull();
-    await expect(store.authorize("asset-fallback", {
-      ...grantA, communicationDeliveryId: "delivery-unrelated",
-    })).resolves.toMatchObject({ asset: null, reason: "GRANT_DELIVERY_MISMATCH" });
-    expect(findUnique).toHaveBeenCalledWith(expect.objectContaining({
-      where: { id: "asset-fallback" },
-    }));
+    expect(query).toHaveBeenCalledOnce();
   });
 
-  it.each(["CLIENT", "TIEMED_FALLBACK"] as const)(
-    "allows %s sibling documents only inside the same Resend batch",
-    async (recipientType) => {
-      const findUnique = vi.fn().mockResolvedValue(databaseAsset({
-        deliveryId: "delivery-B", recipientType, resendMessageId: "batch-ABC",
-      }));
-      const grantDelivery = vi.fn(async ({ where }: { where: { id: string } }) => ({
-        status: CommunicationDeliveryStatus.SENT,
-        resendMessageId: where.id === "delivery-A" ? "batch-ABC" : "batch-D",
-      }));
-      const store = new PrismaPublicAssetStore({
-        communicationAsset: { findUnique },
-        communicationDelivery: { findUnique: grantDelivery },
-      } as never, { resolve: async (hospitalId) => ({ hospitalId,
-        accessLevel: PortalAccessLevel.COMMUNICATION }) });
-      const authorization = { ...publicAuthorization(), communicationDeliveryId: "delivery-A" };
-      await expect(store.findAuthorized("asset-B", authorization)).resolves.not.toBeNull();
-      await expect(store.findAuthorized("asset-B", {
-        ...authorization, communicationDeliveryId: "delivery-D",
-      })).resolves.toBeNull();
-    },
-  );
-
-  it("does not expose an asset from another client message", async () => {
-    const findUnique = vi.fn().mockResolvedValue(databaseAsset({
-      deliveryId: "earlier-delivery", recipientType: "CLIENT",
-    }));
+  it("denies a COMMUNICATION file when its Case is outside the authorized scope", async () => {
     const store = new PrismaPublicAssetStore(
-      { communicationAsset: { findUnique } } as never,
+      { caseAsset: { findUnique: async () => databaseAsset() }, $queryRaw: async () => [] } as never,
       { resolve: async (hospitalId) => ({ hospitalId, accessLevel: PortalAccessLevel.COMMUNICATION }) },
     );
-    await expect(store.findAuthorized("asset-client-history", {
-      communicationDeliveryId: "later-unrelated-grant",
-      sourceHospitalRecordId: "hospital-A",
-      entryContext: {
-        type: "SERVICE_ORDER", sourceRecordId: "recOrder-B",
-        scenario: CommunicationScenario.REPAIR_RECEIVED,
-      },
-    })).resolves.toBeNull();
+    await expect(store.authorize("case-asset", publicAuthorization()))
+      .resolves.toMatchObject({ asset: null, reason: "ACCESS_POLICY_DENIED" });
   });
 
   it("does not authorize an H2 asset for an H1 portal token", async () => {
     const findUnique = vi.fn().mockResolvedValue(databaseAsset({ hospitalId: "H2" }));
     const store = new PrismaPublicAssetStore(
-      { communicationAsset: { findUnique } } as never,
+      { caseAsset: { findUnique } } as never,
       { resolve: async () => ({ hospitalId: "H1", accessLevel: PortalAccessLevel.COMMUNICATION }) },
     );
     await expect(store.findAuthorized("asset-from-H2", {
@@ -496,9 +471,9 @@ describe("bounded preflight and public access", () => {
   });
 
   it("allows FULL to query any READY non-orphan asset in its Hospital only", async () => {
-    const findUnique = vi.fn().mockResolvedValue(databaseAsset({ exposedAt: null }));
+    const findUnique = vi.fn().mockResolvedValue(databaseAsset());
     const store = new PrismaPublicAssetStore(
-      { communicationAsset: { findUnique } } as never,
+      { caseAsset: { findUnique } } as never,
       { resolve: async (hospitalId) => ({ hospitalId, accessLevel: PortalAccessLevel.FULL }) },
     );
     await expect(store.findAuthorized("asset-full", {
@@ -507,27 +482,27 @@ describe("bounded preflight and public access", () => {
     })).resolves.toMatchObject({ documentObjectKey: "hospital-A/protocol.pdf" });
   });
 
-  it("uses CommunicationAsset.id as the canonical public ID and rejects StoredFile.id", async () => {
+  it("uses CaseAsset.id as the canonical public ID and rejects StoredFile.id", async () => {
     const findUnique = vi.fn().mockImplementation(async ({ where }) =>
-      where.id === "communication-asset-id" ? databaseAsset({}) : null);
+      where.id === "case-asset-id" ? databaseAsset({}) : null);
     const store = new PrismaPublicAssetStore(
-      { communicationAsset: { findUnique } } as never,
-      { resolve: async () => ({ hospitalId: "hospital-A", accessLevel: PortalAccessLevel.COMMUNICATION }) },
+      { caseAsset: { findUnique } } as never,
+      { resolve: async () => ({ hospitalId: "hospital-A", accessLevel: PortalAccessLevel.FULL }) },
     );
     const authorization = publicAuthorization();
-    await expect(store.findAuthorized("communication-asset-id", authorization)).resolves.not.toBeNull();
+    await expect(store.findAuthorized("case-asset-id", authorization)).resolves.not.toBeNull();
     await expect(store.authorize("stored-file-id", authorization))
       .resolves.toEqual({ asset: null, reason: "ASSET_NOT_FOUND" });
   });
 
   it.each([
-    ["not exposed", { exposedAt: null }, "NOT_EXPOSED"],
+    ["removed", { active: false }, "ORPHANED"],
     ["not ready", { processingStatus: AssetProcessingStatus.PROCESSING }, "NOT_READY"],
     ["orphaned", { orphanedAt: new Date("2026-08-14T10:00:00Z") }, "ORPHANED"],
   ] as const)("denies an asset that is %s", async (_label, overrides, reason) => {
     const store = new PrismaPublicAssetStore(
-      { communicationAsset: { findUnique: async () => databaseAsset(overrides) } } as never,
-      { resolve: async () => ({ hospitalId: "hospital-A", accessLevel: PortalAccessLevel.COMMUNICATION }) },
+      { caseAsset: { findUnique: async () => databaseAsset(overrides) } } as never,
+      { resolve: async () => ({ hospitalId: "hospital-A", accessLevel: PortalAccessLevel.FULL }) },
     );
     await expect(store.authorize("asset-1", publicAuthorization()))
       .resolves.toMatchObject({ asset: null, reason });
@@ -572,25 +547,17 @@ function publicAuthorization() {
 }
 
 function databaseAsset(overrides: {
-  deliveryId?: string;
-  recipientType?: "CLIENT" | "TIEMED_FALLBACK";
   hospitalId?: string;
-  exposedAt?: Date | null;
+  active?: boolean;
   processingStatus?: AssetProcessingStatus;
   orphanedAt?: Date | null;
-  resendMessageId?: string | null;
 } = {}) {
   const hospitalId = overrides.hospitalId ?? "hospital-A";
   return {
-    deliveryId: overrides.deliveryId ?? "delivery-A",
-    exposedAt: overrides.exposedAt === undefined
-      ? new Date("2026-08-14T10:00:00Z") : overrides.exposedAt,
-    delivery: {
-      status: "SENT",
-      resendMessageId: overrides.resendMessageId ?? null,
-      communicationEventRecipient: { recipientType: overrides.recipientType ?? "TIEMED_FALLBACK" },
-      communicationEvent: { eventSnapshot: { sourceHospitalRecordId: hospitalId } },
-    },
+    active: overrides.active ?? true,
+    sourceRecordId: "recOrder-A",
+    sourceEntityType: CommunicationSourceEntityType.SERVICE_ORDER,
+    sourceHospitalRecordId: hospitalId,
     storedFile: {
       processingStatus: overrides.processingStatus ?? AssetProcessingStatus.READY,
       orphanedAt: overrides.orphanedAt ?? null,
@@ -699,12 +666,15 @@ class MemoryProcessorStore implements AssetProcessorStore {
   readyImage: Parameters<AssetProcessorStore["markImageReady"]>[1] | null = null;
   readyDocument: Parameters<AssetProcessorStore["markDocumentReady"]>[1] | null = null;
   rejected: { status: string; code: string } | null = null;
+  failed: { code: string; nextAttemptAt: Date | null } | null = null;
   constructor(private readonly job: StoredFileJob) {}
   async claimNext() { if (this.claimed) return null; this.claimed = true; return this.job; }
   async markImageReady(_id: string, output: Parameters<AssetProcessorStore["markImageReady"]>[1]) { this.readyImage = output; }
   async markDocumentReady(_id: string, output: Parameters<AssetProcessorStore["markDocumentReady"]>[1]) { this.readyDocument = output; }
   async markRejected(_id: string, status: "REJECTED_TOO_LARGE" | "REJECTED_UNSUPPORTED", code: string) { this.rejected = { status, code }; }
-  async markFailed() {}
+  async markFailed(_id: string, code: string, nextAttemptAt: Date | null) {
+    this.failed = { code, nextAttemptAt };
+  }
 }
 
 class MemoryRegistrationStore implements CommunicationAssetRegistrationStore {

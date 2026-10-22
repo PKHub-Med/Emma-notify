@@ -201,8 +201,13 @@ async function processAsset(input: {
   const started = input.now();
   const { job } = input;
   const identity = `storedFileId=${job.id} deliveryId=${job.deliveryId ?? "NONE"} ` +
-    `sourceAttachmentId=${job.sourceAttachmentId} role=${job.role ?? "UNKNOWN"}`;
-  input.log?.(`COMMUNICATION_ASSET_PROCESSING ${identity} kind=${job.kind} attempt=${job.attemptCount}`);
+    `sourceRecordId=${safeLogValue(job.sourceRecordId)} role=${job.role ?? "UNKNOWN"}`;
+  const logStage = (stage: string, status: string, extra = "") => input.log?.(
+    `ASSET_PROCESSING stage=${stage} ${identity} kind=${job.kind} ` +
+    `attemptCount=${job.attemptCount} durationMs=${input.now().getTime() - started.getTime()} ` +
+    `status=${status}${extra ? ` ${extra}` : ""}`,
+  );
+  logStage("ATTACHMENT_DISCOVERY", "STARTED", "retryable=true");
   try {
     const sourceLimit = job.kind === StoredFileKind.DOCUMENT
       ? input.config.maxDocumentSourceBytes
@@ -210,17 +215,33 @@ async function processAsset(input: {
     if (job.originalSizeBytes !== null && job.originalSizeBytes > BigInt(sourceLimit)) {
       throw new AssetPermanentError("SOURCE_TOO_LARGE", "REJECTED_TOO_LARGE");
     }
-    const attachment = await input.source.resolve(job);
-    const source = await downloadLimited(
+    const attachment = await withStage("AIRTABLE_FETCH", () => input.source.resolve(job));
+    logStage("AIRTABLE_FETCH", "SUCCEEDED", "retryable=false");
+    const source = await withStage("ATTACHMENT_DOWNLOAD", () => downloadLimited(
       attachment.url, sourceLimit, input.fetchFunction ?? fetch,
-    );
+    ));
+    logStage("ATTACHMENT_DOWNLOAD", "SUCCEEDED", `sourceSizeBytes=${source.byteLength} retryable=false`);
     if (job.kind === StoredFileKind.IMAGE) {
-      const output = await transformImage(source, job.id, input.config, input.storage);
-      await input.store.markImageReady(job.id, output, input.now());
+      const output = await withStage("IMAGE_TRANSFORM", () => transformImage(source, job.id, input.config));
+      logStage("IMAGE_TRANSFORM", "SUCCEEDED", "retryable=false");
+      await withStage("STORAGE_UPLOAD", async () => {
+        await input.storage.putObject(output.portalObjectKey, output.portalData, "image/webp");
+        await input.storage.putObject(output.thumbnailObjectKey, output.thumbnailData, "image/webp");
+      });
+      logStage("STORAGE_UPLOAD", "SUCCEEDED", "retryable=false");
+      await withStage("DATABASE_UPDATE", () => input.store.markImageReady(job.id, {
+        portalObjectKey: output.portalObjectKey,
+        thumbnailObjectKey: output.thumbnailObjectKey,
+        portalSizeBytes: output.portalData.byteLength,
+        thumbnailSizeBytes: output.thumbnailData.byteLength,
+        width: output.width,
+        height: output.height,
+      }, input.now()));
+      logStage("DATABASE_UPDATE", "SUCCEEDED", "retryable=false");
       input.log?.(
         `COMMUNICATION_ASSET_READY ${identity} kind=IMAGE attempt=${job.attemptCount} ` +
         `durationMs=${input.now().getTime() - started.getTime()} sourceSizeBytes=${source.byteLength} ` +
-        `portalSizeBytes=${output.portalSizeBytes} thumbnailSizeBytes=${output.thumbnailSizeBytes} status=READY`,
+        `portalSizeBytes=${output.portalData.byteLength} thumbnailSizeBytes=${output.thumbnailData.byteLength} status=READY`,
       );
       return;
     }
@@ -228,31 +249,40 @@ async function processAsset(input: {
       throw new AssetPermanentError("DOCUMENT_UNSUPPORTED", "REJECTED_UNSUPPORTED");
     }
     const documentObjectKey = `assets/${job.id}/document`;
-    await input.storage.putObject(documentObjectKey, source, "application/pdf");
-    await input.store.markDocumentReady(job.id, {
+    await withStage("STORAGE_UPLOAD", () => input.storage.putObject(documentObjectKey, source, "application/pdf"));
+    logStage("STORAGE_UPLOAD", "SUCCEEDED", "retryable=false");
+    await withStage("DATABASE_UPDATE", () => input.store.markDocumentReady(job.id, {
       documentObjectKey, documentSizeBytes: source.byteLength,
-    }, input.now());
+    }, input.now()));
+    logStage("DATABASE_UPDATE", "SUCCEEDED", "retryable=false");
     input.log?.(
       `COMMUNICATION_ASSET_READY ${identity} kind=DOCUMENT attempt=${job.attemptCount} ` +
       `durationMs=${input.now().getTime() - started.getTime()} sourceSizeBytes=${source.byteLength} ` +
       `outputSizeBytes=${source.byteLength} status=READY`,
     );
   } catch (error: unknown) {
-    if (error instanceof AssetPermanentError) {
-      await input.store.markRejected(job.id, error.status, error.code, input.now());
+    const root = error instanceof AssetStageError ? error.cause : error;
+    const stage = error instanceof AssetStageError ? error.stage : "ATTACHMENT_DISCOVERY";
+    if (root instanceof AssetPermanentError) {
+      await input.store.markRejected(job.id, root.status, root.code, input.now());
       input.log?.(
-        `COMMUNICATION_ASSET_REJECTED ${identity} kind=${job.kind} attempt=${job.attemptCount} ` +
-        `durationMs=${input.now().getTime() - started.getTime()} status=${error.status} errorCode=${error.code}`,
+        `ASSET_PROCESSING stage=${stage} ${identity} kind=${job.kind} attemptCount=${job.attemptCount} ` +
+        `durationMs=${input.now().getTime() - started.getTime()} status=${root.status} ` +
+        `errorCategory=${root.code} retryable=false`,
       );
       return;
     }
     const nextAttemptAt = job.attemptCount < MAX_PROCESSING_ATTEMPTS
       ? new Date(input.now().getTime() + RETRY_DELAYS_MS[job.attemptCount - 1]!) : null;
-    await input.store.markFailed(job.id, assetErrorCode(error), nextAttemptAt, input.now());
+    await input.store.markFailed(job.id, assetErrorCode(root), nextAttemptAt, input.now());
     input.log?.(
-      `COMMUNICATION_ASSET_FAILED ${identity} kind=${job.kind} attempt=${job.attemptCount} ` +
-      `durationMs=${input.now().getTime() - started.getTime()} status=FAILED errorCode=${assetErrorCode(error)}`,
+      `ASSET_PROCESSING stage=${stage} ${identity} kind=${job.kind} attemptCount=${job.attemptCount} ` +
+      `durationMs=${input.now().getTime() - started.getTime()} status=FAILED ` +
+      `errorCategory=${assetErrorCode(root)}${httpStatus(root)} retryable=${nextAttemptAt !== null}`,
     );
+    input.log?.(`ASSET_PROCESSING stage=${nextAttemptAt ? "RETRY_SCHEDULED" : "RETRY_EXHAUSTED"} ` +
+      `${identity} kind=${job.kind} attemptCount=${job.attemptCount} status=FAILED ` +
+      `errorCategory=${assetErrorCode(root)} retryable=${nextAttemptAt !== null}`);
   }
 }
 
@@ -260,7 +290,6 @@ async function transformImage(
   source: Uint8Array,
   id: string,
   config: AssetProcessorConfig,
-  storage: ObjectStorage,
 ) {
   let metadata: sharp.Metadata;
   try {
@@ -288,12 +317,10 @@ async function transformImage(
   }).webp({ quality: config.thumbWebpQuality }).toBuffer({ resolveWithObject: true });
   const portalObjectKey = `assets/${id}/portal.webp`;
   const thumbnailObjectKey = `assets/${id}/thumb.webp`;
-  await storage.putObject(portalObjectKey, portal.data, "image/webp");
-  await storage.putObject(thumbnailObjectKey, thumb.data, "image/webp");
   return {
     portalObjectKey, thumbnailObjectKey,
-    portalSizeBytes: portal.data.byteLength,
-    thumbnailSizeBytes: thumb.data.byteLength,
+    portalData: portal.data,
+    thumbnailData: thumb.data,
     width: portal.info.width, height: portal.info.height,
   };
 }
@@ -336,6 +363,32 @@ class AssetPermanentError extends Error {
 }
 
 function assetErrorCode(error: unknown): string {
-  return error instanceof Error && /^[A-Z0-9_]+$/.test(error.message)
-    ? error.message.slice(0, 100) : "ASSET_PROCESSING_ERROR";
+  if (!(error instanceof Error)) return "UNKNOWN_ERROR";
+  if (/^[A-Z0-9_]+$/.test(error.message)) return error.message.slice(0, 100);
+  const named = error.name.replace(/[^A-Za-z0-9]/g, "_").toUpperCase();
+  return named && named !== "ERROR" ? named.slice(0, 100) : "ASSET_PROCESSING_ERROR";
+}
+
+type AssetStage = "AIRTABLE_FETCH" | "ATTACHMENT_DOWNLOAD" | "IMAGE_TRANSFORM" |
+  "STORAGE_UPLOAD" | "DATABASE_UPDATE";
+
+class AssetStageError extends Error {
+  constructor(readonly stage: AssetStage, override readonly cause: unknown) { super(stage); }
+}
+
+async function withStage<T>(stage: AssetStage, operation: () => Promise<T>): Promise<T> {
+  try { return await operation(); } catch (error: unknown) {
+    throw new AssetStageError(stage, error);
+  }
+}
+
+function httpStatus(error: unknown): string {
+  if (typeof error !== "object" || error === null) return "";
+  const value = error as { status?: unknown; $metadata?: { httpStatusCode?: unknown } };
+  const status = typeof value.status === "number" ? value.status : value.$metadata?.httpStatusCode;
+  return typeof status === "number" ? ` httpStatus=${status}` : "";
+}
+
+function safeLogValue(value: string): string {
+  return value.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 100);
 }

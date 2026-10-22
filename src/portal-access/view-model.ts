@@ -371,13 +371,13 @@ type PortalAssetRow = {
   role: CommunicationAssetRole;
   displayOrder: number;
   createdAt: Date;
+  sourceRecordId: string;
+  sourceEntityType: CommunicationSourceEntityType;
+  sourceFieldId: string;
   storedFile: {
     id: string;
-    sourceRecordId: string;
-    sourceEntityType: CommunicationSourceEntityType;
     kind: StoredFileKind;
     originalFileName: string;
-    sourceFieldId: string;
   };
 };
 
@@ -673,15 +673,15 @@ export class PrismaHospitalPortalStore implements HospitalPortalStore {
   async listDocuments(scope: PortalDataScope, query: string | null): Promise<PortalDocument[]> {
     const assetScope = await this.assetAccessScope(scope);
     const matchingCaseIds = query ? await this.searchCaseIds(scope, query) : [];
-    const searchWhere: Prisma.CommunicationAssetWhereInput = query ? {
+    const searchWhere: Prisma.CaseAssetWhereInput = query ? {
       OR: [
         { storedFile: { originalFileName: { contains: query, mode: "insensitive" } } },
         ...(matchingCaseIds.length > 0
-          ? [{ storedFile: { sourceRecordId: { in: matchingCaseIds } } }]
+          ? [{ sourceRecordId: { in: matchingCaseIds } }]
           : []),
       ],
     } : {};
-    const assets = await this.prisma.communicationAsset.findMany({
+    const assets = await this.prisma.caseAsset.findMany({
       where: {
         AND: [
           publicAssetAccessWhere(assetScope),
@@ -695,7 +695,7 @@ export class PrismaHospitalPortalStore implements HospitalPortalStore {
     const unique = deduplicateAssets(assets);
     const cases = await this.loadVisibleAssetCaseSnapshots(
       scope,
-      unique.map((asset) => asset.storedFile.sourceRecordId),
+      unique.map((asset) => asset.sourceRecordId),
     );
     return mapPortalAssets(unique, cases).filter((asset) => asset.kind === "DOCUMENT");
   }
@@ -890,18 +890,16 @@ export class PrismaHospitalPortalStore implements HospitalPortalStore {
     if (cases.length === 0) return;
     const assetScope = await this.assetAccessScope(scope);
     const sourceIds = cases.map((item) => item.sourceRecordId);
-    const assets = await this.prisma.communicationAsset.findMany({
+    const assets = await this.prisma.caseAsset.findMany({
       where: {
         AND: [
           publicAssetAccessWhere(assetScope),
           {
-            storedFile: {
-              sourceRecordId: { in: sourceIds },
-              sourceEntityType: { in: [
+            sourceRecordId: { in: sourceIds },
+            sourceEntityType: { in: [
                 CommunicationSourceEntityType.SERVICE_ORDER,
                 CommunicationSourceEntityType.INSPECTION,
               ] },
-            },
           },
         ],
       },
@@ -1038,17 +1036,17 @@ const PORTAL_ASSET_SELECT = {
   role: true,
   displayOrder: true,
   createdAt: true,
+  sourceRecordId: true,
+  sourceEntityType: true,
+  sourceFieldId: true,
   storedFile: {
     select: {
       id: true,
-      sourceRecordId: true,
-      sourceEntityType: true,
       kind: true,
       originalFileName: true,
-      sourceFieldId: true,
     },
   },
-} satisfies Prisma.CommunicationAssetSelect;
+} satisfies Prisma.CaseAssetSelect;
 
 export class HospitalPortalViewModelService {
   readonly pageSize: number;
@@ -1703,12 +1701,12 @@ function mapPortalAssets(
 ): PortalDocument[] {
   const roleCounts = new Map<string, number>();
   return assets.flatMap((asset) => {
-    const linkedCase = cases.get(asset.storedFile.sourceRecordId);
+    const linkedCase = cases.get(asset.sourceRecordId);
     if (!linkedCase) return [];
-    const countKey = `${asset.storedFile.sourceRecordId}:${asset.role}`;
+    const countKey = `${asset.sourceRecordId}:${asset.role}`;
     const roleIndex = (roleCounts.get(countKey) ?? 0) + 1;
     roleCounts.set(countKey, roleIndex);
-    const title = assetTitle(asset.role, roleIndex, linkedCase.type, asset.storedFile.sourceFieldId);
+    const title = assetTitle(asset.role, roleIndex, linkedCase.type, asset.sourceFieldId);
     return [{
       id: asset.id,
       fileName: asset.storedFile.originalFileName,
@@ -1716,7 +1714,7 @@ function mapPortalAssets(
       kind: asset.storedFile.kind,
       role: asset.role,
       documentType: title,
-      sourceRecordId: asset.storedFile.sourceRecordId,
+      sourceRecordId: asset.sourceRecordId,
       caseType: linkedCase.type,
       deviceName: linkedCase.deviceName,
       manufacturer: linkedCase.manufacturer,

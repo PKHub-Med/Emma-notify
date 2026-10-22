@@ -68,14 +68,18 @@ export class PrismaCommunicationAssetRegistrationStore implements CommunicationA
       const result: RegisteredAsset[] = [];
       for (const asset of assets) {
         const existing = await transaction.storedFile.findUnique({
-          where: { sourceAttachmentId: asset.sourceAttachmentId },
+          where: { sourceProvider_sourceAttachmentId: {
+            sourceProvider: "AIRTABLE", sourceAttachmentId: asset.sourceAttachmentId,
+          } },
           select: {
             id: true, processingStatus: true, sourceHospitalRecordId: true,
             sourceRecordId: true, sourceFieldId: true,
           },
         });
         const storedFile = await transaction.storedFile.upsert({
-          where: { sourceAttachmentId: asset.sourceAttachmentId },
+          where: { sourceProvider_sourceAttachmentId: {
+            sourceProvider: "AIRTABLE", sourceAttachmentId: asset.sourceAttachmentId,
+          } },
           create: {
             sourceAttachmentId: asset.sourceAttachmentId,
             sourceRecordId: asset.sourceRecordId,
@@ -121,13 +125,13 @@ export class PrismaCommunicationAssetRegistrationStore implements CommunicationA
   }
 }
 
-type AllowedField = {
+export type AllowedField = {
   fieldId: string;
   role: CommunicationAssetRole;
   kind: StoredFileKind;
 };
 
-const ASSET_FIELD_ALLOWLIST: Partial<Record<CommunicationScenario, readonly AllowedField[]>> = {
+export const ASSET_FIELD_ALLOWLIST: Partial<Record<CommunicationScenario, readonly AllowedField[]>> = {
   [CommunicationScenario.REPAIR_COMPLETED]: [
     { fieldId: SERVICE_ORDER_ATTACHMENT_FIELDS.repairProtocol, role: CommunicationAssetRole.REPAIR_PROTOCOL, kind: StoredFileKind.DOCUMENT },
     { fieldId: SERVICE_ORDER_ATTACHMENT_FIELDS.diagnosticProtocol, role: CommunicationAssetRole.DIAGNOSTIC_PROTOCOL, kind: StoredFileKind.DOCUMENT },

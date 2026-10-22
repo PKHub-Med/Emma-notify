@@ -7,6 +7,7 @@ import {
   StoredFileKind,
 } from "../generated/prisma/enums.js";
 import type { PrismaClient } from "../generated/prisma/client.js";
+import { SERVICE_ORDER_ATTACHMENT_FIELDS } from "../airtable/field-ids.js";
 import { formatDate, renderHospitalPortal } from "./portal-page.js";
 import {
   decodePortalCaseCursor,
@@ -501,7 +502,7 @@ describe("paginated hospital portal", () => {
           emmaDeviceStatus: id === "A" ? "SPRAWNY" : "NIESPRAWNY",
         }));
       } },
-      communicationAsset: { findMany: async () => [] },
+      caseAsset: { findMany: async () => [] },
     } as unknown as PrismaClient;
     const item = await new PrismaHospitalPortalStore(prisma).findScopedCase({
       hospitalId: "hospital-A", contextType: "INSPECTION_TASK", contextId: "task-A",
@@ -565,9 +566,12 @@ describe("paginated hospital portal", () => {
   it("hides a document when its Case is outside retention", async () => {
     const queries: Array<{ strings: readonly string[]; values: readonly unknown[] }> = [];
     const prisma = {
-      communicationAsset: { findMany: async () => [{
+      caseAsset: { findMany: async () => [{
         id: "asset-old", role: CommunicationAssetRole.REPAIR_PROTOCOL,
         displayOrder: 0, createdAt: new Date("2026-06-10T00:00:00Z"),
+        sourceRecordId: "repair-old",
+        sourceEntityType: CommunicationSourceEntityType.SERVICE_ORDER,
+        sourceFieldId: SERVICE_ORDER_ATTACHMENT_FIELDS.repairProtocol,
         storedFile: {
           id: "file-old", sourceRecordId: "repair-old",
           sourceEntityType: CommunicationSourceEntityType.SERVICE_ORDER,
@@ -618,7 +622,7 @@ describe("paginated hospital portal", () => {
         linkedDeviceWhere = where;
         return [];
       } },
-      communicationAsset: { findMany: async () => [] },
+      caseAsset: { findMany: async () => [] },
     } as unknown as PrismaClient;
     const store = new PrismaHospitalPortalStore(prisma);
     const item = await store.findScopedCase({
@@ -655,6 +659,9 @@ describe("paginated hospital portal", () => {
       {
         id: "asset-doc-H1", role: CommunicationAssetRole.REPAIR_PROTOCOL,
         displayOrder: 0, createdAt: new Date("2026-08-14T10:00:00Z"),
+        sourceRecordId: "repair-H1",
+        sourceEntityType: CommunicationSourceEntityType.SERVICE_ORDER,
+        sourceFieldId: SERVICE_ORDER_ATTACHMENT_FIELDS.repairProtocol,
         storedFile: {
           id: "file-doc-H1", sourceRecordId: "repair-H1",
           sourceEntityType: CommunicationSourceEntityType.SERVICE_ORDER,
@@ -664,6 +671,9 @@ describe("paginated hospital portal", () => {
       {
         id: "asset-photo-H1", role: CommunicationAssetRole.PHOTO,
         displayOrder: 1, createdAt: new Date("2026-08-14T10:00:00Z"),
+        sourceRecordId: "repair-H1",
+        sourceEntityType: CommunicationSourceEntityType.SERVICE_ORDER,
+        sourceFieldId: SERVICE_ORDER_ATTACHMENT_FIELDS.photo1,
         storedFile: {
           id: "file-photo-H1", sourceRecordId: "repair-H1",
           sourceEntityType: CommunicationSourceEntityType.SERVICE_ORDER,
@@ -683,7 +693,7 @@ describe("paginated hospital portal", () => {
         // The current record exists in H2 as Device Current / SN-NEW, so the H1-scoped lookup returns none.
         return [];
       } },
-      communicationAsset: { findMany: async () => assetRows },
+      caseAsset: { findMany: async () => assetRows },
     } as unknown as PrismaClient;
     const store = new PrismaHospitalPortalStore(prisma);
     const scope = {

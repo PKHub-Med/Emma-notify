@@ -34,6 +34,8 @@ import {
   safePrismaValidationDetails,
   unwrapIncrementalSyncError,
 } from "./incremental-sync-error.js";
+import { CommunicationSourceEntityType } from "../generated/prisma/enums.js";
+import type { CaseAttachmentSyncTarget } from "../assets/case-attachment-sync.js";
 
 const DEFAULT_LEASE_MS = 5 * 60_000;
 
@@ -226,6 +228,7 @@ export async function runPortalRefreshWorkerOnce(dependencies: {
   now?: () => Date;
   leaseMs?: number;
   log?: (message: string) => void;
+  synchronizeAttachments?: (target: CaseAttachmentSyncTarget) => Promise<unknown>;
 }): Promise<boolean> {
   const now = dependencies.now ?? (() => new Date());
   const leaseMs = dependencies.leaseMs ?? DEFAULT_LEASE_MS;
@@ -315,6 +318,11 @@ export async function runPortalRefreshWorkerOnce(dependencies: {
         detectedAt: now(),
         ...(dependencies.log ? { log: dependencies.log } : {}),
       });
+      await syncAttachmentsWithoutFailingRefresh(dependencies, {
+        sourceRecordId: recordId,
+        sourceHospitalRecordId: claimed.sourceHospitalRecordId,
+        sourceEntityType: CommunicationSourceEntityType.SERVICE_ORDER,
+      });
     }, (recordId) => dependencies.store.deactivateCase(
       CaseType.SERVICE_ORDER,
       recordId,
@@ -349,6 +357,11 @@ export async function runPortalRefreshWorkerOnce(dependencies: {
         serviceCommunicationEnabled,
         detectedAt: now(),
         ...(dependencies.log ? { log: dependencies.log } : {}),
+      });
+      await syncAttachmentsWithoutFailingRefresh(dependencies, {
+        sourceRecordId: recordId,
+        sourceHospitalRecordId: claimed.sourceHospitalRecordId,
+        sourceEntityType: CommunicationSourceEntityType.INSPECTION,
       });
     }, (recordId) => dependencies.store.deactivateCase(
       CaseType.INSPECTION,
@@ -394,6 +407,28 @@ export async function runPortalRefreshWorkerOnce(dependencies: {
     );
   }
   return true;
+}
+
+async function syncAttachmentsWithoutFailingRefresh(
+  dependencies: {
+    synchronizeAttachments?: (target: CaseAttachmentSyncTarget) => Promise<unknown>;
+    log?: (message: string) => void;
+  },
+  target: CaseAttachmentSyncTarget,
+): Promise<void> {
+  if (!dependencies.synchronizeAttachments) return;
+  try {
+    await dependencies.synchronizeAttachments(target);
+  } catch (error: unknown) {
+    const category = error instanceof AirtableRequestError
+      ? "AIRTABLE_FETCH" : "ATTACHMENT_SYNC_ERROR";
+    const httpStatus = error instanceof AirtableRequestError && error.httpStatus
+      ? ` httpStatus=${error.httpStatus}` : "";
+    dependencies.log?.(
+      `ASSET_SYNC stage=${category} sourceRecordId=${safeLogText(target.sourceRecordId)} ` +
+      `kind=${target.sourceEntityType} status=FAILED errorCategory=${category}${httpStatus} retryable=true`,
+    );
+  }
 }
 
 function portalRefreshFailureDetails(error: unknown): string {

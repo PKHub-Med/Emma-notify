@@ -72,6 +72,15 @@ export function mapAssetConfig(data: Record<keyof typeof assetEnvironmentShape, 
     !config.storageAccessKeyId || !config.storageSecretAccessKey)) {
     throw new Error("CONFIGURATION_ERROR: RAILWAY_STORAGE_* variables are required when COMMUNICATION_ASSETS_ENABLED=true");
   }
+  if (config.communicationAssetsEnabled && config.storageEndpoint) {
+    let endpoint: URL;
+    try { endpoint = new URL(config.storageEndpoint); } catch {
+      throw new Error("CONFIGURATION_ERROR: RAILWAY_STORAGE_ENDPOINT must be a valid HTTPS URL");
+    }
+    if (endpoint.protocol !== "https:" || endpoint.username || endpoint.password) {
+      throw new Error("CONFIGURATION_ERROR: RAILWAY_STORAGE_ENDPOINT must be a credential-free HTTPS URL");
+    }
+  }
   return config;
 }
 

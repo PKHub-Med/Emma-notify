@@ -127,6 +127,7 @@ describe("portal refresh worker", () => {
       observe: vi.fn().mockResolvedValue({ outcome: "NO_SCENARIO", revision: 1 }),
       markBaselineCompleted: vi.fn(),
     } as unknown as CommunicationEventStore;
+    const synchronizeAttachments = vi.fn().mockRejectedValue(new Error("storage unavailable"));
     const dependencies = {
       store: requestStore,
       airtable,
@@ -141,6 +142,7 @@ describe("portal refresh worker", () => {
       } },
       taskStore: { upsertTask: vi.fn() },
       communicationStore,
+      synchronizeAttachments,
       quietMinutes: 10,
       now: () => new Date("2026-09-12T10:00:00Z"),
     };
@@ -196,6 +198,8 @@ describe("portal refresh worker", () => {
       false,
       expect.any(Date),
     );
+    expect(synchronizeAttachments).toHaveBeenCalledOnce();
+    expect(requestStore.status).toBe(PortalRefreshStatus.SUCCEEDED);
   });
 
   it("keeps a null repair production year null after a normal refresh with an empty lookup", async () => {
