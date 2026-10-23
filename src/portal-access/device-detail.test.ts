@@ -86,6 +86,17 @@ describe("Device detail redesign", () => {
     expect(styleSource).toContain("word-break:normal;overflow-wrap:break-word");
     expect(styleSource).toContain(".device-detail-history-row.has-date{grid-template-columns:1fr 18px}");
   });
+
+  it("keeps long Device status pills inside their card and allows a centered two-line label", () => {
+    expect(styleSource).toContain(".case-detail-status-pill{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-width:0;max-width:100%");
+    expect(styleSource).toContain("text-align:center;text-transform:uppercase;white-space:normal");
+    expect(styleSource).toContain(".case-detail-status-pill>span:not(.case-detail-icon){min-width:0;max-width:100%;overflow-wrap:break-word;text-align:center;white-space:normal}");
+    expect(styleSource).toContain(".device-detail-state{align-self:center;width:auto;min-width:0;max-width:100%");
+    expect(styleSource).toContain(".device-detail-state .case-detail-status-pill{justify-content:center;width:100%;min-width:0;max-width:100%;height:auto;min-height:44px");
+    expect(styleSource).toContain("font-size:clamp(14px,1.15vw,17px);line-height:1.15;text-align:center;white-space:normal");
+    expect(styleSource).toContain(".device-detail-state .case-detail-status-pill{width:min(100%,280px)}");
+    expect(styleSource).not.toMatch(/\.case-detail-status-pill\{[^}]*overflow:\s*hidden/);
+  });
 });
 
 function emptyView(): HospitalPortalViewModel {
