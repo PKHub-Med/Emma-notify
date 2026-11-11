@@ -60,6 +60,26 @@ export type AnalyticsFilters = {
   hospitalId?: string;
 };
 
+export type AnalyticsExportRow = {
+  deliveryId: string;
+  sentAt: Date | null;
+  scenario: string;
+  mode: string | null;
+  recipient: string | null;
+  portalAccessGrantId: string | null;
+  hospitalId: string | null;
+  hospitalName: string;
+  hospitalLocation: string | null;
+  eventId: string | null;
+  eventCreatedAt: Date | null;
+  eventType: string | null;
+  sessionId: string | null;
+  screen: string | null;
+  entityType: string | null;
+  entityRecordId: string | null;
+  eventMetadata: unknown;
+};
+
 type DeliveryRow = Awaited<ReturnType<PrismaAnalyticsAdminService["loadDeliveries"]>>[number];
 
 export class PrismaAnalyticsAdminService {
@@ -181,6 +201,90 @@ export class PrismaAnalyticsAdminService {
   async activity(filters: AnalyticsFilters) {
     const { deliveries, names } = await this.enriched(filters);
     return { filter: serializeFilter(filters), activity: mapActivity(deliveries, names) };
+  }
+
+  async *exportRows(filters: AnalyticsFilters): AsyncGenerator<AnalyticsExportRow> {
+    const pageSize = 500;
+    let cursor: string | undefined;
+
+    while (true) {
+      const deliveries = await this.prisma.communicationDelivery.findMany({
+        where: {
+          status: "SENT",
+          sentAt: { gte: filters.from, lte: filters.to },
+          ...(filters.mode === "ALL" ? {} : { emailMode: filters.mode }),
+          ...(filters.scenario ? { scenario: filters.scenario as never } : {}),
+          ...(filters.hospitalId ? { portalAccessGrant: {
+            sourceHospitalRecordId: filters.hospitalId,
+          } } : {}),
+        },
+        select: {
+          id: true,
+          sentAt: true,
+          scenario: true,
+          emailMode: true,
+          actualRecipientEmail: true,
+          communicationEventRecipient: { select: { email: true, normalizedEmail: true } },
+          portalAccessGrant: { select: { id: true, sourceHospitalRecordId: true } },
+          analyticsEvents: {
+            where: { createdAt: { gte: filters.from, lte: filters.to } },
+            select: {
+              id: true,
+              createdAt: true,
+              eventType: true,
+              sessionId: true,
+              screen: true,
+              entityType: true,
+              entityRecordId: true,
+              metadata: true,
+            },
+            orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+          },
+        },
+        orderBy: [{ sentAt: "asc" }, { id: "asc" }],
+        take: pageSize,
+        ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+      });
+
+      if (deliveries.length === 0) return;
+      const hospitalIds = [...new Set(deliveries.flatMap((delivery) =>
+        delivery.portalAccessGrant ? [delivery.portalAccessGrant.sourceHospitalRecordId] : []))];
+      const names = await this.hospitalNames(hospitalIds);
+
+      for (const delivery of deliveries) {
+        const hospitalId = delivery.portalAccessGrant?.sourceHospitalRecordId ?? null;
+        const hospital = hospitalId ? names.get(hospitalId) : undefined;
+        const base = {
+          deliveryId: delivery.id,
+          sentAt: delivery.sentAt,
+          scenario: String(delivery.scenario),
+          mode: delivery.emailMode,
+          recipient: delivery.actualRecipientEmail || delivery.communicationEventRecipient.email ||
+            delivery.communicationEventRecipient.normalizedEmail,
+          portalAccessGrantId: delivery.portalAccessGrant?.id ?? null,
+          hospitalId,
+          hospitalName: hospital?.name ?? hospitalId ?? "Brak grantu portalu",
+          hospitalLocation: hospital?.location ?? null,
+        };
+        const events = delivery.analyticsEvents.length > 0 ? delivery.analyticsEvents : [null];
+        for (const event of events) {
+          yield {
+            ...base,
+            eventId: event?.id ?? null,
+            eventCreatedAt: event?.createdAt ?? null,
+            eventType: event ? String(event.eventType) : null,
+            sessionId: event?.sessionId ?? null,
+            screen: event?.screen ?? null,
+            entityType: event?.entityType ?? null,
+            entityRecordId: event?.entityRecordId ?? null,
+            eventMetadata: event?.metadata ?? null,
+          };
+        }
+      }
+
+      cursor = deliveries.at(-1)?.id;
+      if (deliveries.length < pageSize || !cursor) return;
+    }
   }
 }
 

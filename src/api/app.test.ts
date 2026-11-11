@@ -275,7 +275,7 @@ describe("public API", () => {
   it("protects the dashboard and defaults its API filter to PRODUCTION", async () => {
     const summary = vi.fn().mockResolvedValue({ ok: true });
     const admin = { summary, hospitals: vi.fn(), hospital: vi.fn(),
-      deliveries: vi.fn(), activity: vi.fn() };
+      deliveries: vi.fn(), activity: vi.fn(), exportRows: vi.fn() };
     const { baseUrl } = await startApp(new MemoryStore(null), null,
       new MemoryUnsubscribeStore(null), async () => emptyPortalView(), {
         analyticsAdmin: admin, analyticsAuth: { enabled: true, user: "ops", password: "secret" },
@@ -288,6 +288,44 @@ describe("public API", () => {
     expect(response.status).toBe(200);
     expect(summary).toHaveBeenCalledWith(expect.objectContaining({ mode: "PRODUCTION" }));
     expect(response.headers.get("cache-control")).toBe("no-store");
+    const dashboard = await fetch(`${baseUrl}/ops/analytics`, { headers: { authorization } });
+    expect(await dashboard.text()).toContain("Pobierz pełne dane CSV");
+  });
+
+  it("streams the complete analytics CSV with the selected filters", async () => {
+    const exportRows = vi.fn().mockImplementation(async function* () {
+      yield {
+        deliveryId: "delivery-1", sentAt: new Date("2026-10-01T10:00:00.000Z"),
+        scenario: "REPAIR_RECEIVED", mode: "PRODUCTION", recipient: "=unsafe@example.com",
+        portalAccessGrantId: "grant-1", hospitalId: "hospital-1", hospitalName: "Szpital; A",
+        hospitalLocation: "Warszawa", eventId: "event-1",
+        eventCreatedAt: new Date("2026-10-01T10:05:00.000Z"), eventType: "SCREEN_VIEW",
+        sessionId: "session-1", screen: "repairs", entityType: "CASE",
+        entityRecordId: "case-1", eventMetadata: { source: "portal" },
+      };
+    });
+    const admin = { summary: vi.fn(), hospitals: vi.fn(), hospital: vi.fn(),
+      deliveries: vi.fn(), activity: vi.fn(), exportRows };
+    const { baseUrl } = await startApp(new MemoryStore(null), null,
+      new MemoryUnsubscribeStore(null), async () => emptyPortalView(), {
+        analyticsAdmin: admin, analyticsAuth: { enabled: true, user: "ops", password: "secret" },
+      });
+    const authorization = `Basic ${Buffer.from("ops:secret").toString("base64")}`;
+    const response = await fetch(
+      `${baseUrl}/api/ops/analytics/export.csv?from=2026-10-01&to=2026-10-31&mode=ALL`,
+      { headers: { authorization } },
+    );
+    const csv = await response.text();
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toContain("text/csv");
+    expect(response.headers.get("content-disposition")).toContain(
+      'filename="emma-analytics-2026-10-01-2026-10-31.csv"',
+    );
+    expect(csv).toContain('"delivery_id";"sent_at"');
+    expect(csv).toContain('"\'=unsafe@example.com"');
+    expect(csv).toContain('"Szpital; A"');
+    expect(csv).toContain('"{\"\"source\"\":\"\"portal\"\"}"');
+    expect(exportRows).toHaveBeenCalledWith(expect.objectContaining({ mode: "ALL" }));
   });
 
   it("keeps /health independent from Airtable configuration", async () => {
@@ -725,6 +763,7 @@ async function startApp(
       summary: (...args: any[]) => Promise<unknown>; hospitals: (...args: any[]) => Promise<unknown>;
       hospital: (...args: any[]) => Promise<unknown>; deliveries: (...args: any[]) => Promise<unknown>;
       activity: (...args: any[]) => Promise<unknown>;
+      exportRows: (...args: any[]) => AsyncIterable<unknown>;
     };
     analyticsAuth?: { enabled: boolean; user: string | null; password: string | null };
     portalRefresh?: Pick<PortalRefreshService, "request" | "status">;

@@ -1,5 +1,6 @@
 import express, { type Express } from "express";
 import { randomBytes, timingSafeEqual } from "node:crypto";
+import { once } from "node:events";
 import {
   notFoundPage,
   PUBLIC_PAGE_HEADERS,
@@ -29,6 +30,7 @@ import {
 } from "../communication-unsubscribe/public.js";
 import type { PublicAssetVariant, PublicFileService } from "../assets/public-files.js";
 import type {
+  AnalyticsExportRow,
   AnalyticsFilters,
   PortalAnalyticsInput,
   PortalAnalyticsWriter,
@@ -52,7 +54,7 @@ export function createApp(
     publicFiles?: PublicFileService;
     analytics?: PortalAnalyticsWriter;
     analyticsAdmin?: Pick<PrismaAnalyticsAdminService,
-      "summary" | "hospitals" | "hospital" | "deliveries" | "activity">;
+      "summary" | "hospitals" | "hospital" | "deliveries" | "activity" | "exportRows">;
     analyticsAuth?: { enabled: boolean; user: string | null; password: string | null };
   } = {},
 ): Express {
@@ -379,6 +381,31 @@ export function createApp(
     options.analyticsAdmin?.deliveries(filters)));
   app.get("/api/ops/analytics/activity", analyticsGuard, analyticsApi(async (filters) =>
     options.analyticsAdmin?.activity(filters)));
+  app.get("/api/ops/analytics/export.csv", analyticsGuard, async (request, response) => {
+    response.set(ANALYTICS_HEADERS);
+    const filters = analyticsFilters(request.query);
+    if (!filters) { response.status(400).json({ error: "INVALID_FILTERS" }); return; }
+    const rows = options.analyticsAdmin?.exportRows(filters);
+    if (!rows) { response.status(404).json({ error: "NOT_FOUND" }); return; }
+
+    const filename = `emma-analytics-${datePart(filters.from)}-${datePart(filters.to)}.csv`;
+    response.status(200);
+    response.set("Content-Type", "text/csv; charset=utf-8");
+    response.set("Content-Disposition", `attachment; filename="${filename}"`);
+    try {
+      await writeCsvChunk(response,
+        "\uFEFF" + ANALYTICS_EXPORT_COLUMNS.map(csvCell).join(";") + "\r\n");
+      for await (const row of rows) {
+        await writeCsvChunk(response,
+          analyticsExportValues(row).map(csvCell).join(";") + "\r\n");
+      }
+      response.end();
+    } catch {
+      console.error("ANALYTICS_EXPORT_FAILED errorCode=INTERNAL_ERROR status=500");
+      if (!response.headersSent) response.status(500).json({ error: "INTERNAL_ERROR" });
+      else response.destroy();
+    }
+  });
 
   return app;
 }
@@ -472,6 +499,41 @@ function analyticsFilters(query: import("express").Request["query"]): AnalyticsF
       (scenario && !scenarios.has(scenario)) || (hospitalId && hospitalId.length > 128)) return null;
   return { from, to, mode: mode as AnalyticsFilters["mode"],
     ...(scenario ? { scenario } : {}), ...(hospitalId ? { hospitalId } : {}) };
+}
+
+const ANALYTICS_EXPORT_COLUMNS = [
+  "delivery_id", "sent_at", "scenario", "mode", "recipient", "portal_access_grant_id",
+  "hospital_id", "hospital_name", "hospital_location", "event_id", "event_created_at",
+  "event_type", "session_id", "screen", "entity_type", "entity_record_id", "event_metadata",
+] as const;
+
+function analyticsExportValues(row: AnalyticsExportRow): unknown[] {
+  return [
+    row.deliveryId, row.sentAt, row.scenario, row.mode, row.recipient, row.portalAccessGrantId,
+    row.hospitalId, row.hospitalName, row.hospitalLocation, row.eventId, row.eventCreatedAt,
+    row.eventType, row.sessionId, row.screen, row.entityType, row.entityRecordId, row.eventMetadata,
+  ];
+}
+
+function csvCell(value: unknown): string {
+  let text: string;
+  if (value === null || value === undefined) text = "";
+  else if (value instanceof Date) text = value.toISOString();
+  else if (typeof value === "object") text = JSON.stringify(value);
+  else text = String(value);
+  if (/^[=+\-@\t\r]/.test(text)) text = `'${text}`;
+  return `"${text.replaceAll('"', '""')}"`;
+}
+
+function datePart(value: Date): string {
+  return value.toISOString().slice(0, 10);
+}
+
+async function writeCsvChunk(
+  response: import("express").Response,
+  chunk: string,
+): Promise<void> {
+  if (!response.write(chunk)) await once(response, "drain");
 }
 
 function fileVariant(value: unknown): PublicAssetVariant | null {
