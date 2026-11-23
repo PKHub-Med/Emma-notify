@@ -286,3 +286,25 @@ describe("loadWorkerConfig", () => {
     expect(errorMessage).not.toContain(secretAirtablePat);
   });
 });
+describe("loadWorkerConfig Airtable write-back", () => {
+  it("is off without its own write token even though synchronization works", () => {
+    const config = loadWorkerConfig(workerEnvironment);
+    expect(config.airtableWritePat).toBeNull();
+    expect(config.airtableFeedbackEnabled).toBe(false);
+    expect(config.airtableFeedbackSeconds).toBe(30);
+  });
+
+  it("turns on with AIRTABLE_WRITE_PAT and honours the kill switch", () => {
+    const enabled = loadWorkerConfig({ ...workerEnvironment, AIRTABLE_WRITE_PAT: "patWrite" });
+    expect(enabled.airtableFeedbackEnabled).toBe(true);
+    expect(enabled.airtablePat).toBe("patExample");
+    expect(enabled.airtableWritePat).toBe("patWrite");
+
+    const disabled = loadWorkerConfig({
+      ...workerEnvironment,
+      AIRTABLE_WRITE_PAT: "patWrite",
+      AIRTABLE_FEEDBACK_ENABLED: "false",
+    });
+    expect(disabled.airtableFeedbackEnabled).toBe(false);
+  });
+});

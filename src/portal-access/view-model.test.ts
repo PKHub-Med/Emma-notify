@@ -50,14 +50,16 @@ describe("paginated hospital portal", () => {
     });
   });
 
-  it("renders one global Aktualizuj dane control with polling and success/error states", async () => {
+  it("renders one global Aktualizuj dane control with quiet polling and a success state", async () => {
     const view = await new HospitalPortalViewModelService(memoryStore(1, 0)).build(auth() as never);
     const html = renderHospitalPortal(view, "nonce", new Date(), "/p/token");
     expect(html.match(/>Aktualizuj dane</g)).toHaveLength(1);
     expect(html).toContain("Aktualizuję dane…");
     expect(html).toContain("Ostatnia aktualizacja:");
-    expect(html).toContain("Nie udało się zaktualizować danych. Spróbuj ponownie.");
-    expect(html).toContain("setTimeout(resolve,1000)");
+    // Long refreshes keep running server-side; the portal waits quietly instead of an error.
+    expect(html).not.toContain("Nie udało się zaktualizować danych. Spróbuj ponownie.");
+    expect(html).toContain("setTimeout(resolve,delay)");
+    expect(html).toContain("REFRESH_MAX_WAIT_MS=15*60*1000");
     expect(html).toContain("/data/refresh");
   });
 

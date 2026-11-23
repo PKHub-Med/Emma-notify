@@ -42,7 +42,9 @@ describe("shared portal refresh header status", () => {
     expect(refresh).toContain("setRefreshButtonLabel('Aktualizuję dane…')");
     expect(refresh).toContain("refreshButton.disabled=false");
     expect(refresh).toContain("setRefreshButtonLabel('Aktualizuj dane')");
-    expect(refresh).toContain("setRefreshFeedback('error','Nie udało się zaktualizować danych. Spróbuj ponownie.')");
+    expect(refresh).not.toContain("setRefreshFeedback('error'");
+    expect(pageSource).toContain("REFRESH_MAX_WAIT_MS=15*60*1000");
+    expect(pageSource).toContain("if(readPendingRefresh())void requestPortalRefresh();");
   });
 
   it("replaces the default meta with the successful refresh time", () => {

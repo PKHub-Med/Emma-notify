@@ -18,6 +18,13 @@ const strictBooleanString = z.preprocess(
   z.enum(["true", "false"]),
 ).transform((value) => value === "true");
 
+const defaultTrueBooleanString = z.preprocess(
+  (value) => value === undefined || value === ""
+    ? "true"
+    : typeof value === "string" ? value.trim().toLowerCase() : value,
+  z.enum(["true", "false"]),
+).transform((value) => value === "true");
+
 const workerEnvironmentSchema = z.object({
   ...baseEnvironmentShape,
   // Legacy mail-mode flags remain accepted for backwards-compatible Railway
@@ -37,6 +44,10 @@ const workerEnvironmentSchema = z.object({
   AIRTABLE_DEVICE_RECONCILE_SECONDS: z.coerce.number().int().positive().default(21_600),
   AIRTABLE_INSPECTION_RECONCILE_ENABLED: strictBooleanString,
   AIRTABLE_INSPECTION_RECONCILE_SECONDS: z.coerce.number().int().positive().default(86_400),
+  // Separate token used only to write communication status back to Airtable.
+  AIRTABLE_WRITE_PAT: z.string().trim().default(""),
+  AIRTABLE_FEEDBACK_ENABLED: defaultTrueBooleanString,
+  AIRTABLE_FEEDBACK_SECONDS: z.coerce.number().int().positive().default(30),
   DIGEST_QUIET_MINUTES: z.coerce.number().int().nonnegative().default(1),
   RESEND_API_KEY: z.string().default(""),
   RESEND_CASE_DIGEST_TEMPLATE_ID: z.string().default(""),
@@ -91,6 +102,9 @@ export type WorkerConfig = BaseConfig & AssetConfig & {
   airtableDeviceReconcileSeconds: number;
   airtableInspectionReconcileEnabled: boolean;
   airtableInspectionReconcileSeconds: number;
+  airtableWritePat: string | null;
+  airtableFeedbackEnabled: boolean;
+  airtableFeedbackSeconds: number;
   digestQuietMinutes: number;
   resendApiKey: string | null;
   resendCaseDigestTemplateId: string | null;
@@ -133,6 +147,11 @@ export function loadWorkerConfig(environment: NodeJS.ProcessEnv): WorkerConfig {
     airtableDeviceReconcileSeconds: parsed.data.AIRTABLE_DEVICE_RECONCILE_SECONDS,
     airtableInspectionReconcileEnabled: parsed.data.AIRTABLE_INSPECTION_RECONCILE_ENABLED,
     airtableInspectionReconcileSeconds: parsed.data.AIRTABLE_INSPECTION_RECONCILE_SECONDS,
+    airtableWritePat: parsed.data.AIRTABLE_WRITE_PAT || null,
+    // Write-back runs only with its own token; AIRTABLE_FEEDBACK_ENABLED=false is the kill switch.
+    airtableFeedbackEnabled: parsed.data.AIRTABLE_FEEDBACK_ENABLED &&
+      Boolean(parsed.data.AIRTABLE_WRITE_PAT),
+    airtableFeedbackSeconds: parsed.data.AIRTABLE_FEEDBACK_SECONDS,
     digestQuietMinutes: parsed.data.DIGEST_QUIET_MINUTES,
     resendApiKey: parsed.data.RESEND_API_KEY.trim() || null,
     resendCaseDigestTemplateId:
