@@ -30,6 +30,12 @@ export const TASK_FIELDS = {
   sourceHospitalLink: "fldDQYxpMRt6xaHCE",
   department: "fldQRN7HvTXzbM80h",
   duration: "fldWJMm0G7ZyOMZXR",
+  // Airtable: "Link to oddziały" — department name(s) from the Oddziały table (text).
+  departmentUnit: "fldD14g1opVfQ5zV4",
+  // Airtable: "Email oddziałowa (from Link to oddziały)".
+  departmentUnitEmail: "fldSgIsAF2bGDxBEe",
+  // Airtable: "Email from Dział Aparatury" — hospital-level technical department.
+  technicalDepartmentEmail: "fldFLUkRVkGcx8rec",
 } as const;
 
 export const EMPLOYEE_FIELDS = {
@@ -76,6 +82,8 @@ export const SERVICE_ORDER_FIELDS = {
   emmaMailTemplate: "fldfqDFr9bJ4DiMRe",
   sourceHospitalLink: "fldXGnsGh3ok8WlMe",
   department: "fld4esE0HyzXB2i4l",
+  // Airtable: "Oddział from oddziały" — department name(s) from the Oddziały table (text).
+  departmentUnit: "fldPAglg9eCBDGAPW",
   completedAt: "fldsyjQ9U7NR4IZuQ",
   repairHeroLabel: "fldiAPV4yLS14FKEP",
   repairHeroDescription: "fldQOOyRBM90YDvnD",

@@ -33,7 +33,7 @@ export function renderHospitalPortal(
 </head>
 <body>
 <header class="mobile-header">
-  <div><strong>Emma</strong><span>${escapeHtml(view.hospital.shortName || view.hospital.name)}</span></div>
+  <div><strong>Emma</strong><span>${escapeHtml(view.hospital.shortName || view.hospital.name)}${view.department ? ` · ${escapeHtml(view.department)}` : ""}</span></div>
   <small>Serwis: ${escapeHtml(view.serviceProviderName)}</small>
 </header>
 <div class="app">
@@ -41,6 +41,7 @@ export function renderHospitalPortal(
     <div class="brand">
       <div class="brand-title">Emma</div>
       <div class="brand-sub">${escapeHtml(view.hospital.shortName)}</div>
+      ${view.department ? `<div class="brand-sub">${escapeHtml(view.department)}</div>` : ""}
       <div class="service-source"><span>Serwis</span><strong>${escapeHtml(view.serviceProviderName)}</strong></div>
     </div>
     <nav class="nav" aria-label="Główna nawigacja">

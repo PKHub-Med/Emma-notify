@@ -6,7 +6,7 @@ import {
 } from "../generated/prisma/enums.js";
 import type { PortalAuthorizationContext } from "../portal-access/public.js";
 import type { PortalAccessPolicy } from "../portal-access/policy.js";
-import { visibleCaseSql } from "../portal-access/policy.js";
+import { resolvePortalDepartmentScope, visibleCaseSql } from "../portal-access/policy.js";
 import type { ObjectStorage } from "./object-storage.js";
 
 export type PublicAssetVariant = "portal" | "thumb" | "document";
@@ -112,12 +112,15 @@ export class PrismaPublicAssetStore implements PublicAssetStore {
     if (!asset.active || asset.storedFile.orphanedAt !== null) {
       return { asset: null, reason: "ORPHANED" };
     }
-    if (access.accessLevel === PortalAccessLevel.COMMUNICATION) {
+    const department = await resolvePortalDepartmentScope(
+      this.prisma, authorization.communicationDeliveryId, access.hospitalId,
+    );
+    if (access.accessLevel === PortalAccessLevel.COMMUNICATION || department) {
       const caseType = asset.sourceEntityType === "SERVICE_ORDER" ? "SERVICE_ORDER"
         : asset.sourceEntityType === "INSPECTION" ? "INSPECTION" : null;
-      if (!caseType || !await this.isVisibleCommunicationCase(
-        access.hospitalId, authorization.communicationDeliveryId,
-        caseType, asset.sourceRecordId,
+      if (!caseType || !await this.isVisibleCase(
+        access.hospitalId, access.accessLevel, authorization.communicationDeliveryId,
+        caseType, asset.sourceRecordId, department?.key ?? null,
       )) return { asset: null, reason: "ACCESS_POLICY_DENIED" };
     }
     const { processingStatus: _processingStatus, orphanedAt: _orphanedAt,
@@ -125,11 +128,13 @@ export class PrismaPublicAssetStore implements PublicAssetStore {
     return { asset: publicAsset, reason: null };
   }
 
-  private async isVisibleCommunicationCase(
+  private async isVisibleCase(
     hospitalId: string,
+    accessLevel: PortalAccessLevel,
     communicationDeliveryId: string,
     caseType: "SERVICE_ORDER" | "INSPECTION",
     sourceRecordId: string,
+    departmentKey: string | null,
   ): Promise<boolean> {
     const rows = await this.prisma.$queryRaw<Array<{ id: string }>>(Prisma.sql`
       SELECT c.id FROM "TrackedCase" c
@@ -139,8 +144,9 @@ export class PrismaPublicAssetStore implements PublicAssetStore {
         AND c."airtableRecordId" = ${sourceRecordId}
         ${visibleCaseSql({
           hospitalId,
-          accessLevel: PortalAccessLevel.COMMUNICATION,
+          accessLevel,
           communicationDeliveryId,
+          departmentKey,
         }, caseType)}
       LIMIT 1
     `);

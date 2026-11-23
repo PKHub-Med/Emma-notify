@@ -42,6 +42,9 @@ describe("central Airtable contract", () => {
       emmaCustomerStatus: "fldiTY6M5rQLoOFvd",
       emmaMailTemplate: "fldgGORaQ08utJddW",
       sourceHospitalLink: "fldDQYxpMRt6xaHCE",
+      departmentUnit: "fldD14g1opVfQ5zV4",
+      departmentUnitEmail: "fldSgIsAF2bGDxBEe",
+      technicalDepartmentEmail: "fldFLUkRVkGcx8rec",
     });
   });
 
