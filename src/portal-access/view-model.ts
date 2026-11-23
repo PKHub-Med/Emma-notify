@@ -12,10 +12,13 @@ import type { PortalAuthorizationContext } from "./public.js";
 import type { PortalEntryContext } from "./service.js";
 import {
   DEFAULT_PORTAL_ACCESS_LEVEL,
+  departmentCaseSql,
   PortalAccessLevel,
+  resolvePortalDepartmentScope,
   visibleCaseSql,
   visibleDeviceSql,
   type PortalAccessPolicy,
+  type PortalDepartmentScope,
   type ResolvedPortalAccess,
 } from "./policy.js";
 
@@ -207,6 +210,8 @@ export type HospitalPortalViewModel = {
   serviceProviderName: string;
   summary: { requiresAction: number; repairs: number; inspections: number; devices: number };
   accessLevel: PortalAccessLevel;
+  /** Department name when the link is limited to one department, else null. */
+  department?: string | null;
   teaser: {
     totalDevices: number; visibleDevices: number; lockedDevices: number;
     totalRepairs: number; visibleRepairs: number; lockedRepairs: number;
@@ -223,6 +228,9 @@ export type PortalDataScope = {
   communicationDeliveryId: string;
   contextType: "REPAIR" | "INSPECTION_TASK";
   contextId: string;
+  /** Limits every query to one department (Oddziały); null = whole hospital. */
+  departmentKey?: string | null;
+  departmentName?: string | null;
 };
 
 export type PortalRefreshScopeRecordIds = {
@@ -364,6 +372,10 @@ export interface HospitalPortalStore {
   ): Promise<PortalDeviceDetail | null>;
   listDocuments?(scope: PortalDataScope, query: string | null): Promise<PortalDocument[]>;
   resolveRefreshRecordIds?(scope: PortalDataScope): Promise<Omit<PortalRefreshScopeRecordIds, "scope">>;
+  resolveDepartmentScope?(
+    communicationDeliveryId: string,
+    hospitalId: string,
+  ): Promise<PortalDepartmentScope | null>;
 }
 
 type PortalAssetRow = {
@@ -501,10 +513,21 @@ export class PrismaHospitalPortalStore implements HospitalPortalStore {
         FROM "TrackedCase" c
         WHERE c.active = true AND c."sourceHospitalRecordId" = ${scope.hospitalId}
           AND ${retainedCasePredicateSql(portalRetentionCutoffDate(this.now()))}
+          AND (
+            (c."caseType" = 'SERVICE_ORDER' ${departmentCaseSql(scope, "SERVICE_ORDER")})
+            OR (c."caseType" = 'INSPECTION' ${departmentCaseSql(scope, "INSPECTION")})
+          )
       `),
-      this.prisma.trackedDevice.count({
-        where: { sourceHospitalRecordId: scope.hospitalId, active: true },
-      }),
+      scope.departmentKey
+        ? this.prisma.$queryRaw<CountRow[]>(Prisma.sql`
+            SELECT COUNT(*) AS count FROM "TrackedDevice" d
+            WHERE d."sourceHospitalRecordId" = ${scope.hospitalId}
+              AND d.active = true
+              ${visibleDeviceSql({ ...scope, accessLevel: PortalAccessLevel.FULL })}
+          `).then((rows) => Number(rows[0]?.count ?? 0n))
+        : this.prisma.trackedDevice.count({
+            where: { sourceHospitalRecordId: scope.hospitalId, active: true },
+          }),
     ]);
     const totalRepairs = Number(totals[0]?.repairs ?? 0n);
     const totalInspections = Number(totals[0]?.inspections ?? 0n);
@@ -924,7 +947,8 @@ export class PrismaHospitalPortalStore implements HospitalPortalStore {
   async resolveRefreshRecordIds(
     scope: PortalDataScope,
   ): Promise<Omit<PortalRefreshScopeRecordIds, "scope">> {
-    const communicationDeviceScope = scope.accessLevel === PortalAccessLevel.FULL
+    const communicationDeviceScope = scope.accessLevel === PortalAccessLevel.FULL &&
+      !scope.departmentKey
       ? Prisma.empty
       : Prisma.sql`AND EXISTS (
           SELECT 1 FROM "TrackedCaseDevice" refresh_device_link
@@ -974,6 +998,13 @@ export class PrismaHospitalPortalStore implements HospitalPortalStore {
       deviceRecordIds: ids("DEVICE"),
       taskRecordIds: ids("TASK"),
     };
+  }
+
+  resolveDepartmentScope(
+    communicationDeliveryId: string,
+    hospitalId: string,
+  ): Promise<PortalDepartmentScope | null> {
+    return resolvePortalDepartmentScope(this.prisma, communicationDeliveryId, hospitalId);
   }
 
   private async assetAccessScope(scope: PortalDataScope) {
@@ -1082,6 +1113,7 @@ export class HospitalPortalViewModelService {
       },
       serviceProviderName: this.serviceProviderName,
       summary, teaser, accessLevel: scope.accessLevel,
+      department: scope.departmentName ?? null,
       upgradeUrl: this.upgradeUrl,
       initialCases,
       focusedCase,
@@ -1154,7 +1186,17 @@ export class HospitalPortalViewModelService {
     authorization: PortalAuthorizationContext,
   ): Promise<PortalDataScope> {
     const access = await this.accessPolicy.resolve(authorization.sourceHospitalRecordId);
-    return portalDataScope(authorization, access);
+    const department = this.store.resolveDepartmentScope
+      ? await this.store.resolveDepartmentScope(
+          authorization.communicationDeliveryId,
+          access.hospitalId,
+        )
+      : null;
+    return {
+      ...portalDataScope(authorization, access),
+      departmentKey: department?.key ?? null,
+      departmentName: department?.name ?? null,
+    };
   }
 }
 
@@ -1253,6 +1295,7 @@ function portalCasesSql(
       AND c."sourceHospitalRecordId" = ${scope.hospitalId}
       ${serviceOrderRetention}
       ${serviceOrderVisibility}
+      ${departmentCaseSql(scope, "SERVICE_ORDER")}
     UNION ALL
     SELECT 'INSPECTION'::text AS type, c.id AS "trackedCaseId",
       c."airtableRecordId" AS "sourceRecordId", c."deviceName", c.manufacturer, c.model,
@@ -1266,6 +1309,7 @@ function portalCasesSql(
       AND c."sourceHospitalRecordId" = ${scope.hospitalId}
       ${inspectionRetention}
       ${inspectionVisibility}
+      ${departmentCaseSql(scope, "INSPECTION")}
   `;
 }
 

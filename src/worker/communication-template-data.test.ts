@@ -342,27 +342,28 @@ describe("dynamic HTML and source mapping", () => {
     expect(row).toContain("12 min");
     expect(row).toContain('<tr class="device-row">');
     expect(row).toContain('class="device-card-table"');
-    expect(row).toContain('class="mobile-device-lp"');
-    expect(row).toContain('>LP 1</span>');
-    expect(row).toContain('class="device-mobile-time"');
+    expect(row).toContain('>LP 1</div>');
+    expect(row).toContain('class="device-card-time"');
     expect(row).toContain("Szacunkowy czas:</span> <strong");
     expect(row.match(/Łóżko &lt;OIOM&gt;/g)).toHaveLength(1);
     expect(row.match(/Nr zlecenia klienta: ADZP-381-353\/25/g)).toHaveLength(1);
-    expect(row).toContain("border-right:1px solid #D9E1EB");
+    expect(row).toContain("border:1px solid #D9E1EB");
     expect(row).toContain("font-size:12px");
     expect(row).toContain("&#183;");
     expect(row).not.toContain("Ă‚Â·");
   });
 
-  it("renders a three-column desktop row and a full-width nested-table mobile card", async () => {
+  it("renders a single full-width device card that needs no media queries", async () => {
     const row = String((await build(CommunicationScenario.INSPECTION_DATE_CONFIRMED))
       .variables.DEVICE_ROW_01);
-    expect(row).toMatch(/^<tr class="device-row"><td class="device-lp"/);
-    expect(row.match(/<td class="device-lp"/g)).toHaveLength(1);
-    expect(row.match(/<td class="device-details"/g)).toHaveLength(1);
-    expect(row.match(/<td class="device-time"/g)).toHaveLength(1);
+    expect(row).toMatch(/^<tr class="device-row"><td class="device-details" colspan="3"/);
+    expect(row.match(/<tr class="device-row">/g)).toHaveLength(1);
+    expect(row).not.toContain('class="device-lp"');
+    expect(row).not.toContain('class="device-time"');
+    expect(row).not.toContain("display:none");
+    expect(row).not.toContain("white-space:nowrap");
     expect(row).toContain('<table class="device-card-table" role="presentation" width="100%"');
-    expect(row).toMatch(/<tr class="device-mobile-time"[^>]*><td style="padding:10px 12px;border-top:1px solid #D9E1EB/);
+    expect(row).toMatch(/<td class="device-card-time" style="padding:10px 14px;border-top:1px solid #D9E1EB/);
     expect(row).not.toContain("overflow-x");
   });
 
@@ -389,24 +390,22 @@ describe("dynamic HTML and source mapping", () => {
     expect(row).toContain("Bardzo długa nazwa urządzenia diagnostycznego");
     expect(row).toContain("SERIALNUMBERWITHOUTNATURALBREAKPOINTS12345678901234567890");
     expect(row).toContain("overflow-wrap:anywhere;word-break:break-word");
-    expect(row).toContain("word-break:break-all");
+    expect(row).not.toContain("word-break:break-all");
   });
 
-  it("applies the shared card CSS to all three scheduling templates", () => {
+  it("uses a fluid single-column device list in all three scheduling templates", () => {
     for (const template of [
       "resend-templates/emma-inspection-proposed.html",
       "resend-templates/emma-inspection-confirmed.html",
       "resend-templates/emma-inspection-reminder.html",
     ]) {
       const html = readFileSync(template, "utf8");
-      const header = html.match(/<tr class="device-table-header">([\s\S]*?)<\/tr>/)?.[1];
-      expect(header?.match(/<td\b/g)).toHaveLength(3);
-      expect(html).toContain('@media only screen and (max-width:680px)');
-      expect(html).toContain('.device-mobile-time{display:table-row!important');
-      expect(html).toContain('.device-table-header,.device-lp,.device-time{display:none!important');
-      expect(html).toContain('.device-details{display:table-cell!important;width:100%!important');
-      expect(html).toContain('.device-list-table{width:100%!important;border:0!important;background:transparent!important;table-layout:fixed!important');
       expect(html).toContain('class="device-list-table"');
+      expect(html).not.toContain("device-table-header");
+      expect(html).not.toMatch(/class="device-list-table"[^>]*table-layout:fixed/);
+      expect(html).not.toMatch(/[;"]width:640px/);
+      expect(html).toContain("max-width:640px");
+      expect(html).not.toContain('width="49%"');
       expect(html).not.toContain("overflow-x");
     }
   });
@@ -433,12 +432,11 @@ describe("dynamic HTML and source mapping", () => {
       const row = String(scenario === CommunicationScenario.INSPECTION_COMPLETED
         ? payload.variables.RESULT_ROW_01 : payload.variables.DEVICE_ROW_01);
       if (scenario === CommunicationScenario.INSPECTION_COMPLETED) {
-        expect(row.match(/<td\b/g)).toHaveLength(3);
-        expect(row).not.toContain(`>${expected}</td></tr>`);
+        expect(row).not.toContain(`>${expected}</strong>`);
         expect(row).not.toContain("Szacunkowy czas");
         expect(row).not.toContain('class="rr-time"');
       } else {
-        expect(row).toContain(`>${expected}</td></tr>`);
+        expect(row).toContain(`Szacunkowy czas:</span> <strong style="font-weight:800;color:#1F2F49;">${expected}</strong>`);
       }
     }
   });
@@ -515,16 +513,16 @@ describe("dynamic HTML and source mapping", () => {
     expect(rows).toContain("Nr zlecenia klienta: ADZP-381-353/25");
   });
 
-  it("renders each completed inspection as a desktop row that becomes a full-width mobile block", async () => {
+  it("renders each completed inspection as a single full-width card with a visible status", async () => {
     const row = String((await build(CommunicationScenario.INSPECTION_COMPLETED)).variables.RESULT_ROW_01);
-    expect(row).toContain('<tr class="result-row">');
-    expect(row.match(/<td\b/g)).toHaveLength(3);
-    expect(row).toContain('class="rr-details"');
-    expect(row).toContain('class="mr-lp"');
-    expect(row).toContain('class="mr-status mr-defective"');
-    expect(row).toContain('class="mr-lp" style="display:none;mso-hide:all;">1. </span>Łóżko &lt;OIOM&gt;');
-    expect(row).toContain('Żółty Medical<span class="dr-separator"> &#183; </span><br class="mr-break"');
-    expect(row).toContain('SN: SN<span class="dr-separator"> &#183; </span><br class="mr-break"');
+    expect(row).toMatch(/^<tr class="result-row"><td class="rr-details" colspan="3"/);
+    expect(row).toContain('class="rs-status"');
+    expect(row).toContain(">NIESPRAWNY</span>");
+    expect(row).not.toContain("display:none");
+    expect(row).not.toContain("mr-status");
+    expect(row).toContain(">1. Łóżko &lt;OIOM&gt;</div>");
+    expect(row).toContain("Żółty Medical &#183; Przegląd · 2");
+    expect(row).toContain("SN: SN<br>Nr inw.: —");
     expect(row).toContain("Numer sprawy: 25793");
     expect(row).toContain("Nr zlecenia klienta: ADZP-381-353/25");
     expect(row).not.toContain("Szacunkowy czas");
@@ -533,35 +531,29 @@ describe("dynamic HTML and source mapping", () => {
     expect(row).not.toContain("min-width");
   });
 
-  it("switches the result table to mobile blocks only below 680px", () => {
+  it("uses a fluid single-column result list without fixed column widths", () => {
     const html = readFileSync("resend-templates/emma-inspection-summary.html", "utf8");
-    expect(html).toContain('@media only screen and (max-width:680px)');
-    expect(html).toContain('.desktop-result-header,.rr-lp,.rr-status{display:none!important');
-    expect(html).toContain('.rr-details{display:table-cell!important;width:100%!important');
-    expect(html).toContain('<tr class="desktop-result-header">');
+    expect(html).toContain('class="result-list-table"');
+    expect(html).not.toContain("desktop-result-header");
+    expect(html).not.toMatch(/width="(?:44|132)"/);
+    expect(html).not.toContain("table-layout:fixed");
     expect(html).not.toContain("min-width");
   });
 
-  it("renders exactly LP, device data and status columns in the summary table", () => {
+  it("keeps the summary free of duration columns", () => {
     const html = readFileSync("resend-templates/emma-inspection-summary.html", "utf8");
-    const header = html.match(/<tr class="desktop-result-header">([\s\S]*?)<\/tr>/)?.[1];
-    expect(header).toBeDefined();
-    expect(header?.match(/<td\b/g)).toHaveLength(3);
-    expect(header).toContain(">LP</td>");
-    expect(header).toContain(">URZĄDZENIE I DANE</td>");
-    expect(header).toContain(">STATUS</td>");
     expect(html).not.toContain("SZACUNKOWY CZAS");
     expect(html).not.toContain("mr-time");
     expect(html).not.toContain("rr-time");
   });
 
-  it("leaves estimated-time columns in the three scheduling templates", () => {
-    for (const template of [
-      "resend-templates/emma-inspection-proposed.html",
-      "resend-templates/emma-inspection-confirmed.html",
-      "resend-templates/emma-inspection-reminder.html",
+  it("keeps estimated time inside the device cards of the scheduling mails", async () => {
+    for (const scenario of [
+      CommunicationScenario.INSPECTION_DATE_PROPOSED,
+      CommunicationScenario.INSPECTION_DATE_CONFIRMED,
+      CommunicationScenario.INSPECTION_REMINDER,
     ]) {
-      expect(readFileSync(template, "utf8")).toMatch(/szacunkowy czas/i);
+      expect(String((await build(scenario)).variables.DEVICE_ROW_01)).toMatch(/szacunkowy czas/i);
     }
   });
 

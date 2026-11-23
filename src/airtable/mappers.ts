@@ -3,6 +3,7 @@ import {
   INSPECTION_FIELDS,
   SERVICE_ORDER_FIELDS,
 } from "./field-ids.js";
+import { departmentUnitKey, singleDepartmentUnit } from "./department.js";
 import { parseInspectionDueDate } from "./parse-inspection-due-date.js";
 import type { AirtableRecord } from "./types.js";
 import {
@@ -76,6 +77,9 @@ export function mapServiceOrder(record: AirtableRecord): MappedCase {
   const completedAt = parseAirtableDate(
     record.fields[SERVICE_ORDER_FIELDS.completedAt],
   );
+  const departmentUnit = singleDepartmentUnit(
+    record.fields[SERVICE_ORDER_FIELDS.departmentUnit],
+  );
   const values = {
     businessNumber: toBusinessNumber(record.fields[SERVICE_ORDER_FIELDS.businessNumber]),
     clientOrderNumber: toOptionalString(
@@ -106,6 +110,8 @@ export function mapServiceOrder(record: AirtableRecord): MappedCase {
       record.fields[SERVICE_ORDER_FIELDS.repairRecipientEmail],
     ),
     department: toOptionalString(record.fields[SERVICE_ORDER_FIELDS.department]),
+    departmentUnit,
+    departmentUnitKey: departmentUnitKey(departmentUnit),
     repairHeroLabel: toOptionalString(record.fields[SERVICE_ORDER_FIELDS.repairHeroLabel]),
     repairHeroDescription: toOptionalString(record.fields[SERVICE_ORDER_FIELDS.repairHeroDescription]),
     repairReporter: toOptionalString(record.fields[SERVICE_ORDER_FIELDS.repairReporter]),
@@ -121,6 +127,8 @@ export function mapServiceOrder(record: AirtableRecord): MappedCase {
 
   const {
     department: _department,
+    departmentUnit: _departmentUnit,
+    departmentUnitKey: _departmentUnitKey,
     productionYear: _productionYear,
     completedAt: _completedAt,
     reportedAtRaw: _reportedAtRaw,

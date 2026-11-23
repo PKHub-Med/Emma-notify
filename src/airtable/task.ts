@@ -1,3 +1,4 @@
+import { departmentUnitKey, emailList, singleDepartmentUnit } from "./department.js";
 import { TASK_FIELDS } from "./field-ids.js";
 import type { AirtableRecord } from "./types.js";
 import {
@@ -24,6 +25,12 @@ export type MappedTask = {
   emmaRecipientEmail: unknown;
   emmaCustomerStatus: string | null;
   emmaMailTemplate: string | null;
+  // Department scope (Oddziały) used to narrow the portal for department contacts.
+  departmentUnit: string | null;
+  departmentUnitKey: string | null;
+  departmentUnitEmails: string[];
+  selectedContactEmails: string[];
+  technicalDepartmentEmails: string[];
 };
 
 /**
@@ -63,6 +70,18 @@ export function mapTask(record: AirtableRecord): MappedTask {
     emmaMailTemplate: toOptionalString(
       record.fields[TASK_FIELDS.emmaMailTemplate],
     ),
+    ...taskDepartment(record),
+  };
+}
+
+function taskDepartment(record: AirtableRecord) {
+  const departmentUnit = singleDepartmentUnit(record.fields[TASK_FIELDS.departmentUnit]);
+  return {
+    departmentUnit,
+    departmentUnitKey: departmentUnitKey(departmentUnit),
+    departmentUnitEmails: emailList(record.fields[TASK_FIELDS.departmentUnitEmail]),
+    selectedContactEmails: emailList(record.fields[TASK_FIELDS.selectedContactEmailLookup]),
+    technicalDepartmentEmails: emailList(record.fields[TASK_FIELDS.technicalDepartmentEmail]),
   };
 }
 

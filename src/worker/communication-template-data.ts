@@ -687,21 +687,27 @@ export function buildUnsubscribeHtml(unsubscribeUrl: string): string {
   return `<span style="display:block;margin-top:4px;">Nie chcesz otrzymywać takich powiadomień? <a href="${htmlEscape(unsubscribeUrl)}" style="color:#66758A;text-decoration:underline;">Wyłącz otrzymywanie tych maili</a>.</span>`;
 }
 
+// Single-column device cards. They do not depend on CSS media queries, because
+// several mobile mail apps ignore <style>; a fixed multi-column table would then
+// squeeze the device column and break words letter by letter. colspan="3" keeps
+// the rows valid inside older three-column templates as well.
 function deviceRows(inspections: TemplateInspection[]): string[] {
   return inspections.map((inspection, index) => {
-    const bottomBorder = index < inspections.length - 1
-      ? "border-bottom:1px solid #D9E1EB;"
-      : "";
-    const details = [
-      `<div style="font-size:14px;line-height:20px;font-weight:800;color:#1F2F49;"><span class="mobile-device-lp" style="display:none;mso-hide:all;">LP ${index + 1}</span>${htmlEscape(display(inspection.deviceName, "Urządzenie"))}</div>`,
-      `<div style="margin-top:3px;font-size:12px;line-height:18px;color:#34445D;">${htmlEscape(display(inspection.manufacturer, "—"))} &#183; ${htmlEscape(display(inspection.model, "—"))}</div>`,
-      `<div style="margin-top:4px;font-size:12px;line-height:18px;color:#66758A;word-break:break-all;">SN: ${htmlEscape(display(inspection.serialNumber, "—"))} &#183; Nr inw.: ${htmlEscape(display(inspection.inventoryNumber, "—"))}<br>Numer sprawy: ${htmlEscape(display(inspection.businessNumber, "—"))}<br>Nr zlecenia klienta: ${htmlEscape(display(inspection.clientOrderNumber, "brak numeru"))}</div>`,
-    ].join("");
     const duration = htmlEscape(formatDuration(inspection.estimatedDurationSeconds));
-    const card = `<table class="device-card-table" role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border-collapse:separate;border-spacing:0;table-layout:fixed;"><tr><td class="device-card-details" style="padding:0;vertical-align:top;">${details}</td></tr><tr class="device-mobile-time" style="display:none;mso-hide:all;"><td style="padding:10px 12px;border-top:1px solid #D9E1EB;background:#F7F9FC;font-size:12px;line-height:18px;color:#1F2F49;"><span style="font-weight:700;color:#66758A;">Szacunkowy czas:</span> <strong style="font-weight:800;color:#1F2F49;">${duration}</strong></td></tr></table>`;
-    return `<tr class="device-row"><td class="device-lp" width="44" style="width:44px;padding:13px 8px;${bottomBorder}border-right:1px solid #D9E1EB;text-align:center;vertical-align:middle;font-size:12px;line-height:18px;color:#34445D;">${index + 1}</td><td class="device-details" style="padding:13px 12px;${bottomBorder}border-right:1px solid #D9E1EB;vertical-align:top;overflow-wrap:anywhere;word-break:break-word;">${card}</td><td class="device-time" width="145" style="width:145px;padding:13px 8px;${bottomBorder}text-align:center;vertical-align:middle;font-size:12px;line-height:18px;font-weight:700;color:#1F2F49;white-space:nowrap;">${duration}</td></tr>`;
+    const details = [
+      `<div style="font-size:11px;line-height:16px;font-weight:800;color:#66758A;">LP ${index + 1}</div>`,
+      `<div style="margin-top:3px;font-size:14px;line-height:20px;font-weight:800;color:#1F2F49;">${htmlEscape(display(inspection.deviceName, "Urządzenie"))}</div>`,
+      `<div style="margin-top:3px;font-size:12px;line-height:18px;color:#34445D;">${htmlEscape(display(inspection.manufacturer, "—"))} &#183; ${htmlEscape(display(inspection.model, "—"))}</div>`,
+      `<div style="margin-top:4px;font-size:12px;line-height:18px;color:#66758A;">SN: ${htmlEscape(display(inspection.serialNumber, "—"))}<br>Nr inw.: ${htmlEscape(display(inspection.inventoryNumber, "—"))}<br>Numer sprawy: ${htmlEscape(display(inspection.businessNumber, "—"))}<br>Nr zlecenia klienta: ${htmlEscape(display(inspection.clientOrderNumber, "brak numeru"))}</div>`,
+    ].join("");
+    const card = `<table class="device-card-table" role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="width:100%;border:1px solid #D9E1EB;border-collapse:separate;border-spacing:0;background:#FFFFFF;"><tr><td class="device-card-details" style="padding:13px 14px;vertical-align:top;${CARD_WRAP}">${details}</td></tr><tr><td class="device-card-time" style="padding:10px 14px;border-top:1px solid #D9E1EB;background:#F7F9FC;font-size:12px;line-height:18px;color:#1F2F49;"><span style="font-weight:700;color:#66758A;">Szacunkowy czas:</span> <strong style="font-weight:800;color:#1F2F49;">${duration}</strong></td></tr></table>`;
+    return `<tr class="device-row"><td class="device-details" colspan="3" style="padding:0 0 8px;vertical-align:top;">${card}</td></tr>`;
   });
 }
+
+// The card always spans the full width, so "anywhere" only breaks a word that
+// cannot fit on its own (e.g. a long serial number) and never squeezes text.
+const CARD_WRAP = "overflow-wrap:anywhere;word-break:break-word;word-wrap:break-word;";
 
 function repairRows(
   items: Array<{
@@ -733,7 +739,7 @@ function repairRows(
     const identifier = repairIdentifier(item.serialNumber, item.inventoryNumber);
     const details = `<div style="font-size:14px;line-height:20px;font-weight:800;color:#1F2F49;">${htmlEscape(item.deviceName)}</div><div style="margin-top:3px;font-size:12px;line-height:18px;color:#34445D;">Producent: ${htmlEscape(item.manufacturer)}<br>Model: ${htmlEscape(item.model)}</div><div style="margin-top:4px;font-size:12px;line-height:18px;color:#66758A;">${identifier.label}: ${htmlEscape(identifier.value)}<br>Oddział: ${htmlEscape(item.department)}<br>Numer sprawy: ${htmlEscape(item.caseNumber)}<br>Nr zlecenia klienta: ${htmlEscape(item.clientOrderNumber)}</div>${statuses}${waiting}`;
 
-    return `<tr><td style="padding:14px 8px;${bottomBorder}border-right:1px solid #D9E1EB;text-align:center;vertical-align:middle;font-size:12px;line-height:18px;color:#34445D;">${index + 1}</td><td style="padding:14px 12px;${bottomBorder}vertical-align:top;">${details}</td></tr>`;
+    return `<tr><td style="padding:14px 8px;${bottomBorder}border-right:1px solid #D9E1EB;text-align:center;vertical-align:middle;font-size:12px;line-height:18px;color:#34445D;">${index + 1}</td><td style="padding:14px 12px;${bottomBorder}vertical-align:top;${CARD_WRAP}">${details}</td></tr>`;
   });
 }
 
@@ -761,9 +767,6 @@ function resultRows(
   items: Array<{ inspection: TemplateInspection; result: InspectionResult }>,
 ): string[] {
   return items.map(({ inspection, result }, index) => {
-    const bottomBorder = index < items.length - 1
-      ? "border-bottom:1px solid #D9E1EB;"
-      : "";
     const deviceName = htmlEscape(display(inspection.deviceName, "Urządzenie"));
     const manufacturer = htmlEscape(display(inspection.manufacturer, "—"));
     const model = htmlEscape(display(inspection.model, "—"));
@@ -772,9 +775,9 @@ function resultRows(
     const businessNumber = htmlEscape(display(inspection.businessNumber, "—"));
     const clientOrderNumber = htmlEscape(display(inspection.clientOrderNumber, "brak numeru"));
     const badge = statusBadge(result.label, inspectionResultTone(result.key));
-    const mobileBadge = `<span class="mr-status mr-${result.key.toLowerCase()}" style="display:none;mso-hide:all;">${htmlEscape(result.label)}</span>`;
-    const details = `<div style="font-size:14px;line-height:20px;font-weight:800;color:#1F2F49;">${mobileBadge}<span class="mr-lp" style="display:none;mso-hide:all;">${index + 1}. </span>${deviceName}</div><div style="margin-top:3px;font-size:12px;line-height:18px;color:#34445D;">${manufacturer}<span class="dr-separator"> &#183; </span><br class="mr-break" style="display:none;mso-hide:all;">${model}</div><div style="margin-top:4px;font-size:12px;line-height:18px;color:#66758A;">SN: ${serialNumber}<span class="dr-separator"> &#183; </span><br class="mr-break" style="display:none;mso-hide:all;">Nr inw.: ${inventoryNumber}<br>Numer sprawy: ${businessNumber}<br>Nr zlecenia klienta: ${clientOrderNumber}</div>`;
-    return `<tr class="result-row"><td class="rr-lp" width="44" style="width:44px;padding:13px 8px;${bottomBorder}border-right:1px solid #D9E1EB;text-align:center;vertical-align:middle;font-size:12px;line-height:18px;color:#34445D;">${index + 1}</td><td class="rr-details" style="padding:13px 12px;${bottomBorder}border-right:1px solid #D9E1EB;vertical-align:top;">${details}</td><td class="rr-status" width="132" style="width:132px;padding:13px 10px;${bottomBorder}text-align:center;vertical-align:middle;">${badge}</td></tr>`;
+    const details = `<div class="rs-status">${badge}</div><div style="margin-top:8px;font-size:14px;line-height:20px;font-weight:800;color:#1F2F49;">${index + 1}. ${deviceName}</div><div style="margin-top:3px;font-size:12px;line-height:18px;color:#34445D;">${manufacturer} &#183; ${model}</div><div style="margin-top:4px;font-size:12px;line-height:18px;color:#66758A;">SN: ${serialNumber}<br>Nr inw.: ${inventoryNumber}<br>Numer sprawy: ${businessNumber}<br>Nr zlecenia klienta: ${clientOrderNumber}</div>`;
+    const card = `<table class="result-card-table" role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="width:100%;border:1px solid #D9E1EB;border-collapse:separate;border-spacing:0;background:#FFFFFF;"><tr><td style="padding:13px 14px;vertical-align:top;${CARD_WRAP}">${details}</td></tr></table>`;
+    return `<tr class="result-row"><td class="rr-details" colspan="3" style="padding:0 0 8px;vertical-align:top;">${card}</td></tr>`;
   });
 }
 
@@ -802,7 +805,7 @@ function statusBadge(
   label: string,
   tone: { background: string; color: string; border: string },
 ): string {
-  return `<span style="display:inline-block;padding:5px 8px;border-radius:999px;border:1px solid ${tone.border};background:${tone.background};color:${tone.color};font-size:12px;line-height:18px;font-weight:800;white-space:nowrap;">${htmlEscape(label)}</span>`;
+  return `<span style="display:inline-block;padding:5px 8px;border-radius:999px;border:1px solid ${tone.border};background:${tone.background};color:${tone.color};font-size:12px;line-height:18px;font-weight:800;">${htmlEscape(label)}</span>`;
 }
 
 function repairStatusTone(value: string) {

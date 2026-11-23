@@ -12,7 +12,107 @@ export type ResolvedPortalAccess = {
 
 export type PortalVisibilityScope = ResolvedPortalAccess & {
   communicationDeliveryId?: string;
+  /**
+   * Set when the link was sent to a department contact (e.g. the department
+   * nurse) instead of the hospital technical department. Every case, device
+   * and file is then limited to that one department, on any access level.
+   */
+  departmentKey?: string | null;
 };
+
+/**
+ * Narrows cases to one department (Oddziały). Repairs carry the department in
+ * their own snapshot; inspections belong to a department through the Task that
+ * schedules them. Without a department key nothing is narrowed.
+ */
+export function departmentCaseSql(
+  access: PortalVisibilityScope,
+  caseType: "SERVICE_ORDER" | "INSPECTION",
+): Prisma.Sql {
+  if (!access.departmentKey) return Prisma.empty;
+  if (caseType === "SERVICE_ORDER") {
+    return Prisma.sql`AND c."sourceSnapshot"->>'departmentUnitKey' = ${access.departmentKey}`;
+  }
+  return Prisma.sql`AND EXISTS (
+    SELECT 1 FROM "TrackedTask" department_task
+    WHERE department_task.active = true
+      AND department_task."sourceHospitalRecordId" = ${access.hospitalId}
+      AND department_task."linkedInspectionRecordIds" ? c."airtableRecordId"
+      AND department_task."sourceSnapshot"->>'departmentUnitKey' = ${access.departmentKey}
+  )`;
+}
+
+type DepartmentScopeSource = Pick<PrismaClient, "communicationDelivery" | "trackedTask">;
+
+/**
+ * Department scope of a portal link. A link is department-scoped only when the
+ * email went to a Task's department contact: the recipient is the selected
+ * contact or the department e-mail and is not the hospital technical
+ * department. Repairs, Tiemed fallbacks and technical-department recipients
+ * keep the hospital-wide view.
+ */
+export type PortalDepartmentScope = { key: string; name: string | null };
+
+export async function resolvePortalDepartmentScope(
+  prisma: DepartmentScopeSource,
+  communicationDeliveryId: string | undefined,
+  hospitalId: string,
+): Promise<PortalDepartmentScope | null> {
+  // Lightweight test doubles may omit these delegates; treat as hospital-wide.
+  if (!communicationDeliveryId ||
+    typeof prisma.communicationDelivery?.findUnique !== "function" ||
+    typeof prisma.trackedTask?.findUnique !== "function") return null;
+  const delivery = await prisma.communicationDelivery.findUnique({
+    where: { id: communicationDeliveryId },
+    select: {
+      communicationEvent: { select: { sourceEntityType: true, sourceRecordId: true } },
+      communicationEventRecipient: {
+        select: { recipientType: true, normalizedEmail: true, email: true },
+      },
+    },
+  }) as {
+    communicationEvent?: { sourceEntityType?: string; sourceRecordId?: string } | null;
+    communicationEventRecipient?: {
+      recipientType?: string; normalizedEmail?: string | null; email?: string | null;
+    } | null;
+  } | null;
+  const event = delivery?.communicationEvent;
+  const eventRecipient = delivery?.communicationEventRecipient;
+  if (event?.sourceEntityType !== "TASK" || !event.sourceRecordId ||
+    eventRecipient?.recipientType !== "CLIENT") return null;
+  const recipient = (eventRecipient.normalizedEmail ?? eventRecipient.email ?? "")
+    .trim().toLowerCase();
+  if (!recipient) return null;
+  const task = await prisma.trackedTask.findUnique({
+    where: { airtableRecordId: event.sourceRecordId },
+    select: { sourceHospitalRecordId: true, sourceSnapshot: true },
+  }) as { sourceHospitalRecordId: string | null; sourceSnapshot: unknown } | null;
+  if (!task || task.sourceHospitalRecordId !== hospitalId) return null;
+  const snapshot = isRecord(task.sourceSnapshot) ? task.sourceSnapshot : {};
+  const key = typeof snapshot.departmentUnitKey === "string" && snapshot.departmentUnitKey.trim()
+    ? snapshot.departmentUnitKey : null;
+  if (!key) return null;
+  if (snapshotEmails(snapshot.technicalDepartmentEmails).includes(recipient)) return null;
+  const departmentContacts = [
+    ...snapshotEmails(snapshot.selectedContactEmails),
+    ...snapshotEmails(snapshot.departmentUnitEmails),
+  ];
+  if (!departmentContacts.includes(recipient)) return null;
+  const name = typeof snapshot.departmentUnit === "string" && snapshot.departmentUnit.trim()
+    ? snapshot.departmentUnit.trim() : null;
+  return { key, name };
+}
+
+function snapshotEmails(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string")
+      .map((item) => item.trim().toLowerCase())
+    : [];
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
 
 export interface PortalAccessPolicy {
   resolve(sourceHospitalRecordId: string): Promise<ResolvedPortalAccess>;
@@ -37,7 +137,8 @@ export function visibleCaseSql(
   access: PortalVisibilityScope,
   caseType: "SERVICE_ORDER" | "INSPECTION",
 ): Prisma.Sql {
-  if (access.accessLevel === PortalAccessLevel.FULL) return Prisma.empty;
+  const department = departmentCaseSql(access, caseType);
+  if (access.accessLevel === PortalAccessLevel.FULL) return department;
   const sourceMatch = caseType === "SERVICE_ORDER"
     ? Prisma.sql`(
         communication_event."sourceEntityType" = 'SERVICE_ORDER'
@@ -84,11 +185,11 @@ export function visibleCaseSql(
         AND ${sourceMatch}
     )
     ${grantContext}
-  )`;
+  ) ${department}`;
 }
 
 export function visibleDeviceSql(access: PortalVisibilityScope): Prisma.Sql {
-  if (access.accessLevel === PortalAccessLevel.FULL) return Prisma.empty;
+  if (access.accessLevel === PortalAccessLevel.FULL && !access.departmentKey) return Prisma.empty;
   return Prisma.sql`AND EXISTS (
     SELECT 1
     FROM "TrackedCaseDevice" visible_device_link

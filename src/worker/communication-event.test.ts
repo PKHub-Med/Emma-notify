@@ -486,6 +486,11 @@ function mappedTask(): MappedTask {
     emmaRecipientEmail: ["task@hospital.pl"],
     emmaCustomerStatus: "Ustalono termin wizyty",
     emmaMailTemplate: "Przegląd-informacja_o_umówionej_wizycie",
+    departmentUnit: null,
+    departmentUnitKey: null,
+    departmentUnitEmails: [],
+    selectedContactEmails: [],
+    technicalDepartmentEmails: [],
   };
 }
 
