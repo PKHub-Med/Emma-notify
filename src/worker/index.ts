@@ -72,6 +72,11 @@ import {
   PrismaInspectionReconcileStore,
   runInspectionReconcile,
 } from "./inspection-reconcile.js";
+import { AirtableWriter } from "../airtable/writer.js";
+import {
+  PrismaAirtableFeedbackStore,
+  runAirtableFeedbackOnce,
+} from "./airtable-feedback.js";
 
 const HEARTBEAT_INTERVAL_MS = 30_000;
 const DELIVERY_PLANNER_INTERVAL_MS = 15_000;
@@ -149,6 +154,14 @@ const assetDownloadSource = config.communicationAssetsEnabled
   ? new AirtableAttachmentDownloadSource(airtable) : undefined;
 const caseAttachmentSyncStore = config.communicationAssetsEnabled
   ? new PrismaCaseAttachmentSyncStore(prisma) : undefined;
+const airtableFeedbackStore = config.airtableFeedbackEnabled
+  ? new PrismaAirtableFeedbackStore(prisma) : undefined;
+const airtableFeedbackWriter = config.airtableFeedbackEnabled && config.airtableWritePat
+  ? new AirtableWriter({
+      baseId: config.airtableBaseId,
+      personalAccessToken: config.airtableWritePat,
+    })
+  : undefined;
 let heartbeatTimer: NodeJS.Timeout | undefined;
 let incrementalTimer: NodeJS.Timeout | undefined;
 let taskTimer: NodeJS.Timeout | undefined;
@@ -163,6 +176,7 @@ let communicationEmailTimer: NodeJS.Timeout | undefined;
 let assetProcessorTimer: NodeJS.Timeout | undefined;
 let portalRefreshTimer: NodeJS.Timeout | undefined;
 let inspectionReconcileTimer: NodeJS.Timeout | undefined;
+let airtableFeedbackTimer: NodeJS.Timeout | undefined;
 let incrementalRunning = false;
 let taskRunning = false;
 let hospitalRunning = false;
@@ -173,6 +187,7 @@ let communicationEmailRunning = false;
 let assetProcessorRunning = false;
 let portalRefreshRunning = false;
 let inspectionReconcileRunning = false;
+let airtableFeedbackRunning = false;
 let shuttingDown = false;
 
 async function writeHeartbeat(): Promise<void> {
@@ -208,6 +223,10 @@ async function start(): Promise<void> {
     `COMMUNICATION_EMAILS_STARTUP enabled=${config.communicationEmailsEnabled} ` +
     `sending=${config.communicationEmailsEnabled ? "ENABLED" : "BLOCKED"} ` +
     `killSwitch=COMMUNICATION_EMAILS_ENABLED`,
+  );
+  console.info(
+    `AIRTABLE_FEEDBACK_STARTUP enabled=${Boolean(airtableFeedbackStore && airtableFeedbackWriter)} ` +
+    `token=${config.airtableWritePat ? "SET" : "MISSING"} killSwitch=AIRTABLE_FEEDBACK_ENABLED`,
   );
   await runCommunicationDeliveryCleanup({
     store: communicationDeliveryCleanupStore,
@@ -294,6 +313,11 @@ function startPollingLoops(): void {
       void pollInspectionReconcile();
     }, config.airtableInspectionReconcileSeconds * 1_000);
   }
+  if (airtableFeedbackStore && airtableFeedbackWriter) {
+    airtableFeedbackTimer = setInterval(() => {
+      void pollAirtableFeedback();
+    }, config.airtableFeedbackSeconds * 1_000);
+  }
   if (config.communicationAssetsEnabled) {
     assetProcessorTimer = setInterval(() => {
       void pollAssetProcessor();
@@ -308,6 +332,26 @@ function startPollingLoops(): void {
   if (config.communicationAssetsEnabled) void pollAssetProcessor();
   void pollCommunicationEmail();
   void pollPortalRefresh();
+  void pollAirtableFeedback();
+}
+
+async function pollAirtableFeedback(): Promise<void> {
+  if (airtableFeedbackRunning || shuttingDown || !airtableFeedbackStore ||
+    !airtableFeedbackWriter) return;
+  airtableFeedbackRunning = true;
+  try {
+    await runAirtableFeedbackOnce({
+      store: airtableFeedbackStore,
+      writer: airtableFeedbackWriter,
+      timeZone: config.communicationTimezone,
+      log: (message) => console.info(message),
+    });
+  } catch {
+    // Write-back is best effort and never blocks communication; retry next cycle.
+    console.error("AIRTABLE_FEEDBACK_POLL_FAILED errorCode=INTERNAL_ERROR");
+  } finally {
+    airtableFeedbackRunning = false;
+  }
 }
 
 async function pollInspectionReconcile(): Promise<void> {
@@ -572,6 +616,7 @@ async function shutdown(signal: NodeJS.Signals): Promise<void> {
   if (assetProcessorTimer) clearInterval(assetProcessorTimer);
   if (portalRefreshTimer) clearInterval(portalRefreshTimer);
   if (inspectionReconcileTimer) clearInterval(inspectionReconcileTimer);
+  if (airtableFeedbackTimer) clearInterval(airtableFeedbackTimer);
   await prisma.$disconnect();
   console.info("[worker] Shutdown complete");
 }

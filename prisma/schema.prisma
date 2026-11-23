@@ -833,3 +833,30 @@ model WorkerState {
   communicationDeliveryCleanupAt  DateTime?
   updatedAt        DateTime @updatedAt
 }
+
+// Write-back of communication outcome to Airtable (local, non-synced columns).
+// AirtableFeedbackRecord is a small outbox: one row per Airtable record whose
+// "EMMA: ostatni mail" columns must be recomputed and written.
+model AirtableFeedbackRecord {
+  id            String    @id @default(cuid())
+  tableId       String
+  recordId      String
+  pending       Boolean   @default(true)
+  dirtyAt       DateTime  @default(now())
+  fingerprint   String?
+  lastWrittenAt DateTime?
+  attemptCount  Int       @default(0)
+  nextAttemptAt DateTime?
+  lastError     String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@unique([tableId, recordId])
+  @@index([pending, nextAttemptAt, dirtyAt])
+}
+
+model AirtableFeedbackState {
+  id        String   @id
+  cursorAt  DateTime
+  updatedAt DateTime @updatedAt
+}

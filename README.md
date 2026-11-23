@@ -10,7 +10,9 @@ Jedno repozytorium dostarcza dwa niezależne procesy Railway:
 - **Worker** — proces wykonujący jednorazowy baseline Airtable, zapisujący stan instancji `main` i aktualizujący heartbeat co 30 sekund.
 - **PostgreSQL** — wspólna baza danych zarządzana przez Prisma. Migracje nie uruchamiają się automatycznie przy starcie procesów.
 
-Airtable jest źródłem bezwzględnie **READ ONLY**. Klient wykonuje wyłącznie zapytania `GET`; aplikacja nigdy nie zapisuje danych do Airtable.
+Airtable jest źródłem danych **READ ONLY** dla synchronizacji: `AirtableClient` z tokenem `AIRTABLE_PAT` wykonuje wyłącznie zapytania `GET`.
+
+Jedynym wyjątkiem jest zapis statusu komunikacji (`src/worker/airtable-feedback.ts`). Osobny `AirtableWriter` z tokenem `AIRTABLE_WRITE_PAT` zapisuje wyłącznie kolumny „EMMA: ostatni mail – typ / status / data / odbiorca / powód” i „EMMA: historia maili” (5 ostatnich wpisów) w tabelach Zlecenia serwisowe, Zadania i Przeglądy. Wartości są zawsze wyliczane z PostgreSQL (`CommunicationDelivery`, odbiorcy, blokujące `CommunicationDiagnostic`), a kolejka `AirtableFeedbackRecord` ponawia nieudane zapisy. Kolumny są lokalne w bazie „Emma neu”, więc nie zmieniają synchronizowanego „Last mod emma”, i nigdy nie trafiają do list pól synchronizacji. Bez `AIRTABLE_WRITE_PAT` albo z `AIRTABLE_FEEDBACK_ENABLED=false` zapis jest wyłączony; błąd zapisu nigdy nie blokuje wysyłki maili. Po pierwszym uruchomieniu statusy pojawiają się tylko dla nowych zmian (bez uzupełniania historii).
 
 ## Baseline Airtable
 
