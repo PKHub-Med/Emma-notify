@@ -6,6 +6,7 @@ import {
   mapInspection,
   mapServiceOrder,
   parseRepairRecipientEmail,
+  readRepairRecipientEmail,
 } from "./mappers.js";
 import type { AirtableRecord } from "./types.js";
 import { toBusinessNumber } from "./values.js";
@@ -35,6 +36,24 @@ describe("case mappers", () => {
   it("rejects multiple distinct EMMA: mail DT addresses as ambiguous", () => {
     expect(() => parseRepairRecipientEmail(["one@example.pl", "two@example.pl"]))
       .toThrow(AmbiguousRepairRecipientEmailError);
+  });
+
+  it("maps a service order with several EMMA: mail DT addresses without throwing", () => {
+    const mapped = mapServiceOrder(record("recService", {
+      [SERVICE_ORDER_FIELDS.businessNumber]: 25381,
+      [SERVICE_ORDER_FIELDS.repairRecipientEmail]: ["one@example.pl>", "two@example.pl"],
+    }));
+    expect(mapped.repairRecipientEmail).toBeNull();
+    expect(mapped.sourceSnapshot.repairRecipientEmailIssue).toBe("AMBIGUOUS");
+    expect(mapped).not.toHaveProperty("repairRecipientEmailIssue");
+  });
+
+  it("reads EMMA: mail DT without throwing and reports ambiguity", () => {
+    expect(readRepairRecipientEmail(["one@example.pl", "two@example.pl"]))
+      .toEqual({ email: null, issue: "AMBIGUOUS" });
+    expect(readRepairRecipientEmail(["one@example.pl", " ONE@example.pl "]))
+      .toEqual({ email: "one@example.pl", issue: null });
+    expect(readRepairRecipientEmail(null)).toEqual({ email: null, issue: null });
   });
 
   it("accepts duplicate representations of the same EMMA: mail DT address", () => {
