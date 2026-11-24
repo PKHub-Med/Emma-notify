@@ -247,21 +247,35 @@ async function syncEntity(
 
     const deviceRecordIds = new Set<string>();
     for (const record of records) {
-      const mappedCase = await processRecord(
-        definition,
-        record,
-        airtable,
-        store,
-        options.quietMinutes,
-        options.legacyNotificationsEnabled,
-        now(),
-        contactCache,
-        stats,
-        communicationStore,
-        diagnostics,
-        serviceCommunicationEnabled,
-        log,
-      );
+      let mappedCase: MappedCase;
+      try {
+        mappedCase = await processRecord(
+          definition,
+          record,
+          airtable,
+          store,
+          options.quietMinutes,
+          options.legacyNotificationsEnabled,
+          now(),
+          contactCache,
+          stats,
+          communicationStore,
+          diagnostics,
+          serviceCommunicationEnabled,
+          log,
+        );
+      } catch (error: unknown) {
+        // One record with unreadable data must not block every other record
+        // (and the inspection stage after it). Infrastructure errors (database,
+        // Airtable API) still fail the whole poll so it is retried.
+        if (!(error instanceof IncrementalRecordMappingError)) throw error;
+        log?.(
+          "INCREMENTAL_RECORD_SKIPPED " +
+          `entityType=${error.entityType} sourceRecordId=${error.recordId} ` +
+          `errorName=${errorName(error.cause)} errorCode=${errorCode(error.cause)}`,
+        );
+        continue;
+      }
       if (mappedCase.deviceAirtableIds.length === 0) {
         log?.(
           "DEVICE_TARGETED_REFRESH_SKIPPED reason=DEVICE_RECORD_ID_MISSING " +
@@ -330,8 +344,20 @@ async function processRecord(
   log: ((message: string) => void) | undefined,
 ): Promise<MappedCase> {
   const entityStage = definition.entityType as IncrementalSyncStage;
-  const mappedCase = await atIncrementalStage(entityStage, async () =>
-    definition.map(record));
+  let mappedCase: MappedCase;
+  try {
+    mappedCase = definition.map(record);
+  } catch (error: unknown) {
+    throw new IncrementalRecordMappingError(definition.entityType, record.id, error);
+  }
+  if (mappedCase.sourceSnapshot.repairRecipientEmailIssue === "AMBIGUOUS") {
+    log?.(
+      "REPAIR_RECIPIENT_EMAIL_AMBIGUOUS " +
+      `sourceRecordId=${mappedCase.airtableRecordId} ` +
+      `businessNumber=${mappedCase.businessNumber ?? "none"} ` +
+      "action=SYNCED_WITHOUT_RECIPIENT",
+    );
+  }
   const recipients = await atIncrementalStage(entityStage, () =>
     resolveCurrentRecipients(mappedCase, airtable, contactCache));
   const storedCase = await atIncrementalStage("DB", () => store.findCase(mappedCase));
@@ -439,6 +465,29 @@ async function resolveCurrentRecipients(
   }
   return contactRecordIds.map((contactRecordId) =>
     resolveRecipient(contactRecordId, cache.get(contactRecordId)));
+}
+
+/** A record whose Airtable data cannot be mapped; skipped instead of failing the poll. */
+export class IncrementalRecordMappingError extends IncrementalSyncStageError {
+  constructor(
+    readonly entityType: IncrementalEntityType,
+    readonly recordId: string,
+    cause: unknown,
+  ) {
+    super(entityType as IncrementalSyncStage, cause);
+    this.name = "IncrementalRecordMappingError";
+  }
+}
+
+function errorName(error: unknown): string {
+  return error instanceof Error ? error.name : typeof error;
+}
+
+function errorCode(error: unknown): string {
+  const code = typeof error === "object" && error !== null && "code" in error
+    ? (error as { code?: unknown }).code
+    : null;
+  return typeof code === "string" && /^[A-Z0-9_]+$/.test(code) ? code : "none";
 }
 
 function emptyStats(): IncrementalSyncStats {

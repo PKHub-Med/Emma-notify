@@ -80,6 +80,9 @@ export function mapServiceOrder(record: AirtableRecord): MappedCase {
   const departmentUnit = singleDepartmentUnit(
     record.fields[SERVICE_ORDER_FIELDS.departmentUnit],
   );
+  const recipient = readRepairRecipientEmail(
+    record.fields[SERVICE_ORDER_FIELDS.repairRecipientEmail],
+  );
   const values = {
     businessNumber: toBusinessNumber(record.fields[SERVICE_ORDER_FIELDS.businessNumber]),
     clientOrderNumber: toOptionalString(
@@ -106,9 +109,12 @@ export function mapServiceOrder(record: AirtableRecord): MappedCase {
     faultDescription: toOptionalString(
       record.fields[SERVICE_ORDER_FIELDS.faultDescription],
     ),
-    repairRecipientEmail: parseRepairRecipientEmail(
-      record.fields[SERVICE_ORDER_FIELDS.repairRecipientEmail],
-    ),
+    // Several different addresses must not stop synchronization: the case is
+    // stored without a recipient and the issue is kept in the snapshot. Sending
+    // re-reads Airtable and blocks only this e-mail with
+    // REPAIR_RECIPIENT_EMAIL_AMBIGUOUS (visible in the Airtable status columns).
+    repairRecipientEmail: recipient.email,
+    repairRecipientEmailIssue: recipient.issue,
     department: toOptionalString(record.fields[SERVICE_ORDER_FIELDS.department]),
     departmentUnit,
     departmentUnitKey: departmentUnitKey(departmentUnit),
@@ -129,6 +135,7 @@ export function mapServiceOrder(record: AirtableRecord): MappedCase {
     department: _department,
     departmentUnit: _departmentUnit,
     departmentUnitKey: _departmentUnitKey,
+    repairRecipientEmailIssue: _repairRecipientEmailIssue,
     productionYear: _productionYear,
     completedAt: _completedAt,
     reportedAtRaw: _reportedAtRaw,
@@ -317,6 +324,26 @@ export function toEstimatedDurationSeconds(value: unknown): number | null {
   if (typeof value !== "string" || !value.trim()) return null;
   const parsed = Number(value.trim().replace(",", "."));
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+}
+
+export type RepairRecipientEmailIssue = "AMBIGUOUS";
+
+/**
+ * Non-throwing variant of parseRepairRecipientEmail for synchronization: an
+ * ambiguous `EMMA: mail DT` yields no address plus an issue marker.
+ */
+export function readRepairRecipientEmail(value: unknown): {
+  email: string | null;
+  issue: RepairRecipientEmailIssue | null;
+} {
+  try {
+    return { email: parseRepairRecipientEmail(value), issue: null };
+  } catch (error) {
+    if (error instanceof AmbiguousRepairRecipientEmailError) {
+      return { email: null, issue: "AMBIGUOUS" };
+    }
+    throw error;
+  }
 }
 
 export class AmbiguousRepairRecipientEmailError extends Error {

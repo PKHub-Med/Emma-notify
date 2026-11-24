@@ -323,6 +323,44 @@ describe("incremental status sync", () => {
     expect(deviceStore.upsertCalls).toEqual(["recDevice"]);
   });
 
+  it("syncs a service order with several EMMA: mail DT addresses without blocking other records", async () => {
+    const source = new FakeAirtable();
+    const store = new MemoryStore();
+    const logs: string[] = [];
+    source.serviceOrders = [
+      serviceRecord("recAmbiguous", "A", [], date(0), {
+        [SERVICE_ORDER_FIELDS.businessNumber]: 25381,
+        [SERVICE_ORDER_FIELDS.repairRecipientEmail]: [
+          "inzynieria@szpital.pl>", "serwis@medim.pl",
+        ],
+      }),
+      serviceRecord("recNext", "B", ["recContact"]),
+    ];
+    source.inspections = [inspectionRecord("recInspection", "SPRAWNY")];
+
+    await runIncrementalSync({
+      airtable: source,
+      store,
+      deviceStore: new MemoryDeviceStore(),
+      options: { overlapSeconds: 120, quietMinutes: 1, legacyNotificationsEnabled: false },
+      now: () => date(0),
+      log: (message) => logs.push(message),
+    });
+
+    expect(store.cases.get(caseKey(CaseType.SERVICE_ORDER, "recAmbiguous")))
+      .toMatchObject({ currentStatus: "A" });
+    expect(store.cases.get(caseKey(CaseType.SERVICE_ORDER, "recNext")))
+      .toMatchObject({ currentStatus: "B" });
+    expect(store.cases.get(caseKey(CaseType.INSPECTION, "recInspection"))).toBeDefined();
+    expect(store.checkpoints.get(SyncEntityType.SERVICE_ORDER)).toEqual(date(0));
+    expect(store.checkpoints.get(SyncEntityType.INSPECTION)).toEqual(date(0));
+    expect(logs).toContain(
+      "REPAIR_RECIPIENT_EMAIL_AMBIGUOUS sourceRecordId=recAmbiguous businessNumber=25381 " +
+      "action=SYNCED_WITHOUT_RECIPIENT",
+    );
+    expect(logs.some((line) => line.startsWith("INCREMENTAL_SYNC_FAILED"))).toBe(false);
+  });
+
   it("logs a controlled warning and continues when a case has no Device link", async () => {
     const source = new FakeAirtable();
     const store = new MemoryStore();
